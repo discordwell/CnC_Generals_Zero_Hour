@@ -33,7 +33,6 @@ import {
   type HeightmapGrid,
   type MapDataJSON,
   type MapObjectJSON,
-  type MapSideBuildListEntryJSON,
   type ScriptActionJSON,
   type ScriptConditionJSON,
   type ScriptGroupJSON,
@@ -258,6 +257,117 @@ import {
   type DetonateDemoTrapCommand,
   type ToggleDemoTrapModeCommand,
 } from './types.js';
+import {
+  appendScriptSequentialScript as appendScriptSequentialScriptImpl,
+  applyScriptObjectPanelFlag as applyScriptObjectPanelFlagImpl,
+  buildScriptProjectileWaypointPath as buildScriptProjectileWaypointPathImpl,
+  clearScriptAudioCompletionState as clearScriptAudioCompletionStateImpl,
+  clearScriptCompletedName as clearScriptCompletedNameImpl,
+  clearScriptNamedMapReveals as clearScriptNamedMapRevealsImpl,
+  clearScriptTeamByNameUpper as clearScriptTeamByNameUpperImpl,
+  clearScriptTriggerTrackingForEntity as clearScriptTriggerTrackingForEntityImpl,
+  clearScriptUIInteractions as clearScriptUIInteractionsImpl,
+  clearScriptWanderInPlace as clearScriptWanderInPlaceImpl,
+  coerceScriptConditionBoolean as coerceScriptConditionBooleanImpl,
+  coerceScriptConditionNumber as coerceScriptConditionNumberImpl,
+  coerceScriptConditionString as coerceScriptConditionStringImpl,
+  countScriptObjectsByTemplateForSide as countScriptObjectsByTemplateForSideImpl,
+  countScriptObjectsByTemplateListForSide as countScriptObjectsByTemplateListForSideImpl,
+  countScriptPlayersForSide as countScriptPlayersForSideImpl,
+  countScriptStructuresForSide as countScriptStructuresForSideImpl,
+  executeScriptAction as executeScriptActionImpl,
+  executeScriptCommandButtonForEntity as executeScriptCommandButtonForEntityImpl,
+  executeScriptDebugMessage as executeScriptDebugMessageImpl,
+  executeScriptSkirmishWaitForCommandButtonAvailability as executeScriptSkirmishWaitForCommandButtonAvailabilityImpl,
+  executeScriptTeamWaitForNotContained as executeScriptTeamWaitForNotContainedImpl,
+  findScriptBrokenBridgeRepairTarget as findScriptBrokenBridgeRepairTargetImpl,
+  findScriptBuildDozerForTemplate as findScriptBuildDozerForTemplateImpl,
+  findScriptClosestEnemyInTriggerArea as findScriptClosestEnemyInTriggerAreaImpl,
+  findScriptEntityCommandButtonsByName as findScriptEntityCommandButtonsByNameImpl,
+  findScriptHuntTarget as findScriptHuntTargetImpl,
+  findScriptRepairDozerForBuilding as findScriptRepairDozerForBuildingImpl,
+  getScriptCreditsForPlayerInput as getScriptCreditsForPlayerInputImpl,
+  getScriptPlayerPowerState as getScriptPlayerPowerStateImpl,
+  getScriptScienceAcquiredSet as getScriptScienceAcquiredSetImpl,
+  getScriptSciencePurchasePointsForPlayerInput as getScriptSciencePurchasePointsForPlayerInputImpl,
+  getScriptScienceSetForPlayerToken as getScriptScienceSetForPlayerTokenImpl,
+  getScriptTeamInstancesByPrototypeName as getScriptTeamInstancesByPrototypeNameImpl,
+  getScriptTeamMemberEntities as getScriptTeamMemberEntitiesImpl,
+  getScriptTeamRecord as getScriptTeamRecordImpl,
+  isScriptContainKindAllowed as isScriptContainKindAllowedImpl,
+  isScriptContainRelationshipAllowed as isScriptContainRelationshipAllowedImpl,
+  isScriptEntityEffectivelyDead as isScriptEntityEffectivelyDeadImpl,
+  isScriptReinforcementTransportValidForUnit as isScriptReinforcementTransportValidForUnitImpl,
+  isScriptSequentialEntityIdle as isScriptSequentialEntityIdleImpl,
+  isScriptSequentialTeamDead as isScriptSequentialTeamDeadImpl,
+  isScriptSequentialTeamIdle as isScriptSequentialTeamIdleImpl,
+  isScriptSupplySourceSafe as isScriptSupplySourceSafeImpl,
+  isScriptTeamMemberAliveForObjects as isScriptTeamMemberAliveForObjectsImpl,
+  isScriptTeamMemberAliveForUnits as isScriptTeamMemberAliveForUnitsImpl,
+  isScriptTeamMemberInsideTrigger as isScriptTeamMemberInsideTriggerImpl,
+  normalizeScriptAttackPrioritySetName as normalizeScriptAttackPrioritySetNameImpl,
+  normalizeScriptAudioEventName as normalizeScriptAudioEventNameImpl,
+  normalizeScriptCompletionName as normalizeScriptCompletionNameImpl,
+  normalizeScriptKindOfToken as normalizeScriptKindOfTokenImpl,
+  normalizeScriptObjectName as normalizeScriptObjectNameImpl,
+  normalizeScriptObjectTypeName as normalizeScriptObjectTypeNameImpl,
+  normalizeScriptTeamContextName as normalizeScriptTeamContextNameImpl,
+  normalizeScriptVariableName as normalizeScriptVariableNameImpl,
+  notifyScriptCompletedSpecialPowerOnProjectileFired as notifyScriptCompletedSpecialPowerOnProjectileFiredImpl,
+  notifyScriptObjectCreationOrDestruction as notifyScriptObjectCreationOrDestructionImpl,
+  pruneExpiredScriptRadarEvents as pruneExpiredScriptRadarEventsImpl,
+  readScriptDictBoolean as readScriptDictBooleanImpl,
+  readScriptDictNumber as readScriptDictNumberImpl,
+  readScriptDictString as readScriptDictStringImpl,
+  recordScriptCompletedSpecialPowerEvent as recordScriptCompletedSpecialPowerEventImpl,
+  recordScriptCompletedUpgradeEvent as recordScriptCompletedUpgradeEventImpl,
+  recordScriptLastDamageInfo as recordScriptLastDamageInfoImpl,
+  recordScriptTriggeredSpecialPowerEvent as recordScriptTriggeredSpecialPowerEventImpl,
+  registerScriptNamedEntity as registerScriptNamedEntityImpl,
+  registerScriptTeamPrototypeInstance as registerScriptTeamPrototypeInstanceImpl,
+  resolveScriptActionTypeName as resolveScriptActionTypeNameImpl,
+  resolveScriptAiBuildListEntries as resolveScriptAiBuildListEntriesImpl,
+  resolveScriptCommandButtonHuntMode as resolveScriptCommandButtonHuntModeImpl,
+  resolveScriptCommandButtonOptionMask as resolveScriptCommandButtonOptionMaskImpl,
+  resolveScriptCommandButtonSpecialPowerName as resolveScriptCommandButtonSpecialPowerNameImpl,
+  resolveScriptComparisonCode as resolveScriptComparisonCodeImpl,
+  resolveScriptConditionCacheId as resolveScriptConditionCacheIdImpl,
+  resolveScriptConditionParamValue as resolveScriptConditionParamValueImpl,
+  resolveScriptConditionParams as resolveScriptConditionParamsImpl,
+  resolveScriptConditionTeams as resolveScriptConditionTeamsImpl,
+  resolveScriptConditionTypeName as resolveScriptConditionTypeNameImpl,
+  resolveScriptContainedControllingPlayerToken as resolveScriptContainedControllingPlayerTokenImpl,
+  resolveScriptContainerCapacity as resolveScriptContainerCapacityImpl,
+  resolveScriptContainerUsedTransportSlots as resolveScriptContainerUsedTransportSlotsImpl,
+  resolveScriptContextEntityId as resolveScriptContextEntityIdImpl,
+  resolveScriptContextTeamName as resolveScriptContextTeamNameImpl,
+  resolveScriptControllingPlayerTokenFromInput as resolveScriptControllingPlayerTokenFromInputImpl,
+  resolveScriptEntityConditionRef as resolveScriptEntityConditionRefImpl,
+  resolveScriptEntityIdForCondition as resolveScriptEntityIdForConditionImpl,
+  resolveScriptEntityTransportSlotCount as resolveScriptEntityTransportSlotCountImpl,
+  resolveScriptKindOfBitFromName as resolveScriptKindOfBitFromNameImpl,
+  resolveScriptObjectStatusMaskFromInput as resolveScriptObjectStatusMaskFromInputImpl,
+  resolveScriptObjectStatusTokens as resolveScriptObjectStatusTokensImpl,
+  resolveScriptObjectTypeCandidatesForAction as resolveScriptObjectTypeCandidatesForActionImpl,
+  resolveScriptObjectTypeEntriesForCondition as resolveScriptObjectTypeEntriesForConditionImpl,
+  resolveScriptPlayerConditionSelector as resolveScriptPlayerConditionSelectorImpl,
+  resolveScriptPlayerSideFromInput as resolveScriptPlayerSideFromInputImpl,
+  resolveScriptReinforcementDeliverPayloadProfile as resolveScriptReinforcementDeliverPayloadProfileImpl,
+  resolveScriptRelationshipInput as resolveScriptRelationshipInputImpl,
+  resolveScriptSideFromPlayerFaction as resolveScriptSideFromPlayerFactionImpl,
+  resolveScriptSpecialPowerCommandButtonExecution as resolveScriptSpecialPowerCommandButtonExecutionImpl,
+  resolveScriptTeamControllingSide as resolveScriptTeamControllingSideImpl,
+  resolveScriptTeamName as resolveScriptTeamNameImpl,
+  resolveScriptTeamSidesForRelationship as resolveScriptTeamSidesForRelationshipImpl,
+  resolveScriptTeamTemplateUnitEntries as resolveScriptTeamTemplateUnitEntriesImpl,
+  resolveScriptTeamTriggerIndex as resolveScriptTeamTriggerIndexImpl,
+  resolveScriptTransportValidationEntity as resolveScriptTransportValidationEntityImpl,
+  resolveScriptWaypointPosition as resolveScriptWaypointPositionImpl,
+  resolveScriptWeaponSlotFromCommandButton as resolveScriptWeaponSlotFromCommandButtonImpl,
+  setScriptWanderAwayFromRepulsorGoal as setScriptWanderAwayFromRepulsorGoalImpl,
+  setScriptWanderInPlaceGoal as setScriptWanderInPlaceGoalImpl,
+  unregisterScriptTeamPrototypeInstance as unregisterScriptTeamPrototypeInstanceImpl,
+} from './script-actions.js';
 
 export * from './types.js';
 export * from './campaign-manager.js';
@@ -356,19 +466,19 @@ export {
 const TEST_CRUSH_ONLY = 0;
 const TEST_SQUISH_ONLY = 1;
 const TEST_CRUSH_OR_SQUISH = 2;
-const RELATIONSHIP_ENEMIES = 0;
-const RELATIONSHIP_NEUTRAL = 1;
-const RELATIONSHIP_ALLIES = 2;
+export const RELATIONSHIP_ENEMIES = 0;
+export const RELATIONSHIP_NEUTRAL = 1;
+export const RELATIONSHIP_ALLIES = 2;
 type RelationshipValue = typeof RELATIONSHIP_ENEMIES | typeof RELATIONSHIP_NEUTRAL | typeof RELATIONSHIP_ALLIES;
 type SidePlayerType = 'HUMAN' | 'COMPUTER';
-type AttackCommandSource = 'PLAYER' | 'AI' | 'SCRIPT' | 'DOZER';
+export type AttackCommandSource = 'PLAYER' | 'AI' | 'SCRIPT' | 'DOZER';
 
 /** Reusable empty kindOf set for projectile templates with no kindOf. */
 const EMPTY_KINDOF_SET = new Set<string>();
 
 type ObjectCategory = RenderableObjectCategory;
 
-interface VectorXZ {
+export interface VectorXZ {
   x: number;
   z: number;
 }
@@ -397,16 +507,16 @@ interface NavigationGrid {
   logicalMaxZ: number;
 }
 
-const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
+export const PATHFIND_CELL_SIZE = MAP_XY_FACTOR;
 const CLIFF_HEIGHT_DELTA = 9.8;
 const PATHFIND_ZONE_BLOCK_SIZE = 10;
-const NO_ATTACK_DISTANCE = 0;
+export const NO_ATTACK_DISTANCE = 0;
 const ATTACK_MOVE_DISTANCE_FUDGE = 3 * MAP_XY_FACTOR;
 const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
 const ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE = 0.5;
-const LOGIC_FRAME_RATE = 30;
-const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
-const DRAWABLE_FRAMES_PER_FLASH = Math.max(1, Math.trunc(LOGIC_FRAME_RATE / 2));
+export const LOGIC_FRAME_RATE = 30;
+export const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
+export const DRAWABLE_FRAMES_PER_FLASH = Math.max(1, Math.trunc(LOGIC_FRAME_RATE / 2));
 const SOURCE_FRAMES_TO_ALLOW_SCAFFOLD = LOGIC_FRAME_RATE * 1.5;
 const SOURCE_TOTAL_FRAMES_TO_SELL_OBJECT = LOGIC_FRAME_RATE * 3;
 const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
@@ -414,11 +524,11 @@ const SOURCE_DEFAULT_SELL_PERCENTAGE = 1.0;
 const CONSTRUCTION_COMPLETE = -1;
 const SOURCE_HACK_FALLBACK_CASH_AMOUNT = 1;
 const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
-const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
-const SOURCE_FLASH_COLOR_WHITE = 0xffffff;
-const MAX_DYNAMIC_WATER = 64;
+export const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
+export const SOURCE_FLASH_COLOR_WHITE = 0xffffff;
+export const MAX_DYNAMIC_WATER = 64;
 const MAX_SPIN_COUNT = 20;
-const SCRIPT_WAYPOINT_PATH_LIMIT = 1024;
+export const SCRIPT_WAYPOINT_PATH_LIMIT = 1024;
 const SCRIPT_DIFFICULTY_EASY = 0;
 const SCRIPT_DIFFICULTY_NORMAL = 1;
 const SCRIPT_DIFFICULTY_HARD = 2;
@@ -435,7 +545,7 @@ const SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET = SCRIPT_COMMAND_OPTION_NEED_TARG
   | SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT
   | SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT;
 
-const SCRIPT_COMMAND_OPTION_NAME_TO_MASK = new Map<string, number>([
+export const SCRIPT_COMMAND_OPTION_NAME_TO_MASK = new Map<string, number>([
   ['NEED_TARGET_ENEMY_OBJECT', SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT],
   ['NEED_TARGET_NEUTRAL_OBJECT', SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT],
   ['NEED_TARGET_ALLY_OBJECT', SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT],
@@ -471,11 +581,11 @@ const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
 const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
 const SOURCE_DISABLED_SHORTCUT_SPECIAL_POWER_READY_FRAME = 0xffffffff - 10;
 
-const LOCOMOTORSET_NORMAL = 'SET_NORMAL';
+export const LOCOMOTORSET_NORMAL = 'SET_NORMAL';
 const LOCOMOTORSET_NORMAL_UPGRADED = 'SET_NORMAL_UPGRADED';
 const LOCOMOTORSET_FREEFALL = 'SET_FREEFALL';
-const LOCOMOTORSET_WANDER = 'SET_WANDER';
-const LOCOMOTORSET_PANIC = 'SET_PANIC';
+export const LOCOMOTORSET_WANDER = 'SET_WANDER';
+export const LOCOMOTORSET_PANIC = 'SET_PANIC';
 const LOCOMOTORSET_TAXIING = 'SET_TAXIING';
 const LOCOMOTORSET_SUPERSONIC = 'SET_SUPERSONIC';
 const LOCOMOTORSET_SLUGGISH = 'SET_SLUGGISH';
@@ -529,7 +639,7 @@ const WEAPON_ANTI_BALLISTIC_MISSILE = 0x40;
 const WEAPON_ANTI_PARACHUTE = 0x80;
 const HUGE_DAMAGE_AMOUNT = 1_000_000_000;
 // Source parity: Thing::isSignificantlyAboveTerrain — -(3*3)*m_gravity with m_gravity=-1.0.
-const SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD = 9.0;
+export const SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD = 9.0;
 const ARMOR_SET_FLAG_VETERAN = 1 << 0;
 const ARMOR_SET_FLAG_ELITE = 1 << 1;
 const ARMOR_SET_FLAG_HERO = 1 << 2;
@@ -825,27 +935,27 @@ const GUARD_OUTER_MODIFIER_HUMAN = 1.5;
 const GUARD_INNER_MODIFIER_AI = 1.0;
 const GUARD_OUTER_MODIFIER_AI = 2.0;
 const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
-const MAX_SCRIPT_RADAR_EVENTS = 64;
-const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
-const SCRIPT_THIS_TEAM = '<This Team>';
-const SCRIPT_THIS_OBJECT = '<This Object>';
-const SCRIPT_THIS_PLAYER = '<This Player>';
-const SCRIPT_LOCAL_PLAYER = '<Local Player>';
-const SCRIPT_THIS_PLAYER_ENEMY = "<This Player's Enemy>";
-const SCRIPT_THE_PLAYER = 'ThePlayer';
-const SCRIPT_TEAM_THE_PLAYER = 'teamThePlayer';
-const RADAR_EVENT_BEACON_PULSE = 5;
-const SCRIPT_SKIRMISH_PATH_CENTER_LABEL = 'CENTER';
-const SCRIPT_SKIRMISH_PATH_FLANK_LABEL = 'FLANK';
-const SCRIPT_SKIRMISH_PATH_BACKDOOR_LABEL = 'BACKDOOR';
-const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE = Math.PI / 3;
-const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS = 64;
+export const MAX_SCRIPT_RADAR_EVENTS = 64;
+export const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
+export const SCRIPT_THIS_TEAM = '<This Team>';
+export const SCRIPT_THIS_OBJECT = '<This Object>';
+export const SCRIPT_THIS_PLAYER = '<This Player>';
+export const SCRIPT_LOCAL_PLAYER = '<Local Player>';
+export const SCRIPT_THIS_PLAYER_ENEMY = "<This Player's Enemy>";
+export const SCRIPT_THE_PLAYER = 'ThePlayer';
+export const SCRIPT_TEAM_THE_PLAYER = 'teamThePlayer';
+export const RADAR_EVENT_BEACON_PULSE = 5;
+export const SCRIPT_SKIRMISH_PATH_CENTER_LABEL = 'CENTER';
+export const SCRIPT_SKIRMISH_PATH_FLANK_LABEL = 'FLANK';
+export const SCRIPT_SKIRMISH_PATH_BACKDOOR_LABEL = 'BACKDOOR';
+export const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE = Math.PI / 3;
+export const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS = 64;
 // Source parity: AIData::m_skirmishBaseDefenseExtraDistance (defaults to 0 in TAiData ctor).
 const SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE = 0;
 // Source parity: ScriptEngine.cpp FRAMES_TO_SHOW_WIN_LOSE_MESSAGE.
-const SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES = 120;
+export const SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES = 120;
 // Source parity: ScriptEngine::startQuickEndGameTimer.
-const SCRIPT_ENDGAME_QUICK_DURATION_FRAMES = 1;
+export const SCRIPT_ENDGAME_QUICK_DURATION_FRAMES = 1;
 
 /**
  * Source parity: AIGuardMachine state IDs.
@@ -1234,7 +1344,7 @@ interface RankInfoEntry {
 }
 
 /** Default Generals/ZH rank table (8 ranks). */
-const RANK_TABLE: readonly RankInfoEntry[] = [
+export const RANK_TABLE: readonly RankInfoEntry[] = [
   { skillPointsNeeded: 0, sciencePurchasePointsGranted: 1 },     // Rank 1 (start)
   { skillPointsNeeded: 200, sciencePurchasePointsGranted: 0 },   // Rank 2
   { skillPointsNeeded: 500, sciencePurchasePointsGranted: 1 },   // Rank 3
@@ -2033,7 +2143,7 @@ interface AmbientSoundCustomState {
   definition: ScriptObjectAmbientCustomAudioDefinition;
 }
 
-interface MapEntity {
+export interface MapEntity {
   id: number;
   templateName: string;
   /** Source parity: MapObject property "objectName" used by ScriptEngine named-unit lookups. */
@@ -4707,7 +4817,7 @@ type ScriptComparisonType =
 
 type ScriptComparisonInput = ScriptComparisonType | number;
 
-type ScriptRelationshipInput =
+export type ScriptRelationshipInput =
   | EntityRelationship
   | 'REL_ENEMY'
   | 'REL_NEUTRAL'
@@ -4726,7 +4836,7 @@ interface ScriptConditionCacheState {
   customFrame: number;
 }
 
-interface ScriptNamedEvent {
+export interface ScriptNamedEvent {
   name: string;
   sourceEntityId: number;
 }
@@ -4859,7 +4969,7 @@ interface ScriptScreenShakeState {
   frame: number;
 }
 
-interface ScriptWaypointRouteNode {
+export interface ScriptWaypointRouteNode {
   x: number;
   z: number;
   pathLabels: string[];
@@ -4962,7 +5072,7 @@ interface ScriptEmoticonRequestState {
   frame: number;
 }
 
-interface ScriptRadarEventState {
+export interface ScriptRadarEventState {
   x: number;
   y: number;
   z: number;
@@ -4979,7 +5089,7 @@ interface ScriptTeamTemplateUnitEntry {
   maxUnits: number;
 }
 
-interface ScriptTeamRecord {
+export interface ScriptTeamRecord {
   nameUpper: string;
   /** Source parity: Team::getName() / TeamPrototype name binding for instance resolution. */
   prototypeNameUpper: string;
@@ -5153,7 +5263,7 @@ interface DynamicWaterUpdateState {
   currentHeight: number;
 }
 
-type ScriptObjectPanelFlagName =
+export type ScriptObjectPanelFlagName =
   | 'ENABLED'
   | 'POWERED'
   | 'INDESTRUCTIBLE'
@@ -5171,7 +5281,7 @@ interface ScriptCounterState {
  * Source parity: Condition::ConditionType enum order from Scripts.h.
  * Used to resolve numeric condition ids to canonical enum names.
  */
-const SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX = [
+export const SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX = [
   'CONDITION_FALSE',
   'COUNTER',
   'FLAG',
@@ -5284,12 +5394,12 @@ const SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX = [
   'NUM_ITEMS',
 ] as const;
 
-const SCRIPT_CONDITION_TYPE_NAME_SET = new Set<string>(SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX);
+export const SCRIPT_CONDITION_TYPE_NAME_SET = new Set<string>(SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX);
 
 /**
  * Compatibility aliases for callers using port-facing names instead of C++ enum names.
  */
-const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
+export const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
   ['ALL_DESTROYED', 'PLAYER_ALL_DESTROYED'],
   ['ALL_BUILD_FACILITIES_DESTROYED', 'PLAYER_ALL_BUILDFACILITIES_DESTROYED'],
   ['PLAYER_ALL_BUILD_FACILITIES_DESTROYED', 'PLAYER_ALL_BUILDFACILITIES_DESTROYED'],
@@ -5353,7 +5463,7 @@ const SCRIPT_OBJECT_STATUS_NAMES_BY_BIT_INDEX = [
   'IS_CARBOMB',
 ] as const;
 
-const SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME = new Map<string, number>(
+export const SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME = new Map<string, number>(
   SCRIPT_OBJECT_STATUS_NAMES_BY_BIT_INDEX.map((name, index) => [name, index]),
 );
 
@@ -5872,9 +5982,9 @@ const SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME = new Map<number, string>([
   [542, 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH'],
 ]);
 
-const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
+export const SCRIPT_ACTION_TYPE_NAME_SET = new Set<string>(SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.values());
 
-const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
+export const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
   ['ADD_TO_TIMER', 'ADD_TO_MSEC_TIMER'],
   ['SUB_FROM_TIMER', 'SUB_FROM_MSEC_TIMER'],
 ]);
@@ -5883,7 +5993,7 @@ const SCRIPT_ACTION_TYPE_ALIASES = new Map<string, string>([
  * Source parity: additional action names that currently arrive through numeric-id remapping
  * collisions in map script chunks (ScriptAction::ParseAction + ActionTemplate internal names).
  */
-const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
+export const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'TEAM_DELETE_LIVING',
   'RESIZE_VIEW_GUARDBAND',
   'DELETE_ALL_UNMANNED',
@@ -5904,7 +6014,7 @@ const SCRIPT_ACTION_TYPE_EXTRA_NAMES = new Set<string>([
   'CREATE_REINFORCEMENT_TEAM',
 ]);
 
-const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
+export const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
   'PATRIOT',
   'GATTLINGCANNON',
   'GATTLING',
@@ -5918,7 +6028,7 @@ const SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS = [
  * Source parity bridge: Common/System/Kindof.cpp `KindOfMaskType::s_bitNameList`
  * in retail (non-ALLOW_SURRENDER) builds.
  */
-const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT = [
+export const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT = [
   'OBSTACLE',
   'SELECTABLE',
   'IMMOBILE',
@@ -6010,7 +6120,7 @@ const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT = [
   'DONT_AUTO_CRUSH_INFANTRY',
 ] as const;
 
-const SCRIPT_KIND_OF_NAME_TO_BIT = new Map<string, number>(
+export const SCRIPT_KIND_OF_NAME_TO_BIT = new Map<string, number>(
   SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.map((name, index) => [name, index]),
 );
 
@@ -6018,7 +6128,7 @@ const SCRIPT_KIND_OF_NAME_TO_BIT = new Map<string, number>(
  * Source parity bridge: Common/System/Kindof.cpp `KindOfMaskType::s_bitNameList`
  * in ALLOW_SURRENDER builds.
  */
-const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER = [
+export const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER = [
   ...SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.slice(0, 15),
   'PRISON',
   'COLLECTS_PRISON_BOUNTY',
@@ -6028,7 +6138,7 @@ const SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER = [
   ...SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT.slice(42),
 ] as const;
 
-const SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER = new Map<string, number>(
+export const SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER = new Map<string, number>(
   SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER.map((name, index) => [name, index]),
 );
 
@@ -6065,8 +6175,8 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity bridge: active KindOf bit-name layout (retail or ALLOW_SURRENDER variant)
    * used when map script KIND_OF parameters are numeric.
    */
-  private scriptKindOfNamesBySourceBit: readonly string[] = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
-  private scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
+  /* @internal */ scriptKindOfNamesBySourceBit: readonly string[] = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
+  /* @internal */ scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
   /** Source parity: TheGlobalData->m_weaponBonusSet — global weapon bonus table from GameData.ini. */
   private globalWeaponBonusTable: WeaponBonusTable = { entries: new Map() };
   private readonly commandQueue: GameLogicCommand[] = [];
@@ -6490,7 +6600,7 @@ export class GameLogicSubsystem implements Subsystem {
   private scriptCallingEntityId: number | null = null;
   private scriptConditionEntityId: number | null = null;
   /** Source parity bridge: TEAM_THE_PLAYER alias to local player's default team (if provided). */
-  private scriptLocalPlayerTeamNameUpper: string | null = null;
+  /* @internal */ scriptLocalPlayerTeamNameUpper: string | null = null;
   private readonly railedTransportStateByEntityId = new Map<number, RailedTransportRuntimeState>();
   private railedTransportWaypointIndex: RailedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(null);
   // localPlayerSciencePurchasePoints removed — now lives in sideRankState.
@@ -6515,7 +6625,7 @@ export class GameLogicSubsystem implements Subsystem {
   /** Source parity bridge: ScriptActions::doWeather -> SnowManager visibility toggle. */
   private scriptWeatherVisible = true;
   /** Source parity: TerrainLogic::setActiveBoundary state from MAP_SWITCH_BORDER script action. */
-  private scriptActiveBoundaryIndex: number | null = null;
+  /* @internal */ scriptActiveBoundaryIndex: number | null = null;
   private placementSummary: MapObjectPlacementSummary = {
     totalObjects: 0,
     spawnedObjects: 0,
@@ -6837,134 +6947,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private readScriptDictString(dict: Record<string, unknown>, key: string): string {
-    const value = dict[key];
-    if (typeof value === 'string') {
-      return value;
-    }
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return String(value);
-    }
-    if (typeof value === 'boolean') {
-      return value ? 'TRUE' : 'FALSE';
-    }
-    return '';
-  }
-
-  private readScriptDictNumber(dict: Record<string, unknown>, key: string): number | null {
-    const value = dict[key];
-    if (typeof value === 'number') {
-      return Number.isFinite(value) ? value : null;
-    }
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        return null;
-      }
-      const parsed = Number(trimmed);
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-  }
-
-  private readScriptDictBoolean(dict: Record<string, unknown>, key: string): boolean | null {
-    const value = dict[key];
-    if (typeof value === 'boolean') {
-      return value;
-    }
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) {
-        return null;
-      }
-      return value !== 0;
-    }
-    if (typeof value === 'string') {
-      const normalized = value.trim().toUpperCase();
-      if (!normalized) {
-        return null;
-      }
-      if (normalized === 'TRUE' || normalized === 'YES' || normalized === 'ON' || normalized === '1') {
-        return true;
-      }
-      if (normalized === 'FALSE' || normalized === 'NO' || normalized === 'OFF' || normalized === '0') {
-        return false;
-      }
-    }
-    return null;
-  }
-
-  private resolveScriptTeamTemplateUnitEntries(
-    dict: Record<string, unknown>,
-  ): ScriptTeamTemplateUnitEntry[] {
-    const entries: ScriptTeamTemplateUnitEntry[] = [];
-    for (let slot = 1; slot <= 7; slot += 1) {
-      const templateName = this.readScriptDictString(dict, `teamUnitType${slot}`).trim();
-      if (!templateName) {
-        continue;
-      }
-      const maxUnitsValue = this.readScriptDictNumber(dict, `teamUnitMaxCount${slot}`);
-      if (maxUnitsValue === null || !Number.isFinite(maxUnitsValue)) {
-        continue;
-      }
-      const maxUnits = Math.trunc(maxUnitsValue);
-      if (maxUnits <= 0) {
-        continue;
-      }
-      const minUnitsValue = this.readScriptDictNumber(dict, `teamUnitMinCount${slot}`);
-      const minUnits = minUnitsValue === null || !Number.isFinite(minUnitsValue)
-        ? 0
-        : Math.max(0, Math.trunc(minUnitsValue));
-      entries.push({
-        templateName,
-        minUnits,
-        maxUnits,
-      });
-    }
-    return entries;
-  }
-
-  private resolveScriptSideFromPlayerFaction(playerFaction: string): string | null {
-    const trimmed = playerFaction.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const registry = this.iniDataRegistry;
-    const factionDef = registry ? registry.getFaction(trimmed) : undefined;
-    if (factionDef?.side) {
-      return this.normalizeSide(factionDef.side);
-    }
-    const normalized = this.normalizeSide(trimmed);
-    return normalized || null;
-  }
-
-  private resolveScriptAiBuildListEntries(
-    buildList: readonly MapSideBuildListEntryJSON[],
-  ): ScriptAiBuildListEntry[] {
-    const registry = this.iniDataRegistry;
-    if (!registry || buildList.length === 0) {
-      return [];
-    }
-
-    const entries: ScriptAiBuildListEntry[] = [];
-    for (const entry of buildList) {
-      const templateName = entry.templateName?.trim();
-      if (!templateName) {
-        continue;
-      }
-      const objectDef = findObjectDefByName(registry, templateName);
-      if (!objectDef) {
-        continue;
-      }
-      entries.push({
-        templateNameUpper: objectDef.name.trim().toUpperCase(),
-        locationX: Number.isFinite(entry.location.x) ? entry.location.x : 0,
-        // Source parity: map build-list Coord3D y maps to world Z in this port.
-        locationZ: Number.isFinite(entry.location.y) ? entry.location.y : 0,
-      });
-    }
-    return entries;
-  }
-
   private createMapScriptListRuntime(scriptList: ScriptListJSON, sideIndex: number): MapScriptListRuntime {
     const scripts: MapScriptRuntime[] = [];
     for (const script of scriptList.scripts ?? []) {
@@ -7147,21 +7129,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private normalizeScriptKindOfToken(rawValue: string): string | null {
-    const token = rawValue.trim().toUpperCase();
-    if (!token) {
-      return null;
-    }
-    const normalized = token.startsWith('KINDOF_') ? token.slice('KINDOF_'.length) : token;
-    if (normalized === 'CRUSHER' || normalized === 'CRUSHABLE' || normalized === 'OVERLAPPABLE') {
-      return 'OBSTACLE';
-    }
-    if (normalized === 'MISSILE') {
-      return 'SMALL_MISSILE';
-    }
-    return normalized;
-  }
-
   private configureScriptKindOfBitLayout(iniDataRegistry: IniDataRegistry): void {
     let useAllowSurrenderLayout = false;
     for (const objectDef of iniDataRegistry.objects.values()) {
@@ -7185,38 +7152,6 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.scriptKindOfNamesBySourceBit = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
     this.scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
-  }
-
-  private resolveScriptKindOfBitFromName(kindOfName: string): number | null {
-    const direct = this.scriptKindOfNameToBit.get(kindOfName);
-    if (direct !== undefined) {
-      return direct;
-    }
-
-    const alternate = this.scriptKindOfNamesBySourceBit === SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT
-      ? SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER.get(kindOfName)
-      : SCRIPT_KIND_OF_NAME_TO_BIT.get(kindOfName);
-    return alternate ?? null;
-  }
-
-  private resolveScriptKindOfNameFromSourceBit(kindOfBit: number): string | null {
-    if (!Number.isFinite(kindOfBit)) {
-      return null;
-    }
-    const normalizedBit = Math.trunc(kindOfBit);
-    if (normalizedBit < 0) {
-      return null;
-    }
-
-    const direct = this.scriptKindOfNamesBySourceBit[normalizedBit] ?? null;
-    if (direct) {
-      return direct;
-    }
-
-    const alternate = this.scriptKindOfNamesBySourceBit === SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT
-      ? SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER[normalizedBit] ?? null
-      : SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT[normalizedBit] ?? null;
-    return alternate;
   }
 
   private normalizeMapScriptObjectTypeParam(rawValue: string): string {
@@ -7985,10 +7920,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
       this.scriptTeamCreatedAutoClearFrameByName.delete(teamNameUpper);
     }
-  }
-
-  private clearScriptUIInteractions(): void {
-    this.scriptUIInteractions.clear();
   }
 
   private resetContainPlayerEnteredSides(): void {
@@ -9023,50 +8954,7 @@ export class GameLogicSubsystem implements Subsystem {
     return next;
   }
 
-  private getScriptCreditsForPlayerInput(sideInput: string): number {
-    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
-    if (selector.explicitNamedPlayer && selector.controllingPlayerToken) {
-      const namedCredits = this.controllingPlayerScriptCredits.get(selector.controllingPlayerToken);
-      if (namedCredits !== undefined) {
-        return namedCredits;
-      }
-    }
-    const normalizedSide = selector.normalizedSide;
-    if (!normalizedSide) {
-      return 0;
-    }
-    return this.getSideCredits(normalizedSide);
-  }
-
-  private countScriptPlayersForSide(normalizedSide: string): number {
-    let count = 0;
-    for (const side of this.scriptPlayerSideByName.values()) {
-      if (side === normalizedSide) {
-        count += 1;
-      }
-    }
-    return count;
-  }
-
-  private setScriptCreditsForPlayerInput(sideInput: string, amount: number): boolean {
-    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
-    const normalizedSide = selector.normalizedSide;
-    if (!normalizedSide || !Number.isFinite(amount)) {
-      return false;
-    }
-    const normalizedAmount = Math.max(0, Math.trunc(amount));
-    if (selector.explicitNamedPlayer && selector.controllingPlayerToken) {
-      this.controllingPlayerScriptCredits.set(selector.controllingPlayerToken, normalizedAmount);
-      if (this.countScriptPlayersForSide(normalizedSide) <= 1) {
-        this.setSideCredits(normalizedSide, normalizedAmount);
-      }
-      return true;
-    }
-    this.setSideCredits(normalizedSide, normalizedAmount);
-    return true;
-  }
-
-  private addScriptCreditsForPlayerInput(sideInput: string, amount: number): number | null {
+  /* @internal */ addScriptCreditsForPlayerInput(sideInput: string, amount: number): number | null {
     const selector = this.resolveScriptPlayerConditionSelector(sideInput);
     const normalizedSide = selector.normalizedSide;
     if (!normalizedSide || !Number.isFinite(amount)) {
@@ -9181,7 +9069,7 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptObjectsReceiveDifficultyBonus;
   }
 
-  private setSideExcludedFromScoreScreen(side: string, excluded: boolean): boolean {
+  /* @internal */ setSideExcludedFromScoreScreen(side: string, excluded: boolean): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return false;
@@ -9744,7 +9632,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doMoveCameraTo.
    */
-  private requestScriptMoveCameraTo(
+  /* @internal */ requestScriptMoveCameraTo(
     waypointName: string,
     durationSeconds: number,
     cameraStutterSeconds: number,
@@ -9785,7 +9673,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doMoveCameraAlongWaypointPath.
    */
-  private requestScriptMoveCameraAlongWaypointPath(
+  /* @internal */ requestScriptMoveCameraAlongWaypointPath(
     waypointName: string,
     durationSeconds: number,
     cameraStutterSeconds: number,
@@ -9826,7 +9714,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doResetCamera.
    */
-  private requestScriptResetCamera(
+  /* @internal */ requestScriptResetCamera(
     waypointName: string,
     durationSeconds: number,
     easeInSeconds: number,
@@ -9865,7 +9753,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doRotateCamera.
    */
-  private requestScriptRotateCamera(
+  /* @internal */ requestScriptRotateCamera(
     rotations: number,
     durationSeconds: number,
     easeInSeconds: number,
@@ -9901,7 +9789,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doSetupCamera.
    */
-  private requestScriptSetupCamera(
+  /* @internal */ requestScriptSetupCamera(
     waypointName: string,
     zoom: number,
     pitch: number,
@@ -9937,7 +9825,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doZoomCamera.
    */
-  private requestScriptZoomCamera(
+  /* @internal */ requestScriptZoomCamera(
     zoom: number,
     durationSeconds: number,
     easeInSeconds: number,
@@ -9973,7 +9861,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity bridge: mirrors ScriptActions::doPitchCamera.
    */
-  private requestScriptPitchCamera(
+  /* @internal */ requestScriptPitchCamera(
     pitch: number,
     durationSeconds: number,
     easeInSeconds: number,
@@ -10024,7 +9912,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraModFreezeTime(): void {
+  /* @internal */ requestScriptCameraModFreezeTime(): void {
     this.queueScriptCameraModifierRequest({
       requestType: 'FREEZE_TIME',
       waypointName: null,
@@ -10039,7 +9927,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraModFreezeAngle(): void {
+  /* @internal */ requestScriptCameraModFreezeAngle(): void {
     this.queueScriptCameraModifierRequest({
       requestType: 'FREEZE_ANGLE',
       waypointName: null,
@@ -10054,7 +9942,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraModFinalZoom(zoom: number, easeIn: number, easeOut: number): boolean {
+  /* @internal */ requestScriptCameraModFinalZoom(zoom: number, easeIn: number, easeOut: number): boolean {
     if (!Number.isFinite(zoom) || !Number.isFinite(easeIn) || !Number.isFinite(easeOut)) {
       return false;
     }
@@ -10073,7 +9961,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private requestScriptCameraModFinalPitch(pitch: number, easeIn: number, easeOut: number): boolean {
+  /* @internal */ requestScriptCameraModFinalPitch(pitch: number, easeIn: number, easeOut: number): boolean {
     if (!Number.isFinite(pitch) || !Number.isFinite(easeIn) || !Number.isFinite(easeOut)) {
       return false;
     }
@@ -10092,7 +9980,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private requestScriptCameraModFinalSpeedMultiplier(speedMultiplier: number): void {
+  /* @internal */ requestScriptCameraModFinalSpeedMultiplier(speedMultiplier: number): void {
     this.queueScriptCameraModifierRequest({
       requestType: 'FINAL_SPEED_MULTIPLIER',
       waypointName: null,
@@ -10107,7 +9995,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraModRollingAverage(rollingAverageFrames: number): void {
+  /* @internal */ requestScriptCameraModRollingAverage(rollingAverageFrames: number): void {
     this.queueScriptCameraModifierRequest({
       requestType: 'ROLLING_AVERAGE',
       waypointName: null,
@@ -10122,7 +10010,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraModFinalLookToward(waypointName: string): boolean {
+  /* @internal */ requestScriptCameraModFinalLookToward(waypointName: string): boolean {
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
     if (!waypoint) {
       return false;
@@ -10142,7 +10030,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private requestScriptCameraModLookToward(waypointName: string): boolean {
+  /* @internal */ requestScriptCameraModLookToward(waypointName: string): boolean {
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
     if (!waypoint) {
       return false;
@@ -10162,7 +10050,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private requestScriptCameraModMoveToSelection(): boolean {
+  /* @internal */ requestScriptCameraModMoveToSelection(): boolean {
     let selectedCount = 0;
     let sumX = 0;
     let sumZ = 0;
@@ -10205,7 +10093,7 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
-  private requestScriptCameraBlackWhiteMode(enabled: boolean, fadeFrames: number): void {
+  /* @internal */ requestScriptCameraBlackWhiteMode(enabled: boolean, fadeFrames: number): void {
     const normalizedFadeFrames = Number.isFinite(fadeFrames) ? Math.trunc(fadeFrames) : 0;
 
     // Source parity: ending BW mode is ignored if the BW filter isn't active.
@@ -10234,7 +10122,7 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
-  private requestScriptCameraFade(
+  /* @internal */ requestScriptCameraFade(
     fadeType: ScriptCameraFadeRequestState['fadeType'],
     minFade: number,
     maxFade: number,
@@ -10280,7 +10168,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraMotionBlur(zoomIn: boolean, saturate: boolean): void {
+  /* @internal */ requestScriptCameraMotionBlur(zoomIn: boolean, saturate: boolean): void {
     this.queueScriptCameraFilterRequest({
       requestType: 'MOTION_BLUR',
       zoomIn,
@@ -10292,7 +10180,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraMotionBlurJump(waypointName: string, saturate: boolean): boolean {
+  /* @internal */ requestScriptCameraMotionBlurJump(waypointName: string, saturate: boolean): boolean {
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
     if (!waypoint) {
       return false;
@@ -10309,7 +10197,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private requestScriptCameraMotionBlurFollow(followMode: number): void {
+  /* @internal */ requestScriptCameraMotionBlurFollow(followMode: number): void {
     this.queueScriptCameraFilterRequest({
       requestType: 'MOTION_BLUR_FOLLOW',
       zoomIn: null,
@@ -10321,7 +10209,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptCameraMotionBlurEndFollow(): void {
+  /* @internal */ requestScriptCameraMotionBlurEndFollow(): void {
     this.queueScriptCameraFilterRequest({
       requestType: 'MOTION_BLUR_END_FOLLOW',
       zoomIn: null,
@@ -10346,7 +10234,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity bridge: ScriptActions::doC3CameraShake.
    * Consumed by script-camera-effects runtime bridge.
    */
-  private requestScriptCameraAddShaker(
+  /* @internal */ requestScriptCameraAddShaker(
     waypointName: string,
     amplitude: number,
     durationSeconds: number,
@@ -10384,38 +10272,6 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
-  /**
-   * Source parity: ScriptActions::doVictory/doDefeat/doQuickVictory.
-   * Starts an end-game timer while immediately disabling local input.
-   */
-  private setScriptLocalGameEndState(localDefeated: boolean, durationFrames: number): boolean {
-    const boundedDuration = Math.max(1, Math.trunc(durationFrames));
-    const localSide = this.resolveLocalPlayerSide();
-    if (localSide) {
-      if (localDefeated) {
-        this.defeatedSides.add(localSide);
-      } else {
-        this.defeatedSides.delete(localSide);
-      }
-    }
-    this.scriptEndGameTimerActive = true;
-    this.setScriptInputDisabled(true);
-    this.gameEndFrame = this.frameCounter + boundedDuration;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doLocalDefeat.
-   * This is a local presentation flow and does not start the global end-game timer.
-   */
-  private setScriptLocalDefeatState(): boolean {
-    const localSide = this.resolveLocalPlayerSide();
-    if (localSide) {
-      this.defeatedSides.add(localSide);
-    }
-    return true;
-  }
-
   setScriptTimeFrozenByScript(frozen: boolean): void {
     this.scriptTimeFrozenByScript = frozen;
   }
@@ -10430,43 +10286,6 @@ export class GameLogicSubsystem implements Subsystem {
 
   isScriptWeatherVisible(): boolean {
     return this.scriptWeatherVisible;
-  }
-
-  private applyScriptStoppingDistanceToEntity(entity: MapEntity, stoppingDistance: number): boolean {
-    if (!entity.canMove || entity.locomotorSets.size === 0) {
-      return false;
-    }
-    if (!Number.isFinite(stoppingDistance) || stoppingDistance < 0.5) {
-      return true;
-    }
-    entity.scriptStoppingDistanceOverride = stoppingDistance;
-    return true;
-  }
-
-  private executeScriptNamedSetStoppingDistance(entityId: number, stoppingDistance: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    return this.applyScriptStoppingDistanceToEntity(entity, stoppingDistance);
-  }
-
-  private executeScriptSetStoppingDistance(teamName: string, stoppingDistance: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      // Source parity: return immediately when encountering a member without an active locomotor.
-      if (!this.applyScriptStoppingDistanceToEntity(entity, stoppingDistance)) {
-        return true;
-      }
-    }
-    return true;
   }
 
   /**
@@ -10604,30 +10423,6 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptCinematicTextState };
   }
 
-  /**
-   * Source parity bridge: ScriptActions::doInGamePopupMessage.
-   */
-  private enqueueScriptPopupMessage(
-    message: string,
-    x: number,
-    y: number,
-    width: number,
-    pause: boolean,
-  ): boolean {
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width)) {
-      return false;
-    }
-    this.scriptPopupMessages.push({
-      message,
-      x: Math.trunc(x),
-      y: Math.trunc(y),
-      width: Math.trunc(width),
-      pause,
-      frame: this.frameCounter,
-    });
-    return true;
-  }
-
   drainScriptPopupMessages(): ScriptPopupMessageState[] {
     if (this.scriptPopupMessages.length === 0) {
       return [];
@@ -10637,7 +10432,7 @@ export class GameLogicSubsystem implements Subsystem {
     return messages;
   }
 
-  private requestScriptMoviePlayback(movieName: string, playbackType: 'FULLSCREEN' | 'RADAR'): boolean {
+  /* @internal */ requestScriptMoviePlayback(movieName: string, playbackType: 'FULLSCREEN' | 'RADAR'): boolean {
     const normalizedMovieName = movieName.trim();
     if (!normalizedMovieName) {
       return false;
@@ -10660,37 +10455,6 @@ export class GameLogicSubsystem implements Subsystem {
     return requests;
   }
 
-  private enqueueScriptDisplayText(displayText: string): boolean {
-    const normalizedText = displayText.trim();
-    if (!normalizedText) {
-      return false;
-    }
-    this.scriptDisplayMessages.push({
-      messageType: 'DISPLAY_TEXT',
-      text: normalizedText,
-      duration: null,
-      frame: this.frameCounter,
-    });
-    return true;
-  }
-
-  private enqueueScriptMilitaryCaption(captionText: string, duration: number): boolean {
-    if (!Number.isFinite(duration)) {
-      return false;
-    }
-    const normalizedText = captionText.trim();
-    if (!normalizedText) {
-      return false;
-    }
-    this.scriptDisplayMessages.push({
-      messageType: 'MILITARY_CAPTION',
-      text: normalizedText,
-      duration: Math.trunc(duration),
-      frame: this.frameCounter,
-    });
-    return true;
-  }
-
   drainScriptDisplayMessages(): ScriptDisplayMessageState[] {
     if (this.scriptDisplayMessages.length === 0) {
       return [];
@@ -10700,7 +10464,7 @@ export class GameLogicSubsystem implements Subsystem {
     return messages;
   }
 
-  private requestScriptCameoFlash(commandButtonName: string, timeInSeconds: number): boolean {
+  /* @internal */ requestScriptCameoFlash(commandButtonName: string, timeInSeconds: number): boolean {
     const normalizedButtonName = commandButtonName.trim();
     if (!normalizedButtonName || !Number.isFinite(timeInSeconds)) {
       return false;
@@ -10736,56 +10500,12 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptLetterboxEnabled;
   }
 
-  private setScriptDisplayedCounter(counterName: string, counterText: string, isCountdown: boolean): boolean {
-    const normalizedName = this.normalizeScriptVariableName(counterName);
-    if (!normalizedName) {
-      return false;
-    }
-    this.scriptDisplayedCounters.set(normalizedName, {
-      counterName: normalizedName,
-      counterText,
-      isCountdown,
-      frame: this.frameCounter,
-    });
-    return true;
-  }
-
-  private hideScriptDisplayedCounter(counterName: string): boolean {
-    const normalizedName = this.normalizeScriptVariableName(counterName);
-    if (!normalizedName) {
-      return false;
-    }
-    this.scriptDisplayedCounters.delete(normalizedName);
-    return true;
-  }
-
-  private setScriptNamedTimerDisplayEnabled(enabled: boolean): void {
-    this.scriptNamedTimerDisplayEnabled = enabled;
-  }
-
   isScriptNamedTimerDisplayEnabled(): boolean {
     return this.scriptNamedTimerDisplayEnabled;
   }
 
-  private setScriptSpecialPowerDisplayEnabled(enabled: boolean): void {
-    this.scriptSpecialPowerDisplayEnabled = enabled;
-  }
-
   isScriptSpecialPowerDisplayEnabled(): boolean {
     return this.scriptSpecialPowerDisplayEnabled;
-  }
-
-  private setScriptNamedSpecialPowerDisplayHidden(entityId: number, hidden: boolean): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    if (hidden) {
-      this.scriptHiddenSpecialPowerDisplayEntityIds.add(entity.id);
-    } else {
-      this.scriptHiddenSpecialPowerDisplayEntityIds.delete(entity.id);
-    }
-    return true;
   }
 
   getScriptHiddenSpecialPowerDisplayEntityIds(): number[] {
@@ -10831,7 +10551,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private requestScriptPlaySoundEffect(audioName: string): boolean {
+  /* @internal */ requestScriptPlaySoundEffect(audioName: string): boolean {
     return this.queueScriptAudioPlaybackRequest({
       audioName,
       playbackType: 'SOUND_EFFECT',
@@ -10843,7 +10563,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptPlaySoundEffectAt(audioName: string, waypointName: string): boolean {
+  /* @internal */ requestScriptPlaySoundEffectAt(audioName: string, waypointName: string): boolean {
     const waypoint = this.resolveScriptWaypointPosition(waypointName);
     if (!waypoint) {
       return false;
@@ -10875,7 +10595,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptSpeechPlay(speechName: string, allowOverlap: boolean): boolean {
+  /* @internal */ requestScriptSpeechPlay(speechName: string, allowOverlap: boolean): boolean {
     return this.queueScriptAudioPlaybackRequest({
       audioName: speechName,
       playbackType: 'SPEECH',
@@ -10912,21 +10632,6 @@ export class GameLogicSubsystem implements Subsystem {
     return this.scriptAmbientSoundsPaused;
   }
 
-  private setScriptMusicTrack(trackName: string, fadeOut: boolean, fadeIn: boolean): boolean {
-    const normalizedTrackName = this.normalizeScriptAudioEventName(trackName);
-    if (!normalizedTrackName) {
-      return false;
-    }
-    this.clearScriptMusicCompletionState(normalizedTrackName);
-    this.scriptMusicTrackState = {
-      trackName: normalizedTrackName,
-      fadeOut,
-      fadeIn,
-      frame: this.frameCounter,
-    };
-    return true;
-  }
-
   getScriptMusicTrackState(): ScriptMusicTrackState | null {
     if (!this.scriptMusicTrackState) {
       return null;
@@ -10934,109 +10639,20 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...this.scriptMusicTrackState };
   }
 
-  /**
-   * Source parity: ScriptActions::SET_VISUAL_SPEED_MULTIPLIER -> TacticalView::setTimeMultiplier.
-   */
-  private setScriptVisualSpeedMultiplier(multiplier: number): boolean {
-    if (!Number.isFinite(multiplier)) {
-      return false;
-    }
-    this.scriptVisualSpeedMultiplier = Math.trunc(multiplier);
-    return true;
-  }
-
   getScriptVisualSpeedMultiplier(): number {
     return this.scriptVisualSpeedMultiplier;
-  }
-
-  /**
-   * Source parity: ScriptActions::doOverrideHulkLifetime.
-   */
-  private setScriptHulkLifetimeOverrideSeconds(seconds: number): boolean {
-    if (!Number.isFinite(seconds)) {
-      return false;
-    }
-    if (seconds < 0) {
-      this.scriptHulkLifetimeOverrideFrames = -1;
-      return true;
-    }
-    this.scriptHulkLifetimeOverrideFrames = Math.trunc(seconds * LOGIC_FRAME_RATE);
-    return true;
   }
 
   getScriptHulkLifetimeOverrideFrames(): number {
     return this.scriptHulkLifetimeOverrideFrames;
   }
 
-  /**
-   * Source parity: ScriptActions::doSetInfantryLightingOverride.
-   */
-  private setScriptInfantryLightingOverride(setting: number): boolean {
-    if (!Number.isFinite(setting)) {
-      return false;
-    }
-    if (setting !== -1 && setting <= 0) {
-      return false;
-    }
-    this.scriptInfantryLightingOverride = setting;
-    return true;
-  }
-
   getScriptInfantryLightingOverride(): number {
     return this.scriptInfantryLightingOverride;
   }
 
-  /**
-   * Source parity: ScriptEngine::setSway.
-   */
-  private executeScriptSetTreeSway(
-    direction: number,
-    intensity: number,
-    lean: number,
-    breezePeriodFrames: number,
-    randomness: number,
-  ): boolean {
-    if (
-      !Number.isFinite(direction)
-      || !Number.isFinite(intensity)
-      || !Number.isFinite(lean)
-      || !Number.isFinite(breezePeriodFrames)
-      || !Number.isFinite(randomness)
-    ) {
-      return false;
-    }
-
-    this.scriptBreezeState.version += 1;
-    this.scriptBreezeState.direction = direction;
-    this.scriptBreezeState.directionX = Math.sin(direction);
-    this.scriptBreezeState.directionY = Math.cos(direction);
-    this.scriptBreezeState.intensity = intensity;
-    this.scriptBreezeState.lean = lean;
-    this.scriptBreezeState.breezePeriodFrames = Math.max(1, Math.trunc(breezePeriodFrames));
-    this.scriptBreezeState.randomness = randomness;
-    return true;
-  }
-
   getScriptBreezeState(): ScriptBreezeState {
     return { ...this.scriptBreezeState };
-  }
-
-  /**
-   * Source parity: ScriptActions::doDebugString / doDebugCrashBox.
-   * Consumed by script-message runtime bridge.
-   */
-  private executeScriptDebugMessage(
-    message: string,
-    crashRequested: boolean,
-    pauseRequested: boolean,
-  ): boolean {
-    this.scriptDebugMessageRequests.push({
-      message,
-      crashRequested,
-      pauseRequested,
-      frame: this.frameCounter,
-    });
-    return true;
   }
 
   drainScriptDebugMessageRequests(): ScriptDebugMessageRequestState[] {
@@ -11055,59 +10671,6 @@ export class GameLogicSubsystem implements Subsystem {
     const requests = this.scriptEmoticonRequests.map((request) => ({ ...request }));
     this.scriptEmoticonRequests.length = 0;
     return requests;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedEmoticon.
-   * Consumed by script-emoticon runtime bridge.
-   */
-  private executeScriptNamedSetEmoticon(
-    entityId: number,
-    emoticonName: string,
-    durationSeconds: number,
-  ): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    const durationFrames = Math.trunc(durationSeconds * LOGIC_FRAME_RATE);
-    this.scriptEmoticonRequests.push({
-      entityId: entity.id,
-      emoticonName,
-      durationFrames,
-      frame: this.frameCounter,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamEmoticon (via AIGroup::groupSetEmoticon).
-   * Consumed by script-emoticon runtime bridge.
-   */
-  private executeScriptTeamSetEmoticon(
-    teamName: string,
-    emoticonName: string,
-    durationSeconds: number,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const durationFrames = Math.trunc(durationSeconds * LOGIC_FRAME_RATE);
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.scriptEmoticonRequests.push({
-        entityId: entity.id,
-        emoticonName,
-        durationFrames,
-        frame: this.frameCounter,
-      });
-    }
-    return true;
   }
 
   setScriptCameraAudibleDistance(audibleDistance: number): void {
@@ -11195,7 +10758,7 @@ export class GameLogicSubsystem implements Subsystem {
       .map(([eventName, volumeScale]) => ({ eventName, volumeScale }));
   }
 
-  private requestScriptAudioRemoveAllDisabled(): void {
+  /* @internal */ requestScriptAudioRemoveAllDisabled(): void {
     this.scriptAudioRemovalRequests.push({
       eventName: null,
       removeDisabledOnly: true,
@@ -11203,7 +10766,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private requestScriptAudioRemoveType(eventName: string): boolean {
+  /* @internal */ requestScriptAudioRemoveType(eventName: string): boolean {
     const normalizedName = this.normalizeScriptAudioEventName(eventName);
     if (!normalizedName) {
       return false;
@@ -11295,10 +10858,6 @@ export class GameLogicSubsystem implements Subsystem {
     return normalized;
   }
 
-  private normalizeScriptAudioEventName(eventName: string): string {
-    return eventName.trim();
-  }
-
   getCaveContainIndex(entityId: number): number | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity || entity.destroyed) {
@@ -11314,47 +10873,7 @@ export class GameLogicSubsystem implements Subsystem {
     return entity.containProfile.caveIndex ?? 0;
   }
 
-  private executeScriptSetCaveIndex(entityId: number, caveIndex: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    const containProfile = entity.containProfile;
-    if (!containProfile || containProfile.moduleType !== 'CAVE') {
-      return false;
-    }
-
-    if (!Number.isFinite(caveIndex)) {
-      return false;
-    }
-    const newIndex = Math.trunc(caveIndex);
-    if (newIndex < 0) {
-      return false;
-    }
-
-    const oldIndex = this.caveTrackerIndexByEntityId.get(entity.id) ?? containProfile.caveIndex ?? 0;
-    if (!this.canSwitchCaveIndexToIndex(oldIndex, newIndex)) {
-      return false;
-    }
-
-    const oldTracker = this.unregisterTunnelEntity(entity);
-    if (oldTracker) {
-      this.removeTunnelNodeFromTracker(entity, oldTracker);
-    }
-
-    containProfile.caveIndex = newIndex;
-    const newTracker = this.resolveCaveTracker(newIndex);
-    if (!newTracker) {
-      return false;
-    }
-
-    this.caveTrackerIndexByEntityId.set(entity.id, newIndex);
-    newTracker.tunnelIds.add(entity.id);
-    return true;
-  }
-
-  private canSwitchCaveIndexToIndex(oldIndex: number, newIndex: number): boolean {
+  /* @internal */ canSwitchCaveIndexToIndex(oldIndex: number, newIndex: number): boolean {
     const oldTracker = this.resolveCaveTracker(oldIndex, false);
     if (oldTracker && oldTracker.passengerIds.size > 0) {
       return false;
@@ -11376,21 +10895,6 @@ export class GameLogicSubsystem implements Subsystem {
     return { ...direction };
   }
 
-  private setScriptNamedToppleDirection(entityId: number, dirX: number, dirZ: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    if (!Number.isFinite(dirX) || !Number.isFinite(dirZ)) {
-      return false;
-    }
-    this.scriptToppleDirectionByEntityId.set(entityId, {
-      x: dirX,
-      z: dirZ,
-    });
-    return true;
-  }
-
   getScriptRadarEvents(): ScriptRadarEventState[] {
     this.pruneExpiredScriptRadarEvents();
     return this.scriptRadarEvents.map((event) => ({ ...event }));
@@ -11401,49 +10905,6 @@ export class GameLogicSubsystem implements Subsystem {
       return null;
     }
     return { ...this.scriptLastRadarEventState };
-  }
-
-  private pruneExpiredScriptRadarEvents(): void {
-    if (this.scriptRadarEvents.length === 0) {
-      return;
-    }
-    for (let index = this.scriptRadarEvents.length - 1; index >= 0; index -= 1) {
-      const event = this.scriptRadarEvents[index];
-      if (!event || event.expireFrame > this.frameCounter) {
-        continue;
-      }
-      this.scriptRadarEvents.splice(index, 1);
-    }
-  }
-
-  private recordScriptRadarEvent(
-    x: number,
-    y: number,
-    z: number,
-    eventType: number,
-    sourceEntityId: number | null,
-    sourceTeamName: string | null,
-  ): void {
-    this.pruneExpiredScriptRadarEvents();
-
-    if (this.scriptRadarEvents.length >= MAX_SCRIPT_RADAR_EVENTS) {
-      this.scriptRadarEvents.shift();
-    }
-
-    const state: ScriptRadarEventState = {
-      x,
-      y,
-      z,
-      eventType: Math.trunc(eventType),
-      frame: this.frameCounter,
-      expireFrame: this.frameCounter + SCRIPT_RADAR_EVENT_TTL_FRAMES,
-      sourceEntityId,
-      sourceTeamName,
-    };
-    this.scriptRadarEvents.push(state);
-    if (state.eventType !== RADAR_EVENT_BEACON_PULSE) {
-      this.scriptLastRadarEventState = state;
-    }
   }
 
   /**
@@ -11459,1902 +10920,121 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: ScriptEngine action execution for counter/flag/timer/team/money actions.
-   * C++ reference: ScriptEngine::executeActions switch + setCounter/addCounter/subCounter/setFlag/setTimer.
-   */
-  executeScriptAction(action: unknown): boolean {
-    if (!action || typeof action !== 'object') {
-      return false;
-    }
-
-    const actionRecord = action as Record<string, unknown>;
-    const { paramsObject, paramsArray } = this.resolveScriptConditionParams(actionRecord);
-    const rawActionType = actionRecord.actionType ?? actionRecord.type;
-    let actionType = this.resolveScriptActionTypeName(rawActionType);
-    if (typeof rawActionType === 'number' && Number.isFinite(rawActionType)) {
-      const numericType = Math.trunc(rawActionType);
-      const paramCount = paramsArray.length > 0
-        ? paramsArray.length
-        : (paramsObject ? Object.keys(paramsObject).length : 0);
-
-      // Source parity: Script chunks may collide on numeric id 291 across script-set variants.
-      // ScriptAction::ParseAction rematches by internal-name key; without that key we disambiguate
-      // by signature (2 params => NAMED_SET_STEALTH_ENABLED, 3 params => PLAYER_RELATES_PLAYER).
-      if (numericType === 212 && paramCount === 1) {
-        // 212 also maps to WAREHOUSE_SET_VALUE in another script set; 1-param signature is sound effect.
-        actionType = 'PLAY_SOUND_EFFECT';
-      } else if (numericType === 32 && paramCount === 1) {
-        // 32 also maps to TEAM_ATTACK_TEAM in another script set; 1-param signature is camera-mod look toward.
-        actionType = 'CAMERA_MOD_LOOK_TOWARD';
-      } else if (numericType === 216 && paramCount === 1) {
-        // 216 also maps to PLAY_SOUND_EFFECT_AT in another script set; 1-param signature is debug crash box.
-        actionType = 'DEBUG_CRASH_BOX';
-      } else if (numericType === 219 && paramCount === 5) {
-        // 219 also maps to SOUND_ENABLE_ALL in another script set; 5-param signature is camera move.
-        actionType = 'MOVE_CAMERA_TO';
-      } else if (numericType === 222 && paramCount === 5) {
-        // 222 also maps to AUDIO_RESTORE_VOLUME_ALL_TYPE; 5-param signature is waypoint-path camera move.
-        actionType = 'MOVE_CAMERA_ALONG_WAYPOINT_PATH';
-      } else if (numericType === 223 && paramCount === 4) {
-        // 223 also maps to INGAME_POPUP_MESSAGE; 4-param signature is camera rotation.
-        actionType = 'ROTATE_CAMERA';
-      } else if (numericType === 224 && paramCount === 4) {
-        // 224 also maps to SET_CAVE_INDEX; 4-param signature is camera reset.
-        actionType = 'RESET_CAMERA';
-      } else if (numericType === 229 && paramCount === 0) {
-        // 229 also maps to MAP_REVEAL_ALL_PERM; 0-param signature is background sound pause.
-        actionType = 'SUSPEND_BACKGROUND_SOUNDS';
-      } else if (numericType === 230 && paramCount === 0) {
-        // 230 also maps to MAP_REVEAL_ALL_UNDO_PERM; 0-param signature is background sound resume.
-        actionType = 'RESUME_BACKGROUND_SOUNDS';
-      } else if (numericType === 241 && paramCount === 2) {
-        // 241 also maps to TEAM_FOLLOW_WAYPOINTS in another script set; 2-param signature is reinforcements.
-        actionType = 'CREATE_REINFORCEMENT_TEAM';
-      } else if (numericType === 281 && paramCount === 1) {
-        // 281 also maps to TEAM_FOLLOW_WAYPOINTS_EXACT; 1-param signature is display text.
-        actionType = 'DISPLAY_TEXT';
-      } else if (numericType === 285 && paramCount === 3) {
-        // 285 also maps to MOVIE_PLAY_FULLSCREEN; 3-param signature is AI player build by supplies.
-        actionType = 'AI_PLAYER_BUILD_SUPPLY_CENTER';
-      } else if (numericType === 286 && paramCount === 2) {
-        // 286 also maps to MOVIE_PLAY_RADAR; 2-param signature is AI player build upgrade.
-        actionType = 'AI_PLAYER_BUILD_UPGRADE';
-      } else if (numericType === 319 && paramCount === 4) {
-        // 319 also maps to SOUND_REMOVE_ALL_DISABLED; 4-param signature is setup camera.
-        actionType = 'SETUP_CAMERA';
-      } else if (numericType === 322 && paramCount === 4) {
-        // 322 also maps to TEAM_GUARD_IN_TUNNEL_NETWORK; 4-param signature is zoom camera.
-        actionType = 'ZOOM_CAMERA';
-      } else if (numericType === 323 && paramCount === 4) {
-        // 323 also maps to QUICKVICTORY/TEAM_GUARD_IN_TUNNEL_NETWORK; 4-param signature is pitch camera.
-        actionType = 'PITCH_CAMERA';
-      } else if (numericType === 324 && paramCount === 2) {
-        // 324 also maps to QUICKVICTORY; 2-param signature is camera follow named.
-        actionType = 'CAMERA_FOLLOW_NAMED';
-      } else if (numericType === 326 && paramCount === 1) {
-        // 326 also maps to CAMERA_FADE_ADD in another script set; 1-param signature is team delete living.
-        actionType = 'TEAM_DELETE_LIVING';
-      } else if (numericType === 327 && paramCount === 2) {
-        // 327 also maps to CAMERA_FADE_SUBTRACT in another script set; 2-param signature is resize view guardband.
-        actionType = 'RESIZE_VIEW_GUARDBAND';
-      } else if (numericType === 328 && paramCount === 0) {
-        // 328 also maps to CAMERA_FADE_SATURATE in another script set; 0-param signature is delete all unmanned.
-        actionType = 'DELETE_ALL_UNMANNED';
-      } else if (numericType === 329 && paramCount === 1) {
-        // 329 also maps to CAMERA_FADE_MULTIPLY in another script set; 1-param signature is choose victim always uses normal.
-        actionType = 'CHOOSE_VICTIM_ALWAYS_USES_NORMAL';
-      } else if (numericType === 330 && paramCount === 2) {
-        // 330 also maps to CAMERA_BW_MODE_BEGIN in another script set; 2-param signature is camera enable slave mode.
-        actionType = 'CAMERA_ENABLE_SLAVE_MODE';
-      } else if (numericType === 331 && paramCount === 0) {
-        // 331 also maps to CAMERA_BW_MODE_END in another script set; 0-param signature is camera disable slave mode.
-        actionType = 'CAMERA_DISABLE_SLAVE_MODE';
-      } else if (numericType === 332 && paramCount === 4) {
-        // 332 also maps to DRAW_SKYBOX_BEGIN in another script set; 4-param signature is camera add shaker.
-        actionType = 'CAMERA_ADD_SHAKER_AT';
-      } else if (numericType === 333 && paramCount === 2) {
-        // 333 also maps to DRAW_SKYBOX_END in another script set; 2-param signature is set train held.
-        actionType = 'SET_TRAIN_HELD';
-      } else if (numericType === 303 && paramCount === 0) {
-        // 303 also maps to NAMED_FACE_NAMED; 0-param signature is ambient sound resume.
-        actionType = 'SOUND_AMBIENT_RESUME';
-      } else if (numericType === 304 && paramCount === 3) {
-        // 304 also maps to NAMED_FACE_WAYPOINT; 3-param signature is music track change.
-        actionType = 'MUSIC_SET_TRACK';
-      } else if (numericType === 307 && paramCount === 1) {
-        // 307 also maps to COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE; 1-param signature is map reveal all.
-        actionType = 'MAP_REVEAL_ALL';
-      } else if (numericType === 337 && paramCount === 0) {
-        // 337 also maps to NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH; 0-param signature is camera stop follow.
-        actionType = 'CAMERA_STOP_FOLLOW';
-      } else if (numericType === 338 && paramCount === 1) {
-        // 338 also maps to CAMERA_MOTION_BLUR in another script set; 1-param signature is named set unmanned.
-        actionType = 'NAMED_SET_UNMANNED_STATUS';
-      } else if (numericType === 339 && paramCount === 1) {
-        // 339 also maps to CAMERA_MOTION_BLUR_JUMP in another script set; 1-param signature is team set unmanned.
-        actionType = 'TEAM_SET_UNMANNED_STATUS';
-      } else if (numericType === 340 && paramCount === 2) {
-        // 340 also maps to CAMERA_MOTION_BLUR_FOLLOW in another script set; 2-param signature is named set boobytrapped.
-        actionType = 'NAMED_SET_BOOBYTRAPPED';
-      } else if (numericType === 341 && paramCount === 2) {
-        // 341 also maps to CAMERA_MOTION_BLUR_END_FOLLOW in another script set; 2-param signature is team set boobytrapped.
-        actionType = 'TEAM_SET_BOOBYTRAPPED';
-      } else if (numericType === 342 && paramCount === 0) {
-        // 342 also maps to SHOW_WEATHER; 0-param signature is FREEZE_TIME from offset script-set ids.
-        actionType = 'FREEZE_TIME';
-      } else if (numericType === 343 && paramCount === 3) {
-        // 343 also maps to UNFREEZE_TIME; 3-param signature is AI player build nearest team.
-        actionType = 'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM';
-      } else if (numericType === 348 && paramCount === 1) {
-        // 348 also maps to PLAYER_SET_MONEY; 1-param signature is FPS limit.
-        actionType = 'SET_FPS_LIMIT';
-      } else if (numericType === 350 && paramCount === 3) {
-        // 350 also maps to PLAYER_GIVE_MONEY; 3-param signature is map shroud at waypoint.
-        actionType = 'MAP_SHROUD_AT_WAYPOINT';
-      } else if (numericType === 321 && paramCount === 0) {
-        // 321 also maps to SOUND_REMOVE_TYPE; 0-param signature is letterbox end.
-        actionType = 'CAMERA_LETTERBOX_END';
-      } else if (numericType === 291 && paramCount === 2) {
-        actionType = 'NAMED_SET_STEALTH_ENABLED';
-      } else if (numericType === 293 && paramCount === 1) {
-        // 293 also maps to RADAR_DISABLE in another script set; 1-param signature is EVA toggle.
-        actionType = 'EVA_SET_ENABLED_DISABLED';
-      } else if (numericType === 294 && paramCount === 1) {
-        // 294 also maps to RADAR_ENABLE in another script set; 1-param signature is occlusion toggle.
-        actionType = 'OPTIONS_SET_OCCLUSION_MODE';
-      } else if (numericType === 295 && paramCount === 3) {
-        // 295 also maps to OPTIONS_SET_DRAWICON_UI_MODE; 3-param signature is map reveal at waypoint.
-        actionType = 'MAP_REVEAL_AT_WAYPOINT';
-      } else if (numericType === 299 && paramCount === 3) {
-        // 299 also maps to DISABLE_INPUT in another script set; 3-param signature is unit panel flags.
-        actionType = 'UNIT_AFFECT_OBJECT_PANEL_FLAGS';
-      } else if (numericType === 300 && paramCount === 3) {
-        // 300 also maps to ENABLE_INPUT in another script set; 3-param signature is team panel flags.
-        actionType = 'TEAM_AFFECT_OBJECT_PANEL_FLAGS';
-      } else if (numericType === 323 && paramCount === 1) {
-        // Source-script variants may serialize TEAM_GUARD_IN_TUNNEL_NETWORK as 323.
-        actionType = 'TEAM_GUARD_IN_TUNNEL_NETWORK';
-      }
-    }
-    if (!actionType) {
-      return false;
-    }
-
-    const readValue = (index: number, keyNames: readonly string[] = []): unknown =>
-      this.resolveScriptConditionParamValue(actionRecord, paramsObject, paramsArray, index, keyNames);
-    const readString = (index: number, keyNames: readonly string[] = []): string =>
-      this.coerceScriptConditionString(readValue(index, keyNames));
-    const readSide = (index: number, keyNames: readonly string[] = []): string =>
-      this.resolveScriptPlayerSideFromInput(readString(index, keyNames)) ?? '';
-    const readNumber = (index: number, keyNames: readonly string[] = []): number =>
-      this.coerceScriptConditionNumber(readValue(index, keyNames)) ?? 0;
-    const readInteger = (index: number, keyNames: readonly string[] = []): number =>
-      Math.trunc(readNumber(index, keyNames));
-    const readEntityId = (index: number, keyNames: readonly string[] = []): number => {
-      const value = readValue(index, keyNames);
-      const resolved = this.resolveScriptEntityId(value);
-      if (resolved !== null) {
-        return resolved;
-      }
-      const fallback = this.coerceScriptConditionNumber(value);
-      return fallback === null ? 0 : Math.trunc(fallback);
-    };
-    const readBoolean = (index: number, keyNames: readonly string[] = []): boolean =>
-      this.coerceScriptConditionBoolean(readValue(index, keyNames), false);
-    const readRelationship = (
-      index: number,
-      keyNames: readonly string[] = [],
-    ): ScriptRelationshipInput => {
-      const value = readValue(index, keyNames);
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        return Math.trunc(value);
-      }
-      return this.coerceScriptConditionString(value) as ScriptRelationshipInput;
-    };
-
-    switch (actionType) {
-      case 'NO_OP':
-        return true;
-      case 'DAMAGE_MEMBERS_OF_TEAM':
-        return this.executeScriptDamageMembersOfTeam(
-          readString(0, ['teamName', 'team']),
-          readNumber(1, ['damageAmount', 'damage', 'amount']),
-        );
-      case 'MOVE_TEAM_TO':
-        return this.executeScriptMoveTeamToWaypoint(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'MOVE_NAMED_UNIT_TO':
-        return this.executeScriptMoveNamedUnitToWaypoint(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'TEAM_ATTACK_TEAM':
-        return this.executeScriptTeamAttackTeam(
-          readString(0, ['attackerTeamName', 'sourceTeamName', 'teamName', 'team']),
-          readString(1, ['victimTeamName', 'targetTeamName', 'otherTeam']),
-        );
-      case 'NAMED_ATTACK_NAMED':
-        return this.executeScriptNamedAttackNamed(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'attackerEntityId', 'attackerUnitId']),
-          readEntityId(1, ['targetEntityId', 'otherEntityId', 'victimEntityId', 'targetUnitId']),
-        );
-      case 'NAMED_ATTACK_AREA':
-        return this.executeScriptNamedAttackArea(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'attackerEntityId', 'attackerUnitId']),
-          readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
-        );
-      case 'NAMED_ATTACK_TEAM':
-        return this.executeScriptNamedAttackTeam(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'attackerEntityId', 'attackerUnitId']),
-          readString(1, ['victimTeamName', 'targetTeamName', 'teamName', 'team']),
-        );
-      case 'TEAM_ATTACK_AREA':
-        return this.executeScriptTeamAttackArea(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
-        );
-      case 'TEAM_ATTACK_NAMED':
-        return this.executeScriptTeamAttackNamed(
-          readString(0, ['attackerTeamName', 'sourceTeamName', 'teamName', 'team']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'victimEntityId', 'targetUnitId', 'named']),
-        );
-      case 'TEAM_LOAD_TRANSPORTS':
-        return this.executeScriptTeamLoadTransports(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'NAMED_HUNT':
-        return this.executeScriptNamedHunt(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-        );
-      case 'TEAM_HUNT':
-        return this.executeScriptTeamHunt(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'PLAYER_HUNT':
-        return this.executeScriptPlayerHunt(
-          readSide(0, ['side', 'playerName', 'player']),
-        );
-      case 'PLAYER_SELL_EVERYTHING':
-        return this.executeScriptPlayerSellEverything(
-          readSide(0, ['side', 'playerName', 'player']),
-        );
-      case 'PLAYER_DISABLE_BASE_CONSTRUCTION':
-        return this.executeScriptPlayerSetBaseConstructionEnabled(
-          readSide(0, ['side', 'playerName', 'player']),
-          false,
-        );
-      case 'PLAYER_DISABLE_FACTORIES':
-        return this.executeScriptPlayerSetObjectTemplateEnabled(
-          readSide(0, ['side', 'playerName', 'player']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          false,
-        );
-      case 'PLAYER_DISABLE_UNIT_CONSTRUCTION':
-        return this.executeScriptPlayerSetUnitConstructionEnabled(
-          readSide(0, ['side', 'playerName', 'player']),
-          false,
-        );
-      case 'PLAYER_ENABLE_BASE_CONSTRUCTION':
-        return this.executeScriptPlayerSetBaseConstructionEnabled(
-          readSide(0, ['side', 'playerName', 'player']),
-          true,
-        );
-      case 'PLAYER_ENABLE_FACTORIES':
-        return this.executeScriptPlayerSetObjectTemplateEnabled(
-          readSide(0, ['side', 'playerName', 'player']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          true,
-        );
-      case 'PLAYER_ENABLE_UNIT_CONSTRUCTION':
-        return this.executeScriptPlayerSetUnitConstructionEnabled(
-          readSide(0, ['side', 'playerName', 'player']),
-          true,
-        );
-      case 'CAMERA_MOVE_HOME':
-        // Source parity: ScriptActions::doCameraMoveHome is an intentional no-op in C++.
-        return true;
-      case 'BUILD_TEAM':
-        return this.executeScriptBuildTeam(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'CREATE_REINFORCEMENT_TEAM':
-        return this.executeScriptCreateReinforcementTeam(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'CREATE_OBJECT':
-        return this.executeScriptCreateObjectAtPosition(
-          readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
-          readString(1, ['teamName', 'team']),
-          readValue(2, ['position', 'coord3D', 'coord']),
-          readNumber(3, ['angle', 'orientation', 'rotation']),
-        );
-      case 'CREATE_NAMED_ON_TEAM_AT_WAYPOINT':
-        return this.executeScriptCreateUnitOnTeamAtWaypoint(
-          readString(0, ['objectName', 'entityName', 'name', 'unitName', 'named']),
-          readString(1, ['templateName', 'objectType', 'thingName', 'unitType']),
-          readString(2, ['teamName', 'team']),
-          readString(3, ['waypointName', 'waypoint']),
-        );
-      case 'CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT':
-        return this.executeScriptCreateUnitOnTeamAtWaypoint(
-          '',
-          readString(0, ['templateName', 'objectType', 'thingName', 'unitType']),
-          readString(1, ['teamName', 'team']),
-          readString(2, ['waypointName', 'waypoint']),
-        );
-      case 'UNIT_SPAWN_NAMED_LOCATION_ORIENTATION':
-        return this.executeScriptCreateNamedObjectAtPosition(
-          readString(0, ['objectName', 'entityName', 'name', 'unitName', 'named']),
-          readString(1, ['templateName', 'objectType', 'thingName', 'unitType']),
-          readString(2, ['teamName', 'team']),
-          readValue(3, ['position', 'coord3D', 'coord']),
-          readNumber(4, ['angle', 'orientation', 'rotation']),
-        );
-      case 'NAMED_APPLY_ATTACK_PRIORITY_SET':
-        return this.executeScriptNamedApplyAttackPrioritySet(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readString(1, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
-        );
-      case 'TEAM_APPLY_ATTACK_PRIORITY_SET':
-        return this.executeScriptTeamApplyAttackPrioritySet(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
-        );
-      case 'SET_BASE_CONSTRUCTION_SPEED':
-        return this.executeScriptSetBaseConstructionSpeed(
-          readSide(0, ['side', 'playerName', 'player']),
-          readInteger(1, ['delayInSeconds', 'seconds', 'delay', 'value']),
-        );
-      case 'NAMED_SET_ATTITUDE':
-        return this.executeScriptNamedSetAttitude(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readInteger(1, ['attitude', 'mood', 'value']),
-        );
-      case 'TEAM_SET_ATTITUDE':
-        return this.executeScriptTeamSetAttitude(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['attitude', 'mood', 'value']),
-        );
-      case 'VICTORY':
-        return this.setScriptLocalGameEndState(false, SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES);
-      case 'QUICKVICTORY':
-        return this.setScriptLocalGameEndState(false, SCRIPT_ENDGAME_QUICK_DURATION_FRAMES);
-      case 'DEFEAT':
-        return this.setScriptLocalGameEndState(true, SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES);
-      case 'LOCALDEFEAT':
-        return this.setScriptLocalDefeatState();
-      case 'NAMED_DAMAGE':
-        return this.executeScriptNamedDamage(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readInteger(1, ['damageAmount', 'damage', 'amount']),
-        );
-      case 'NAMED_DELETE':
-        return this.executeScriptNamedDelete(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-        );
-      case 'TEAM_DELETE':
-        return this.executeScriptTeamDelete(
-          readString(0, ['teamName', 'team']),
-          false,
-        );
-      case 'NAMED_KILL':
-        return this.executeScriptNamedKill(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-        );
-      case 'TEAM_KILL':
-        return this.executeScriptTeamKill(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'PLAYER_KILL':
-        return this.executeScriptPlayerKill(
-          readSide(0, ['side', 'playerName', 'player']),
-        );
-      case 'TEAM_DELETE_LIVING':
-        return this.executeScriptTeamDeleteLiving(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'RESIZE_VIEW_GUARDBAND':
-        return this.executeScriptResizeViewGuardband(
-          readNumber(0, ['guardbandX', 'x']),
-          readNumber(1, ['guardbandY', 'y']),
-        );
-      case 'DELETE_ALL_UNMANNED':
-        return this.executeScriptDeleteAllUnmanned();
-      case 'CHOOSE_VICTIM_ALWAYS_USES_NORMAL':
-        return this.executeScriptChooseVictimAlwaysUsesNormal(
-          readBoolean(0, ['enabled', 'value']),
-        );
-      case 'FREEZE_TIME':
-        this.setScriptTimeFrozenByScript(true);
-        return true;
-      case 'UNFREEZE_TIME':
-        this.setScriptTimeFrozenByScript(false);
-        return true;
-      case 'SHOW_WEATHER':
-        this.setScriptWeatherVisible(readBoolean(0, ['showWeather', 'visible', 'enabled', 'value']));
-        return true;
-      case 'ENABLE_SCORING':
-        this.setScriptScoringEnabled(true);
-        return true;
-      case 'DISABLE_SCORING':
-        this.setScriptScoringEnabled(false);
-        return true;
-      case 'PLAY_SOUND_EFFECT':
-        return this.requestScriptPlaySoundEffect(
-          readString(0, ['soundEventName', 'soundName', 'audioName', 'sound']),
-        );
-      case 'PLAY_SOUND_EFFECT_AT':
-        return this.requestScriptPlaySoundEffectAt(
-          readString(0, ['soundEventName', 'soundName', 'audioName', 'sound']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'SOUND_PLAY_NAMED':
-        return this.requestScriptSoundPlayFromNamed(
-          readString(0, ['soundEventName', 'soundName', 'audioName', 'sound']),
-          readEntityId(1, ['entityId', 'unitId', 'named', 'unitName']),
-        );
-      case 'SPEECH_PLAY':
-        return this.requestScriptSpeechPlay(
-          readString(0, ['speechName', 'audioName', 'sound']),
-          readBoolean(1, ['allowOverlap', 'overlap']),
-        );
-      case 'PLAYER_TRANSFER_OWNERSHIP_PLAYER':
-        return this.executeScriptPlayerTransferOwnershipPlayer(
-          readString(0, ['sourceSide', 'sourcePlayer', 'fromPlayer']),
-          readString(1, ['targetSide', 'targetPlayer', 'toPlayer']),
-        );
-      case 'NAMED_TRANSFER_OWNERSHIP_PLAYER':
-        return this.executeScriptNamedTransferOwnershipPlayer(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readString(1, ['targetSide', 'targetPlayer', 'toPlayer']),
-        );
-      case 'MOVIE_PLAY_FULLSCREEN':
-        return this.requestScriptMoviePlayback(
-          readString(0, ['movieName', 'movie']),
-          'FULLSCREEN',
-        );
-      case 'MOVIE_PLAY_RADAR':
-        return this.requestScriptMoviePlayback(
-          readString(0, ['movieName', 'movie']),
-          'RADAR',
-        );
-      case 'DISPLAY_TEXT':
-        return this.enqueueScriptDisplayText(
-          readString(0, ['displayText', 'text', 'message']),
-        );
-      case 'CAMEO_FLASH':
-        return this.requestScriptCameoFlash(
-          readString(0, ['commandButtonName', 'buttonName', 'button']),
-          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'NAMED_FLASH':
-        return this.executeScriptNamedFlash(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'TEAM_FLASH':
-        return this.executeScriptTeamFlash(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'SHOW_MILITARY_CAPTION':
-        return this.enqueueScriptMilitaryCaption(
-          readString(0, ['captionText', 'briefing', 'text', 'message']),
-          readNumber(1, ['duration', 'durationMs', 'milliseconds', 'time']),
-        );
-      case 'CAMERA_SET_AUDIBLE_DISTANCE':
-        this.setScriptCameraAudibleDistance(
-          readNumber(0, ['audibleDistance', 'distance', 'value']),
-        );
-        return true;
-      case 'SET_STOPPING_DISTANCE':
-        return this.executeScriptSetStoppingDistance(
-          readString(0, ['teamName', 'team']),
-          readNumber(1, ['stoppingDistance', 'distance', 'value']),
-        );
-      case 'NAMED_SET_STOPPING_DISTANCE':
-        return this.executeScriptNamedSetStoppingDistance(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readNumber(1, ['stoppingDistance', 'distance', 'value']),
-        );
-      case 'SET_FPS_LIMIT':
-        this.setScriptFramesPerSecondLimit(
-          readInteger(0, ['fpsLimit', 'framesPerSecondLimit', 'value']),
-        );
-        return true;
-      case 'CAMERA_FADE_ADD':
-        this.requestScriptCameraFade(
-          'ADD',
-          readNumber(0, ['minFade', 'minValue', 'min']),
-          readNumber(1, ['maxFade', 'maxValue', 'max']),
-          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
-          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
-          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
-        );
-        return true;
-      case 'CAMERA_FADE_SUBTRACT':
-        this.requestScriptCameraFade(
-          'SUBTRACT',
-          readNumber(0, ['minFade', 'minValue', 'min']),
-          readNumber(1, ['maxFade', 'maxValue', 'max']),
-          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
-          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
-          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
-        );
-        return true;
-      case 'CAMERA_FADE_SATURATE':
-        this.requestScriptCameraFade(
-          'SATURATE',
-          readNumber(0, ['minFade', 'minValue', 'min']),
-          readNumber(1, ['maxFade', 'maxValue', 'max']),
-          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
-          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
-          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
-        );
-        return true;
-      case 'CAMERA_FADE_MULTIPLY':
-        this.requestScriptCameraFade(
-          'MULTIPLY',
-          readNumber(0, ['minFade', 'minValue', 'min']),
-          readNumber(1, ['maxFade', 'maxValue', 'max']),
-          readInteger(2, ['increaseFrames', 'framesIncrease', 'increase']),
-          readInteger(3, ['holdFrames', 'framesHold', 'hold']),
-          readInteger(4, ['decreaseFrames', 'framesDecrease', 'decrease']),
-        );
-        return true;
-      case 'CAMERA_BW_MODE_BEGIN':
-        this.requestScriptCameraBlackWhiteMode(
-          true,
-          readInteger(0, ['frames', 'fadeFrames', 'value']),
-        );
-        return true;
-      case 'CAMERA_BW_MODE_END':
-        this.requestScriptCameraBlackWhiteMode(
-          false,
-          readInteger(0, ['frames', 'fadeFrames', 'value']),
-        );
-        return true;
-      case 'DRAW_SKYBOX_BEGIN':
-        this.setScriptSkyboxEnabled(true);
-        return true;
-      case 'DRAW_SKYBOX_END':
-        this.setScriptSkyboxEnabled(false);
-        return true;
-      case 'SET_ATTACK_PRIORITY_THING':
-        return this.executeScriptSetAttackPriorityThing(
-          readString(0, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readInteger(2, ['priority', 'value']),
-        );
-      case 'SET_ATTACK_PRIORITY_KIND_OF':
-        return this.executeScriptSetAttackPriorityKindOf(
-          readString(0, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
-          readInteger(1, ['kindOfBit', 'kindOf', 'kind', 'kindOfIndex']),
-          readInteger(2, ['priority', 'value']),
-        );
-      case 'SET_DEFAULT_ATTACK_PRIORITY':
-        return this.executeScriptSetDefaultAttackPriority(
-          readString(0, ['attackPrioritySetName', 'attackPrioritySet', 'setName', 'set']),
-          readInteger(1, ['defaultPriority', 'priority', 'value']),
-        );
-      case 'CAMERA_ENABLE_SLAVE_MODE':
-        return this.setScriptCameraSlaveMode(
-          readString(0, ['thingTemplateName', 'templateName', 'objectType']),
-          readString(1, ['boneName', 'bone']),
-        );
-      case 'CAMERA_DISABLE_SLAVE_MODE':
-        this.clearScriptCameraSlaveMode();
-        return true;
-      case 'CAMERA_ADD_SHAKER_AT':
-        return this.requestScriptCameraAddShaker(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['amplitude', 'intensity']),
-          readNumber(2, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(3, ['radius']),
-        );
-      case 'SET_TRAIN_HELD':
-        return this.executeScriptSetTrainHeld(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readBoolean(1, ['held', 'enabled', 'value']),
-        );
-      case 'CAMERA_MOTION_BLUR':
-        this.requestScriptCameraMotionBlur(
-          readBoolean(0, ['zoomIn', 'zoom', 'value']),
-          readBoolean(1, ['saturate', 'value']),
-        );
-        return true;
-      case 'CAMERA_MOTION_BLUR_JUMP':
-        return this.requestScriptCameraMotionBlurJump(
-          readString(0, ['waypointName', 'waypoint']),
-          readBoolean(1, ['saturate', 'value']),
-        );
-      case 'CAMERA_MOTION_BLUR_FOLLOW':
-        this.requestScriptCameraMotionBlurFollow(
-          readInteger(0, ['mode', 'filterMode', 'value']),
-        );
-        return true;
-      case 'CAMERA_MOTION_BLUR_END_FOLLOW':
-        this.requestScriptCameraMotionBlurEndFollow();
-        return true;
-      case 'CAMERA_LETTERBOX_BEGIN':
-        this.setScriptLetterboxEnabled(true);
-        return true;
-      case 'CAMERA_LETTERBOX_END':
-        this.setScriptLetterboxEnabled(false);
-        return true;
-      case 'CAMERA_FOLLOW_NAMED':
-        return this.setScriptCameraFollowNamed(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'unitName']),
-          readBoolean(1, ['snapToUnit', 'snap']),
-        );
-      case 'OVERSIZE_TERRAIN':
-        return this.executeScriptOversizeTerrain(
-          readInteger(0, ['amount', 'oversizeAmount', 'value']),
-        );
-      case 'CAMERA_STOP_FOLLOW':
-        this.clearScriptCameraFollowNamed();
-        return true;
-      case 'MOVE_CAMERA_TO_SELECTION':
-        return this.requestScriptCameraModMoveToSelection();
-      case 'CAMERA_MOD_FREEZE_TIME':
-        this.requestScriptCameraModFreezeTime();
-        return true;
-      case 'CAMERA_MOD_FREEZE_ANGLE':
-        this.requestScriptCameraModFreezeAngle();
-        return true;
-      case 'CAMERA_MOD_SET_FINAL_ZOOM':
-        return this.requestScriptCameraModFinalZoom(
-          readNumber(0, ['zoom', 'finalZoom']),
-          readNumber(1, ['easeIn', 'easeInPercent']),
-          readNumber(2, ['easeOut', 'easeOutPercent']),
-        );
-      case 'CAMERA_MOD_SET_FINAL_PITCH':
-        return this.requestScriptCameraModFinalPitch(
-          readNumber(0, ['pitch', 'finalPitch']),
-          readNumber(1, ['easeIn', 'easeInPercent']),
-          readNumber(2, ['easeOut', 'easeOutPercent']),
-        );
-      case 'CAMERA_MOD_SET_FINAL_SPEED_MULTIPLIER':
-        this.requestScriptCameraModFinalSpeedMultiplier(
-          readInteger(0, ['multiplier', 'timeMultiplier', 'value']),
-        );
-        return true;
-      case 'CAMERA_MOD_SET_ROLLING_AVERAGE':
-        this.requestScriptCameraModRollingAverage(
-          readInteger(0, ['framesToAverage', 'rollingAverageFrames', 'frames']),
-        );
-        return true;
-      case 'CAMERA_MOD_FINAL_LOOK_TOWARD':
-        return this.requestScriptCameraModFinalLookToward(
-          readString(0, ['waypointName', 'waypoint']),
-        );
-      case 'CAMERA_MOD_LOOK_TOWARD':
-        return this.requestScriptCameraModLookToward(
-          readString(0, ['waypointName', 'waypoint']),
-        );
-      case 'SUSPEND_BACKGROUND_SOUNDS':
-        this.setScriptBackgroundSoundsPaused(true);
-        return true;
-      case 'RESUME_BACKGROUND_SOUNDS':
-        this.setScriptBackgroundSoundsPaused(false);
-        return true;
-      case 'SOUND_AMBIENT_PAUSE':
-        this.setScriptAmbientSoundsPaused(true);
-        return true;
-      case 'SOUND_AMBIENT_RESUME':
-        this.setScriptAmbientSoundsPaused(false);
-        return true;
-      case 'ENABLE_OBJECT_SOUND':
-        return this.executeScriptSetObjectAmbientSound(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          true,
-        );
-      case 'DISABLE_OBJECT_SOUND':
-        return this.executeScriptSetObjectAmbientSound(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          false,
-        );
-      case 'MUSIC_SET_TRACK':
-        return this.setScriptMusicTrack(
-          readString(0, ['musicName', 'trackName', 'track']),
-          readBoolean(1, ['fadeOut', 'fadeout']),
-          readBoolean(2, ['fadeIn', 'fadein']),
-        );
-      case 'SET_VISUAL_SPEED_MULTIPLIER':
-        return this.setScriptVisualSpeedMultiplier(
-          readInteger(0, ['multiplier', 'timeMultiplier', 'value']),
-        );
-      case 'SET_INFANTRY_LIGHTING_OVERRIDE':
-        return this.setScriptInfantryLightingOverride(
-          readNumber(0, ['setting', 'scale', 'value']),
-        );
-      case 'RESET_INFANTRY_LIGHTING_OVERRIDE':
-        return this.setScriptInfantryLightingOverride(-1);
-      case 'SET_TREE_SWAY':
-        return this.executeScriptSetTreeSway(
-          readNumber(0, ['direction', 'windDirection', 'angle']),
-          readNumber(1, ['intensity', 'sway', 'swayAmount']),
-          readNumber(2, ['lean', 'leanAmount']),
-          readInteger(3, ['breezePeriodFrames', 'periodFrames', 'frames']),
-          readNumber(4, ['randomness', 'variation']),
-        );
-      case 'DEBUG_STRING':
-        return this.executeScriptDebugMessage(
-          readString(0, ['debugString', 'text', 'message']),
-          false,
-          false,
-        );
-      case 'DEBUG_CRASH_BOX':
-        return this.executeScriptDebugMessage(
-          readString(0, ['debugString', 'text', 'message']),
-          true,
-          false,
-        );
-      case 'DEBUG_MESSAGE_BOX':
-        return this.executeScriptDebugMessage(
-          readString(0, ['debugString', 'text', 'message']),
-          false,
-          true,
-        );
-      case 'TEAM_GARRISON_SPECIFIC_BUILDING':
-        return this.executeScriptTeamGarrisonSpecificBuilding(
-          readString(0, ['teamName', 'team']),
-          readEntityId(1, ['buildingEntityId', 'entityId', 'buildingId', 'unitId', 'named']),
-        );
-      case 'EXIT_SPECIFIC_BUILDING':
-        return this.executeScriptExitSpecificBuilding(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'buildingId']),
-        );
-      case 'TEAM_GARRISON_NEAREST_BUILDING':
-        return this.executeScriptTeamGarrisonNearestBuilding(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'TEAM_EXIT_ALL_BUILDINGS':
-        return this.executeScriptTeamExitAllBuildings(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'NAMED_GARRISON_SPECIFIC_BUILDING':
-        return this.executeScriptNamedGarrisonSpecificBuilding(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readEntityId(1, ['buildingEntityId', 'entityId', 'buildingId', 'targetEntityId']),
-        );
-      case 'NAMED_GARRISON_NEAREST_BUILDING':
-        return this.executeScriptNamedGarrisonNearestBuilding(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-        );
-      case 'NAMED_EXIT_BUILDING':
-        return this.executeScriptNamedExitBuilding(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-        );
-      case 'PLAYER_GARRISON_ALL_BUILDINGS':
-        return this.executeScriptPlayerGarrisonAllBuildings(
-          readSide(0, ['side', 'playerName', 'player']),
-        );
-      case 'PLAYER_EXIT_ALL_BUILDINGS':
-        return this.executeScriptPlayerExitAllBuildings(
-          readSide(0, ['side', 'playerName', 'player']),
-        );
-      case 'TEAM_WANDER':
-        return this.executeScriptTeamWander(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-        );
-      case 'TEAM_PANIC':
-        return this.executeScriptTeamPanic(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-        );
-      case 'MOVE_CAMERA_TO':
-        return this.requestScriptMoveCameraTo(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['cameraStutterSeconds', 'cameraStutter', 'stutter']),
-          readNumber(3, ['easeInSeconds', 'easeIn']),
-          readNumber(4, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'MOVE_CAMERA_ALONG_WAYPOINT_PATH':
-        return this.requestScriptMoveCameraAlongWaypointPath(
-          readString(0, ['waypointName', 'waypoint', 'waypointPathName', 'waypointPath']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['cameraStutterSeconds', 'cameraStutter', 'stutter']),
-          readNumber(3, ['easeInSeconds', 'easeIn']),
-          readNumber(4, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'RESET_CAMERA':
-        return this.requestScriptResetCamera(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['easeInSeconds', 'easeIn']),
-          readNumber(3, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'ROTATE_CAMERA':
-        return this.requestScriptRotateCamera(
-          readNumber(0, ['rotations']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['easeInSeconds', 'easeIn']),
-          readNumber(3, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'SETUP_CAMERA':
-        return this.requestScriptSetupCamera(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['zoom']),
-          readNumber(2, ['pitch']),
-          readString(3, ['lookAtWaypointName', 'lookAtWaypoint', 'lookWaypointName', 'lookWaypoint']),
-        );
-      case 'ZOOM_CAMERA':
-        return this.requestScriptZoomCamera(
-          readNumber(0, ['zoom']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['easeInSeconds', 'easeIn']),
-          readNumber(3, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'PITCH_CAMERA':
-        return this.requestScriptPitchCamera(
-          readNumber(0, ['pitch']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['easeInSeconds', 'easeIn']),
-          readNumber(3, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'SOUND_SET_VOLUME':
-        this.setScriptSoundVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
-        return true;
-      case 'SPEECH_SET_VOLUME':
-        this.setScriptSpeechVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
-        return true;
-      case 'MUSIC_SET_VOLUME':
-        this.setScriptMusicVolumeScale(readNumber(0, ['newVolume', 'volume', 'volumePercent', 'value']));
-        return true;
-      case 'DISABLE_BORDER_SHROUD':
-        this.setScriptBorderShroudEnabled(false);
-        return true;
-      case 'ENABLE_BORDER_SHROUD':
-        this.setScriptBorderShroudEnabled(true);
-        return true;
-      case 'OBJECT_ALLOW_BONUSES':
-        this.setScriptObjectsReceiveDifficultyBonus(readBoolean(0, ['enabled', 'value', 'allowBonuses']));
-        return true;
-      case 'PLAYER_EXCLUDE_FROM_SCORE_SCREEN':
-        return this.setSideExcludedFromScoreScreen(
-          readSide(0, ['side', 'playerName', 'player']),
-          true,
-        );
-      case 'TEAM_AVAILABLE_FOR_RECRUITMENT':
-        return this.executeScriptTeamAvailableForRecruitment(
-          readString(0, ['teamName', 'team']),
-          readBoolean(1, ['availability', 'recruitable', 'enabled', 'value']),
-        );
-      case 'TEAM_COLLECT_NEARBY_FOR_TEAM':
-        return this.executeScriptTeamCollectNearbyForTeam(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'TEAM_MERGE_INTO_TEAM':
-        return this.executeScriptTeamMergeIntoTeam(
-          readString(0, ['sourceTeamName', 'sourceTeam', 'teamName', 'team']),
-          readString(1, ['targetTeamName', 'targetTeam', 'otherTeam']),
-        );
-      case 'TEAM_GUARD_SUPPLY_CENTER':
-        return this.executeScriptTeamGuardSupplyCenter(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['supplies', 'minimumCash', 'value']),
-        );
-      case 'TEAM_GUARD_IN_TUNNEL_NETWORK':
-        return this.executeScriptTeamGuardInTunnelNetwork(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'DISABLE_INPUT':
-        this.setScriptInputDisabled(true);
-        return true;
-      case 'ENABLE_INPUT':
-        this.setScriptInputDisabled(false);
-        return true;
-      case 'RADAR_DISABLE':
-        this.setScriptRadarHidden(true);
-        return true;
-      case 'RADAR_ENABLE':
-        this.setScriptRadarHidden(false);
-        return true;
-      case 'RADAR_FORCE_ENABLE':
-        this.setScriptRadarForced(true);
-        return true;
-      case 'RADAR_REVERT_TO_NORMAL':
-        this.setScriptRadarForced(false);
-        return true;
-      case 'REFRESH_RADAR':
-        this.requestScriptRadarRefresh();
-        return true;
-      case 'SCREEN_SHAKE':
-        return this.setScriptScreenShake(readInteger(0, ['intensity', 'shakeType', 'cameraShakeType']));
-      case 'TECHTREE_MODIFY_BUILDABILITY_OBJECT':
-        return this.executeScriptModifyBuildableStatus(
-          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          this.coerceScriptBuildableStatus(readValue(1, ['buildableStatus', 'status', 'buildable'])),
-        );
-      case 'WAREHOUSE_SET_VALUE':
-        return this.executeScriptWarehouseSetValue(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['cashValue', 'value', 'amount']),
-        );
-      case 'RADAR_CREATE_EVENT':
-        return this.executeScriptRadarCreateEvent(
-          readValue(0, ['position', 'coord3D', 'coord', 'location', 'waypoint']),
-          readInteger(1, ['eventType', 'type']),
-        );
-      case 'OBJECT_CREATE_RADAR_EVENT':
-        return this.executeScriptObjectCreateRadarEvent(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['eventType', 'type']),
-        );
-      case 'TEAM_CREATE_RADAR_EVENT':
-        return this.executeScriptTeamCreateRadarEvent(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['eventType', 'type']),
-        );
-      case 'DISPLAY_CINEMATIC_TEXT':
-        return this.setScriptCinematicText(
-          readString(0, ['displayText', 'text', 'message']),
-          readString(1, ['fontType', 'font']),
-          readInteger(2, ['timeInSeconds', 'seconds', 'time']),
-        );
-      case 'SOUND_DISABLE_TYPE':
-        return this.setScriptAudioEventEnabled(
-          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
-          false,
-        );
-      case 'SOUND_ENABLE_TYPE':
-        return this.setScriptAudioEventEnabled(
-          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
-          true,
-        );
-      case 'SOUND_ENABLE_ALL':
-        return this.setScriptAudioEventEnabled('', true);
-      case 'SOUND_REMOVE_ALL_DISABLED':
-        this.requestScriptAudioRemoveAllDisabled();
-        return true;
-      case 'SOUND_REMOVE_TYPE':
-        return this.requestScriptAudioRemoveType(
-          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
-        );
-      case 'AUDIO_OVERRIDE_VOLUME_TYPE':
-        return this.setScriptAudioEventVolumeOverride(
-          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
-          readNumber(1, ['newVolume', 'volume', 'volumePercent', 'value']),
-        );
-      case 'AUDIO_RESTORE_VOLUME_TYPE':
-        return this.setScriptAudioEventVolumeOverride(
-          readString(0, ['soundEventName', 'eventName', 'soundType', 'sound']),
-          -100,
-        );
-      case 'AUDIO_RESTORE_VOLUME_ALL_TYPE':
-        return this.setScriptAudioEventVolumeOverride('', -100);
-      case 'INGAME_POPUP_MESSAGE':
-        return this.enqueueScriptPopupMessage(
-          readString(0, ['message', 'text']),
-          readInteger(1, ['x']),
-          readInteger(2, ['y']),
-          readInteger(3, ['width']),
-          readBoolean(4, ['pause']),
-        );
-      case 'DISPLAY_COUNTER':
-        return this.setScriptDisplayedCounter(
-          readString(0, ['counterName', 'counter']),
-          readString(1, ['counterText', 'text', 'displayText']),
-          false,
-        );
-      case 'HIDE_COUNTER':
-        return this.hideScriptDisplayedCounter(readString(0, ['counterName', 'counter']));
-      case 'DISPLAY_COUNTDOWN_TIMER':
-        return this.setScriptDisplayedCounter(
-          readString(0, ['timerName', 'counterName', 'counter']),
-          readString(1, ['timerText', 'counterText', 'text', 'displayText']),
-          true,
-        );
-      case 'HIDE_COUNTDOWN_TIMER':
-        return this.hideScriptDisplayedCounter(readString(0, ['timerName', 'counterName', 'counter']));
-      case 'DISABLE_SPECIAL_POWER_DISPLAY':
-        this.setScriptSpecialPowerDisplayEnabled(false);
-        return true;
-      case 'ENABLE_SPECIAL_POWER_DISPLAY':
-        this.setScriptSpecialPowerDisplayEnabled(true);
-        return true;
-      case 'NAMED_HIDE_SPECIAL_POWER_DISPLAY':
-        return this.setScriptNamedSpecialPowerDisplayHidden(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          true,
-        );
-      case 'NAMED_SHOW_SPECIAL_POWER_DISPLAY':
-        return this.setScriptNamedSpecialPowerDisplayHidden(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          false,
-        );
-      case 'ENABLE_COUNTDOWN_TIMER_DISPLAY':
-        this.setScriptNamedTimerDisplayEnabled(true);
-        return true;
-      case 'DISABLE_COUNTDOWN_TIMER_DISPLAY':
-        this.setScriptNamedTimerDisplayEnabled(false);
-        return true;
-      case 'NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED':
-        return this.executeScriptNamedUseCommandButtonAbilityOnNamed(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readEntityId(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT':
-        return this.executeScriptNamedUseCommandButtonAbilityAtWaypoint(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readString(2, ['waypointName', 'waypoint']),
-        );
-      case 'NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH':
-        return this.executeScriptNamedUseCommandButtonAbilityUsingWaypointPath(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readString(2, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-        );
-      case 'TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED':
-        return this.executeScriptTeamUseCommandButtonAbilityOnNamed(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readEntityId(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT':
-        return this.executeScriptTeamUseCommandButtonAbilityAtWaypoint(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readString(2, ['waypointName', 'waypoint']),
-        );
-      case 'NAMED_USE_COMMANDBUTTON_ABILITY':
-        return this.executeScriptNamedUseCommandButtonAbility(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'TEAM_USE_COMMANDBUTTON_ABILITY':
-        return this.executeScriptTeamUseCommandButtonAbility(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'NAMED_ENTER_NAMED':
-        return this.executeScriptNamedEnterNamed(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'sourceEntityId']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'unitId', 'named', 'transportId']),
-        );
-      case 'TEAM_ENTER_NAMED':
-        return this.executeScriptTeamEnterNamed(
-          readString(0, ['teamName', 'team']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'unitId', 'named', 'transportId']),
-        );
-      case 'NAMED_EXIT_ALL':
-        return this.executeScriptNamedExitAll(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'transportId']),
-        );
-      case 'TEAM_EXIT_ALL':
-        return this.executeScriptTeamExitAll(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'NAMED_GUARD':
-        return this.executeScriptNamedGuard(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-        );
-      case 'TEAM_GUARD':
-        return this.executeScriptTeamGuard(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'NAMED_FOLLOW_WAYPOINTS':
-        return this.executeScriptNamedFollowWaypoints(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-          false,
-        );
-      case 'TEAM_FOLLOW_WAYPOINTS':
-        return this.executeScriptTeamFollowWaypoints(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-          readBoolean(2, ['asTeam', 'asGroup']),
-          false,
-        );
-      case 'NAMED_FOLLOW_WAYPOINTS_EXACT':
-        return this.executeScriptNamedFollowWaypoints(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-          true,
-        );
-      case 'TEAM_FOLLOW_WAYPOINTS_EXACT':
-        return this.executeScriptTeamFollowWaypoints(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-          readBoolean(2, ['asTeam', 'asGroup']),
-          true,
-        );
-      case 'NAMED_FLASH_WHITE':
-        return this.executeScriptNamedFlashWhite(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'TEAM_FLASH_WHITE':
-        return this.executeScriptTeamFlashWhite(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'SKIRMISH_BUILD_BUILDING':
-        return this.executeScriptSkirmishBuildBuilding(
-          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'AI_PLAYER_BUILD_SUPPLY_CENTER':
-        return this.executeScriptAIPlayerBuildSupplyCenter(
-          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readInteger(2, ['minimumCash', 'cash', 'value']),
-        );
-      case 'AI_PLAYER_BUILD_UPGRADE':
-        return this.executeScriptAIPlayerBuildUpgrade(
-          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
-          readString(1, ['upgradeName', 'upgrade']),
-        );
-      case 'AI_PLAYER_BUILD_TYPE_NEAREST_TEAM':
-        return this.executeScriptAIPlayerBuildTypeNearestTeam(
-          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readString(2, ['teamName', 'team']),
-        );
-      case 'SKIRMISH_FOLLOW_APPROACH_PATH':
-        return this.executeScriptTeamFollowSkirmishApproachPath(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
-          readBoolean(2, ['asTeam', 'asGroup']),
-          readSide(3, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'SKIRMISH_MOVE_TO_APPROACH_PATH':
-        return this.executeScriptTeamMoveToSkirmishApproachPath(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointPathLabel', 'pathLabel', 'waypointPath']),
-          readSide(2, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'SKIRMISH_BUILD_BASE_DEFENSE_FRONT':
-        return this.executeScriptSkirmishBuildBaseDefenseFront(
-          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'SKIRMISH_FIRE_SPECIAL_POWER_AT_MOST_COST':
-        return this.executeScriptSkirmishFireSpecialPowerAtMostCost(
-          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
-          readString(1, ['specialPowerName', 'specialPower']),
-        );
-      case 'NAMED_STOP_SPECIAL_POWER_COUNTDOWN':
-        return this.executeScriptNamedStopSpecialPowerCountdown(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['specialPowerName', 'specialPower']),
-          true,
-        );
-      case 'NAMED_START_SPECIAL_POWER_COUNTDOWN':
-        return this.executeScriptNamedStopSpecialPowerCountdown(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['specialPowerName', 'specialPower']),
-          false,
-        );
-      case 'NAMED_SET_SPECIAL_POWER_COUNTDOWN':
-        return this.executeScriptNamedSetSpecialPowerCountdown(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['specialPowerName', 'specialPower']),
-          readInteger(2, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'NAMED_ADD_SPECIAL_POWER_COUNTDOWN':
-        return this.executeScriptNamedAddSpecialPowerCountdown(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['specialPowerName', 'specialPower']),
-          readInteger(2, ['timeInSeconds', 'seconds', 'duration']),
-        );
-      case 'NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT':
-        return this.executeScriptNamedFireSpecialPowerAtWaypoint(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['specialPowerName', 'specialPower']),
-          readString(2, ['waypointName', 'waypoint']),
-        );
-      case 'NAMED_FIRE_SPECIAL_POWER_AT_NAMED':
-        return this.executeScriptNamedFireSpecialPowerAtNamed(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['specialPowerName', 'specialPower']),
-          readEntityId(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'IDLE_ALL_UNITS':
-        return this.executeScriptIdleAllUnits();
-      case 'RESUME_SUPPLY_TRUCKING':
-        return this.executeScriptResumeSupplyTrucking();
-      case 'NAMED_CUSTOM_COLOR':
-        return this.executeScriptNamedCustomColor(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'namedUnit']),
-          readInteger(1, ['color', 'customColor']),
-        );
-      case 'NAMED_RECEIVE_UPGRADE':
-        return this.executeScriptNamedReceiveUpgrade(
-          readEntityId(0, ['entityId', 'unitId', 'named', 'namedUnit']),
-          readString(1, ['upgradeName', 'upgrade']),
-        );
-      case 'PLAYER_REPAIR_NAMED_STRUCTURE':
-        return this.executeScriptPlayerRepairNamedStructure(
-          readSide(0, ['side', 'playerName', 'player']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'targetBuildingId', 'unitId', 'named']),
-        );
-      case 'SKIRMISH_BUILD_BASE_DEFENSE_FLANK':
-        return this.executeScriptSkirmishBuildBaseDefenseFlank(
-          readSide(0, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'SKIRMISH_BUILD_STRUCTURE_FRONT':
-        return this.executeScriptSkirmishBuildStructureFront(
-          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'SKIRMISH_BUILD_STRUCTURE_FLANK':
-        return this.executeScriptSkirmishBuildStructureFlank(
-          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readSide(1, ['side', 'playerName', 'player', 'currentPlayerSide']),
-        );
-      case 'SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE':
-        return this.executeScriptSkirmishAttackNearestGroupWithValue(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['comparison']),
-          readInteger(2, ['value']),
-        );
-      case 'SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT':
-        return this.executeScriptSkirmishCommandButtonOnMostValuableObject(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readNumber(2, ['range']),
-          readBoolean(3, ['allTeamMembers', 'allMembers', 'all']),
-        );
-      case 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL':
-        return this.executeScriptSkirmishWaitForCommandButtonAvailability(
-          readString(1, ['teamName', 'team']),
-          readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          true,
-        );
-      case 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL':
-        return this.executeScriptSkirmishWaitForCommandButtonAvailability(
-          readString(1, ['teamName', 'team']),
-          readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          false,
-        );
-      case 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL':
-        return this.executeScriptTeamWaitForNotContained(
-          readString(0, ['teamName', 'team']),
-          true,
-        );
-      case 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL':
-        return this.executeScriptTeamWaitForNotContained(
-          readString(0, ['teamName', 'team']),
-          false,
-        );
-      case 'TEAM_SPIN_FOR_FRAMECOUNT':
-        return this.executeScriptTeamSpinForFramecount(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['frameCount', 'frames', 'waitFrames']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NAMED':
-        return this.executeScriptTeamAllUseCommandButtonOnNamed(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readEntityId(2, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT':
-        return this.executeScriptTeamAllUseCommandButtonOnNearestEnemyUnit(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_GARRISONED_BUILDING':
-        return this.executeScriptTeamAllUseCommandButtonOnNearestGarrisonedBuilding(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF':
-        return this.executeScriptTeamAllUseCommandButtonOnNearestKindOf(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readValue(2, ['kindOf', 'kindOfBit', 'kindOfType']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING':
-        return this.executeScriptTeamAllUseCommandButtonOnNearestEnemyBuilding(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS':
-        return this.executeScriptTeamAllUseCommandButtonOnNearestEnemyBuildingClass(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readValue(2, ['kindOf', 'kindOfBit', 'kindOfType']),
-        );
-      case 'TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE':
-        return this.executeScriptTeamAllUseCommandButtonOnNearestObjectType(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-          readString(2, ['templateName', 'objectType', 'object', 'thingTemplate']),
-        );
-      case 'TEAM_PARTIAL_USE_COMMANDBUTTON':
-        return this.executeScriptTeamPartialUseCommandButton(
-          readNumber(0, ['percentage', 'percent']),
-          readString(1, ['teamName', 'team']),
-          readString(2, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'TEAM_CAPTURE_NEAREST_UNOWNED_FACTION_UNIT':
-        return this.executeScriptTeamCaptureNearestUnownedFactionUnit(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS':
-        return this.executeScriptPlayerCreateTeamFromCapturedUnits(
-          readSide(0, ['side', 'playerName', 'player']),
-          readString(1, ['teamName', 'team']),
-        );
-      case 'ENABLE_SCRIPT':
-        return this.setScriptActive(readString(0, ['scriptName', 'script']), true);
-      case 'DISABLE_SCRIPT':
-        return this.setScriptActive(readString(0, ['scriptName', 'script']), false);
-      case 'CALL_SUBROUTINE':
-        return this.notifyScriptSubroutineCall(readString(0, ['scriptName', 'script']));
-      case 'SET_FLAG':
-        return this.setScriptFlag(
-          readString(0, ['flagName', 'flag']),
-          readBoolean(1, ['value', 'enabled']),
-        );
-      case 'SET_COUNTER':
-        return this.setScriptCounter(
-          readString(0, ['counterName', 'counter']),
-          readInteger(1, ['value']),
-        );
-      case 'TEAM_SET_STATE':
-        return this.setScriptTeamState(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['stateName', 'state']),
-        );
-      case 'INCREMENT_COUNTER':
-        return this.addScriptCounter(
-          readString(1, ['counterName', 'counter']),
-          readInteger(0, ['value']),
-        );
-      case 'DECREMENT_COUNTER':
-        return this.addScriptCounter(
-          readString(1, ['counterName', 'counter']),
-          -readInteger(0, ['value']),
-        );
-      case 'SET_TIMER':
-        return this.startScriptTimer(
-          readString(0, ['counterName', 'counter']),
-          readInteger(1, ['value', 'frames']),
-        );
-      case 'SET_RANDOM_TIMER': {
-        const minFrames = readInteger(1, ['value', 'minFrames']);
-        const maxFrames = readInteger(2, ['randomValue', 'maxFrames']);
-        return this.startScriptTimer(
-          readString(0, ['counterName', 'counter']),
-          this.resolveScriptRandomInt(minFrames, maxFrames),
-        );
-      }
-      case 'STOP_TIMER':
-        return this.pauseScriptTimer(readString(0, ['counterName', 'counter']));
-      case 'RESTART_TIMER':
-        return this.resumeScriptTimer(readString(0, ['counterName', 'counter']));
-      case 'SET_MILLISECOND_TIMER': {
-        const seconds = readNumber(1, ['value', 'seconds']);
-        return this.startScriptTimer(
-          readString(0, ['counterName', 'counter']),
-          this.secondsToScriptTimerFrames(seconds),
-        );
-      }
-      case 'SET_RANDOM_MSEC_TIMER': {
-        const minSeconds = readNumber(1, ['value', 'minSeconds']);
-        const maxSeconds = readNumber(2, ['randomValue', 'maxSeconds']);
-        const seconds = this.resolveScriptRandomReal(minSeconds, maxSeconds);
-        return this.startScriptTimer(
-          readString(0, ['counterName', 'counter']),
-          this.secondsToScriptTimerFrames(seconds),
-        );
-      }
-      case 'ADD_TO_MSEC_TIMER': {
-        const seconds = readNumber(0, ['value', 'seconds']);
-        return this.addScriptCounter(
-          readString(1, ['counterName', 'counter']),
-          this.secondsToScriptTimerFrames(seconds),
-        );
-      }
-      case 'SUB_FROM_MSEC_TIMER': {
-        const seconds = readNumber(0, ['value', 'seconds']);
-        return this.addScriptCounter(
-          readString(1, ['counterName', 'counter']),
-          this.secondsToScriptTimerFrames(-seconds),
-        );
-      }
-      case 'TEAM_TRANSFER_TO_PLAYER':
-        return this.transferScriptTeamToSide(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['side', 'playerName', 'player']),
-        );
-      case 'TEAM_SET_OVERRIDE_RELATION_TO_TEAM':
-        return this.setScriptTeamOverrideRelationToTeam(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
-          readRelationship(2, ['relationship', 'relation']),
-        );
-      case 'TEAM_REMOVE_OVERRIDE_RELATION_TO_TEAM':
-        return this.removeScriptTeamOverrideRelationToTeam(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
-        );
-      case 'TEAM_REMOVE_ALL_OVERRIDE_RELATIONS':
-        return this.removeScriptTeamAllOverrideRelations(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'TEAM_SET_OVERRIDE_RELATION_TO_PLAYER':
-        return this.setScriptTeamOverrideRelationToPlayer(
-          readString(0, ['teamName', 'team']),
-          readSide(1, ['otherPlayer', 'side', 'playerName', 'player']),
-          readRelationship(2, ['relationship', 'relation']),
-        );
-      case 'TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER':
-        return this.removeScriptTeamOverrideRelationToPlayer(
-          readString(0, ['teamName', 'team']),
-          readSide(1, ['otherPlayer', 'side', 'playerName', 'player']),
-        );
-      case 'PLAYER_SET_OVERRIDE_RELATION_TO_TEAM':
-        return this.setScriptPlayerOverrideRelationToTeam(
-          readSide(0, ['side', 'playerName', 'player']),
-          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
-          readRelationship(2, ['relationship', 'relation']),
-        );
-      case 'PLAYER_REMOVE_OVERRIDE_RELATION_TO_TEAM':
-        return this.removeScriptPlayerOverrideRelationToTeam(
-          readSide(0, ['side', 'playerName', 'player']),
-          readString(1, ['otherTeamName', 'otherTeam', 'targetTeam', 'target']),
-        );
-      case 'PLAYER_RELATES_PLAYER': {
-        const sourceSide = readSide(0, ['side', 'playerName', 'player', 'sourcePlayer']);
-        const targetSide = readSide(1, ['otherPlayer', 'targetPlayer', 'targetSide']);
-        const relationship = this.resolveScriptRelationshipInput(
-          readRelationship(2, ['relationship', 'relation']),
-        );
-        if (relationship === null) {
-          return false;
-        }
-        if (!this.normalizeSide(sourceSide) || !this.normalizeSide(targetSide)) {
-          return false;
-        }
-        this.setPlayerRelationship(sourceSide, targetSide, relationship);
-        return true;
-      }
-      case 'CAMERA_TETHER_NAMED':
-        return this.setScriptCameraTether(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['immediate', 'snap', 'snapToUnit']) !== 0,
-          readNumber(2, ['play', 'lockDistance', 'distance']),
-        );
-      case 'CAMERA_STOP_TETHER_NAMED':
-        this.clearScriptCameraTether();
-        return true;
-      case 'CAMERA_SET_DEFAULT':
-        return this.setScriptCameraDefaultView(
-          readNumber(0, ['pitch']),
-          readNumber(1, ['angle']),
-          readNumber(2, ['maxHeight', 'height']),
-        );
-      case 'CAMERA_LOOK_TOWARD_OBJECT':
-        return this.setScriptCameraLookTowardObject(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['holdSeconds', 'hold']),
-          readNumber(3, ['easeInSeconds', 'easeIn']),
-          readNumber(4, ['easeOutSeconds', 'easeOut']),
-        );
-      case 'NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH':
-        return this.executeScriptNamedFireWeaponFollowingWaypointPath(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['waypointPathName', 'waypointPathLabel', 'pathLabel', 'waypointPath']),
-        );
-      case 'UNIT_EXECUTE_SEQUENTIAL_SCRIPT':
-        return this.executeScriptUnitExecuteSequentialScript(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['scriptName', 'script']),
-          0,
-        );
-      case 'UNIT_EXECUTE_SEQUENTIAL_SCRIPT_LOOPING':
-        return this.executeScriptUnitExecuteSequentialScript(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['scriptName', 'script']),
-          readInteger(2, ['loopCount', 'timesToLoop', 'count']) - 1,
-        );
-      case 'UNIT_STOP_SEQUENTIAL_SCRIPT':
-        return this.executeScriptUnitStopSequentialScript(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-        );
-      case 'TEAM_EXECUTE_SEQUENTIAL_SCRIPT':
-        return this.executeScriptTeamExecuteSequentialScript(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['scriptName', 'script']),
-          0,
-        );
-      case 'TEAM_EXECUTE_SEQUENTIAL_SCRIPT_LOOPING':
-        return this.executeScriptTeamExecuteSequentialScript(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['scriptName', 'script']),
-          readInteger(2, ['loopCount', 'timesToLoop', 'count']) - 1,
-        );
-      case 'TEAM_STOP_SEQUENTIAL_SCRIPT':
-        return this.executeScriptTeamStopSequentialScript(readString(0, ['teamName', 'team']));
-      case 'UNIT_GUARD_FOR_FRAMECOUNT':
-        return this.executeScriptUnitGuardForFramecount(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['frameCount', 'frames', 'waitFrames']),
-        );
-      case 'UNIT_IDLE_FOR_FRAMECOUNT':
-        return this.executeScriptUnitIdleForFramecount(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['frameCount', 'frames', 'waitFrames']),
-        );
-      case 'TEAM_GUARD_FOR_FRAMECOUNT':
-        // Source parity: ScriptActions::doAction switch routes TEAM_GUARD_FOR_FRAMECOUNT
-        // to doTeamIdleForFramecount (legacy engine behavior).
-        return this.executeScriptTeamIdleForFramecount(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['frameCount', 'frames', 'waitFrames']),
-        );
-      case 'TEAM_IDLE_FOR_FRAMECOUNT':
-        return this.executeScriptTeamIdleForFramecount(
-          readString(0, ['teamName', 'team']),
-          readInteger(1, ['frameCount', 'frames', 'waitFrames']),
-        );
-      case 'WATER_CHANGE_HEIGHT':
-        return this.executeScriptWaterChangeHeight(
-          readString(0, ['triggerName', 'waterName', 'water']),
-          readNumber(1, ['newHeight', 'height', 'value']),
-        );
-      case 'WATER_CHANGE_HEIGHT_OVER_TIME':
-        return this.executeScriptWaterChangeHeightOverTime(
-          readString(0, ['triggerName', 'waterName', 'water']),
-          readNumber(1, ['newHeight', 'height', 'value']),
-          readNumber(2, ['seconds', 'time', 'duration']),
-          readNumber(3, ['damage', 'damagePerSecond', 'damageAmount']),
-        );
-      case 'MAP_SWITCH_BORDER':
-        return this.executeScriptMapSwitchBorder(
-          readInteger(0, ['border', 'boundary', 'borderIndex']),
-        );
-      case 'CAMERA_LOOK_TOWARD_WAYPOINT':
-        return this.setScriptCameraLookTowardWaypoint(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['seconds', 'durationSeconds', 'duration']),
-          readNumber(2, ['easeInSeconds', 'easeIn']),
-          readNumber(3, ['easeOutSeconds', 'easeOut']),
-          readBoolean(4, ['reverseRotation', 'reverse']),
-        );
-      case 'TEAM_GUARD_POSITION':
-        return this.executeScriptTeamGuardPosition(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'TEAM_GUARD_OBJECT':
-        return this.executeScriptTeamGuardObject(
-          readString(0, ['teamName', 'team']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'TEAM_GUARD_AREA':
-        return this.executeScriptTeamGuardArea(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['triggerName', 'trigger', 'areaName', 'area']),
-        );
-      case 'NAMED_FACE_NAMED':
-        return this.executeScriptNamedFaceNamed(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'NAMED_FACE_WAYPOINT':
-        return this.executeScriptNamedFaceWaypoint(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'TEAM_FACE_NAMED':
-        return this.executeScriptTeamFaceNamed(
-          readString(0, ['teamName', 'team']),
-          readEntityId(1, ['targetEntityId', 'entityId', 'targetObjectId', 'unitId', 'named']),
-        );
-      case 'TEAM_FACE_WAYPOINT':
-        return this.executeScriptTeamFaceWaypoint(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['waypointName', 'waypoint']),
-        );
-      case 'OBJECT_FORCE_SELECT':
-        return this.executeScriptObjectForceSelect(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['templateName', 'objectType', 'unitType']),
-          readBoolean(2, ['centerInView', 'center']),
-          readString(3, ['audioName', 'audio', 'sound']),
-        );
-      case 'UNIT_DESTROY_ALL_CONTAINED':
-        return this.executeScriptUnitDestroyAllContained(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-        );
-      case 'NAMED_SET_EVAC_LEFT_OR_RIGHT':
-        return this.executeScriptNamedSetEvacLeftOrRight(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['leftOrRight', 'evacDisposition', 'value']),
-        );
-      case 'NAMED_SET_HELD':
-        return this.executeScriptNamedSetHeld(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readBoolean(1, ['held', 'value', 'enabled']),
-        );
-      case 'SET_CAVE_INDEX':
-        return this.executeScriptSetCaveIndex(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readInteger(1, ['caveIndex', 'index', 'value']),
-        );
-      case 'NAMED_SET_TOPPLE_DIRECTION': {
-        const direction = this.coerceScriptConditionCoord3(
-          readValue(1, ['direction', 'dir', 'toppleDirection']),
-        );
-        return this.setScriptNamedToppleDirection(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          direction?.x ?? 0,
-          direction?.y ?? 0,
-        );
-      }
-      case 'UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE':
-        return this.executeScriptMoveUnitTowardsNearestObjectType(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['objectType', 'templateName', 'type']),
-          readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
-        );
-      case 'TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE':
-        return this.executeScriptMoveTeamTowardsNearestObjectType(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['objectType', 'templateName', 'type']),
-          readString(2, ['triggerName', 'trigger', 'areaName', 'area']),
-        );
-      case 'MAP_REVEAL_AT_WAYPOINT':
-        return this.executeScriptRevealMapAtWaypoint(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['radius', 'radiusToReveal']),
-          readString(2, ['side', 'playerName', 'player']),
-        );
-      case 'MAP_SHROUD_AT_WAYPOINT':
-        return this.executeScriptShroudMapAtWaypoint(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['radius', 'radiusToShroud']),
-          readString(2, ['side', 'playerName', 'player']),
-        );
-      case 'MAP_REVEAL_ALL':
-        return this.executeScriptRevealMapEntire(
-          readString(0, ['side', 'playerName', 'player']),
-        );
-      case 'MAP_REVEAL_ALL_PERM':
-        return this.executeScriptRevealMapEntirePermanently(
-          true,
-          readString(0, ['side', 'playerName', 'player']),
-        );
-      case 'MAP_REVEAL_ALL_UNDO_PERM':
-        return this.executeScriptRevealMapEntirePermanently(
-          false,
-          readString(0, ['side', 'playerName', 'player']),
-        );
-      case 'MAP_SHROUD_ALL':
-        return this.executeScriptShroudMapEntire(
-          readString(0, ['side', 'playerName', 'player']),
-        );
-      case 'MAP_REVEAL_PERMANENTLY_AT_WAYPOINT':
-        return this.executeScriptRevealMapAtWaypointPermanently(
-          readString(0, ['waypointName', 'waypoint']),
-          readNumber(1, ['radius', 'radiusToReveal']),
-          readSide(2, ['side', 'playerName', 'player']),
-          readString(3, ['lookName', 'mapLookName', 'namedReveal']),
-        );
-      case 'MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT':
-        return this.executeScriptUndoRevealMapAtWaypointPermanently(
-          readString(0, ['lookName', 'mapLookName', 'namedReveal']),
-        );
-      case 'NAMED_SET_STEALTH_ENABLED':
-        return this.executeScriptNamedSetStealthEnabled(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readBoolean(1, ['enabled', 'stealthEnabled', 'value']),
-        );
-      case 'TEAM_SET_STEALTH_ENABLED':
-        return this.executeScriptTeamSetStealthEnabled(
-          readString(0, ['teamName', 'team']),
-          readBoolean(1, ['enabled', 'stealthEnabled', 'value']),
-        );
-      case 'NAMED_SET_UNMANNED_STATUS':
-        return this.executeScriptNamedSetUnmannedStatus(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-        );
-      case 'TEAM_SET_UNMANNED_STATUS':
-        return this.executeScriptTeamSetUnmannedStatus(
-          readString(0, ['teamName', 'team']),
-        );
-      case 'NAMED_SET_BOOBYTRAPPED':
-        return this.executeScriptNamedSetBoobytrapped(
-          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readEntityId(1, ['entityId', 'unitId', 'named']),
-        );
-      case 'TEAM_SET_BOOBYTRAPPED':
-        return this.executeScriptTeamSetBoobytrapped(
-          readString(0, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readString(1, ['teamName', 'team']),
-        );
-      case 'EVA_SET_ENABLED_DISABLED':
-        this.setScriptEvaEnabled(readBoolean(0, ['enabled', 'evaEnabled', 'value']));
-        return true;
-      case 'OPTIONS_SET_OCCLUSION_MODE':
-        this.setScriptOcclusionModeEnabled(readBoolean(0, ['enabled', 'occlusionEnabled', 'value']));
-        return true;
-      case 'OPTIONS_SET_DRAWICON_UI_MODE':
-        this.setScriptDrawIconUIEnabled(readBoolean(0, ['enabled', 'drawIconUIEnabled', 'value']));
-        return true;
-      case 'OPTIONS_SET_PARTICLE_CAP_MODE':
-        this.setScriptDynamicLodEnabled(readBoolean(0, ['enabled', 'particleCapEnabled', 'value']));
-        return true;
-      case 'PLAYER_AFFECT_RECEIVING_EXPERIENCE':
-        return this.setSideSkillPointsModifier(
-          readSide(0, ['side', 'playerName', 'player']),
-          readNumber(1, ['modifier', 'experienceModifier', 'value']),
-        );
-      case 'PLAYER_SELECT_SKILLSET':
-        return this.setSideScriptSkillset(
-          readSide(0, ['side', 'playerName', 'player']),
-          readInteger(1, ['skillset', 'value']),
-        );
-      case 'SCRIPTING_OVERRIDE_HULK_LIFETIME':
-        return this.setScriptHulkLifetimeOverrideSeconds(
-          readNumber(0, ['seconds', 'lifetimeSeconds', 'value']),
-        );
-      case 'COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE':
-        return this.executeScriptCommandBarRemoveButtonObjectType(
-          readString(0, ['buttonName', 'commandButton', 'button']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-        );
-      case 'COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT':
-        return this.executeScriptCommandBarAddButtonObjectTypeSlot(
-          readString(0, ['buttonName', 'commandButton', 'button']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          readInteger(2, ['slotNum', 'slot', 'value']),
-        );
-      case 'UNIT_AFFECT_OBJECT_PANEL_FLAGS':
-        return this.executeScriptAffectObjectPanelFlagsUnit(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['flagName', 'flag']),
-          readBoolean(2, ['enabled', 'value']),
-        );
-      case 'TEAM_AFFECT_OBJECT_PANEL_FLAGS':
-        return this.executeScriptAffectObjectPanelFlagsTeam(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['flagName', 'flag']),
-          readBoolean(2, ['enabled', 'value']),
-        );
-      case 'NAMED_SET_REPULSOR':
-        return this.executeScriptNamedSetRepulsor(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readBoolean(1, ['repulsor', 'value', 'enabled']),
-        );
-      case 'TEAM_SET_REPULSOR':
-        return this.executeScriptTeamSetRepulsor(
-          readString(0, ['teamName', 'team']),
-          readBoolean(1, ['repulsor', 'value', 'enabled']),
-        );
-      case 'TEAM_WANDER_IN_PLACE':
-        return this.executeScriptTeamWanderInPlace(readString(0, ['teamName', 'team']));
-      case 'TEAM_INCREASE_PRIORITY':
-        return this.executeScriptTeamIncreasePriority(readString(0, ['teamName', 'team']));
-      case 'TEAM_DECREASE_PRIORITY':
-        return this.executeScriptTeamDecreasePriority(readString(0, ['teamName', 'team']));
-      case 'NAMED_STOP':
-        return this.executeScriptNamedStop(readEntityId(0, ['entityId', 'unitId', 'named']));
-      case 'TEAM_STOP':
-        return this.executeScriptTeamStop(readString(0, ['teamName', 'team']));
-      case 'TEAM_STOP_AND_DISBAND':
-        return this.executeScriptTeamStopAndDisband(readString(0, ['teamName', 'team']));
-      case 'RECRUIT_TEAM':
-        return this.executeScriptRecruitTeam(
-          readString(0, ['teamName', 'team']),
-          readNumber(1, ['recruitRadius', 'radius']),
-        );
-      case 'PLAYER_SET_MONEY': {
-        const sideInput = readString(0, ['side', 'playerName', 'player']);
-        if (!this.setScriptCreditsForPlayerInput(sideInput, readInteger(1, ['value', 'amount', 'money']))) {
-          return false;
-        }
-        return true;
-      }
-      case 'PLAYER_GIVE_MONEY': {
-        const sideInput = readString(0, ['side', 'playerName', 'player']);
-        if (this.addScriptCreditsForPlayerInput(sideInput, readInteger(1, ['value', 'amount', 'money'])) === null) {
-          return false;
-        }
-        return true;
-      }
-      case 'PLAYER_ADD_SKILLPOINTS': {
-        const side = readSide(0, ['side', 'playerName', 'player']);
-        if (!this.normalizeSide(side)) {
-          return false;
-        }
-        this.addPlayerSkillPoints(side, readInteger(1, ['value', 'amount', 'skillPoints']));
-        return true;
-      }
-      case 'PLAYER_ADD_RANKLEVEL': {
-        const side = readSide(0, ['side', 'playerName', 'player']);
-        const normalizedSide = this.normalizeSide(side);
-        if (!normalizedSide) {
-          return false;
-        }
-        const rankState = this.getSideRankStateMap(normalizedSide);
-        this.setSideRankLevelByNormalizedSide(
-          normalizedSide,
-          rankState.rankLevel + readInteger(1, ['value', 'amount', 'rankLevels']),
-        );
-        return true;
-      }
-      case 'PLAYER_SET_RANKLEVEL': {
-        const side = readSide(0, ['side', 'playerName', 'player']);
-        if (!this.normalizeSide(side)) {
-          return false;
-        }
-        this.setSideRankLevel(side, readInteger(1, ['value', 'rankLevel']));
-        return true;
-      }
-      case 'PLAYER_SET_RANKLEVELLIMIT':
-        this.rankLevelLimit = Math.max(
-          1,
-          Math.min(RANK_TABLE.length, readInteger(0, ['value', 'rankLevelLimit'])),
-        );
-        return true;
-      case 'PLAYER_GRANT_SCIENCE':
-        return this.grantScriptScienceForPlayerInput(
-          readString(0, ['side', 'playerName', 'player']),
-          readString(1, ['scienceName', 'science']),
-        );
-      case 'PLAYER_PURCHASE_SCIENCE': {
-        return this.purchaseScriptScienceForPlayerInput(
-          readString(0, ['side', 'playerName', 'player']),
-          readString(1, ['scienceName', 'science']),
-        );
-      }
-      case 'TEAM_HUNT_WITH_COMMAND_BUTTON':
-        return this.executeScriptTeamHuntWithCommandButton(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['abilityName', 'ability', 'commandButtonName', 'commandButton']),
-        );
-      case 'TEAM_SET_EMOTICON':
-        return this.executeScriptTeamSetEmoticon(
-          readString(0, ['teamName', 'team']),
-          readString(1, ['emoticonName', 'emoticon']),
-          readNumber(2, ['durationSeconds', 'seconds', 'duration', 'timeInSeconds']),
-        );
-      case 'NAMED_SET_EMOTICON':
-        return this.executeScriptNamedSetEmoticon(
-          readEntityId(0, ['entityId', 'unitId', 'named']),
-          readString(1, ['emoticonName', 'emoticon']),
-          readNumber(2, ['durationSeconds', 'seconds', 'duration', 'timeInSeconds']),
-        );
-      case 'OBJECTLIST_ADDOBJECTTYPE':
-        return this.executeScriptObjectTypeListMaintenance(
-          readString(0, ['listName', 'objectList', 'objectListName']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          true,
-        );
-      case 'OBJECTLIST_REMOVEOBJECTTYPE':
-        return this.executeScriptObjectTypeListMaintenance(
-          readString(0, ['listName', 'objectList', 'objectListName']),
-          readString(1, ['templateName', 'objectType', 'object', 'thingTemplate']),
-          false,
-        );
-      case 'PLAYER_SCIENCE_AVAILABILITY':
-        return this.setSideScienceAvailability(
-          readSide(0, ['side', 'playerName', 'player']),
-          readString(1, ['scienceName', 'science']),
-          readString(2, ['availability', 'scienceAvailability', 'value']),
-        );
-      default:
-        return false;
-    }
-  }
-
-  /**
    * Source parity: ScriptConditions::evaluateCondition dispatcher.
    * Accepts either positional parameter arrays (`params` / `parameters`) or named parameter objects.
    */
+  // ---- Script action facades (delegate to script-actions.ts) ----
+
+  private readScriptDictString(...args: any[]) { return (readScriptDictStringImpl as any)(this, ...args); }
+  private readScriptDictNumber(...args: any[]) { return (readScriptDictNumberImpl as any)(this, ...args); }
+  private readScriptDictBoolean(...args: any[]) { return (readScriptDictBooleanImpl as any)(this, ...args); }
+  private resolveScriptTeamTemplateUnitEntries(...args: any[]) { return (resolveScriptTeamTemplateUnitEntriesImpl as any)(this, ...args); }
+  private resolveScriptSideFromPlayerFaction(...args: any[]) { return (resolveScriptSideFromPlayerFactionImpl as any)(this, ...args); }
+  private resolveScriptAiBuildListEntries(...args: any[]) { return (resolveScriptAiBuildListEntriesImpl as any)(this, ...args); }
+  private normalizeScriptKindOfToken(...args: any[]) { return (normalizeScriptKindOfTokenImpl as any)(this, ...args); }
+  private resolveScriptKindOfBitFromName(...args: any[]) { return (resolveScriptKindOfBitFromNameImpl as any)(this, ...args); }
+  private clearScriptUIInteractions(...args: any[]) { return (clearScriptUIInteractionsImpl as any)(this, ...args); }
+  private getScriptCreditsForPlayerInput(...args: any[]) { return (getScriptCreditsForPlayerInputImpl as any)(this, ...args); }
+  private countScriptPlayersForSide(...args: any[]) { return (countScriptPlayersForSideImpl as any)(this, ...args); }
+  private executeScriptDebugMessage(...args: any[]) { return (executeScriptDebugMessageImpl as any)(this, ...args); }
+  private normalizeScriptAudioEventName(...args: any[]) { return (normalizeScriptAudioEventNameImpl as any)(this, ...args); }
+  private pruneExpiredScriptRadarEvents(...args: any[]) { return (pruneExpiredScriptRadarEventsImpl as any)(this, ...args); }
+  executeScriptAction(action: unknown): boolean { return executeScriptActionImpl(this, action); }
+  private resolveScriptTeamSidesForRelationship(...args: any[]) { return (resolveScriptTeamSidesForRelationshipImpl as any)(this, ...args); }
+  private resolveScriptCommandButtonOptionMask(...args: any[]) { return (resolveScriptCommandButtonOptionMaskImpl as any)(this, ...args); }
+  private resolveScriptWeaponSlotFromCommandButton(...args: any[]) { return (resolveScriptWeaponSlotFromCommandButtonImpl as any)(this, ...args); }
+  private resolveScriptCommandButtonSpecialPowerName(...args: any[]) { return (resolveScriptCommandButtonSpecialPowerNameImpl as any)(this, ...args); }
+  private resolveScriptSpecialPowerCommandButtonExecution(...args: any[]) { return (resolveScriptSpecialPowerCommandButtonExecutionImpl as any)(this, ...args); }
+  private resolveScriptCommandButtonHuntMode(...args: any[]) { return (resolveScriptCommandButtonHuntModeImpl as any)(this, ...args); }
+  private findScriptEntityCommandButtonsByName(...args: any[]) { return (findScriptEntityCommandButtonsByNameImpl as any)(this, ...args); }
+  private executeScriptCommandButtonForEntity(...args: any[]) { return (executeScriptCommandButtonForEntityImpl as any)(this, ...args); }
+  private appendScriptSequentialScript(...args: any[]) { return (appendScriptSequentialScriptImpl as any)(this, ...args); }
+  private executeScriptSkirmishWaitForCommandButtonAvailability(...args: any[]) { return (executeScriptSkirmishWaitForCommandButtonAvailabilityImpl as any)(this, ...args); }
+  private executeScriptTeamWaitForNotContained(...args: any[]) { return (executeScriptTeamWaitForNotContainedImpl as any)(this, ...args); }
+  private buildScriptProjectileWaypointPath(...args: any[]) { return (buildScriptProjectileWaypointPathImpl as any)(this, ...args); }
+  private findScriptBuildDozerForTemplate(...args: any[]) { return (findScriptBuildDozerForTemplateImpl as any)(this, ...args); }
+  private findScriptBrokenBridgeRepairTarget(...args: any[]) { return (findScriptBrokenBridgeRepairTargetImpl as any)(this, ...args); }
+  private resolveScriptContainerCapacity(...args: any[]) { return (resolveScriptContainerCapacityImpl as any)(this, ...args); }
+  private resolveScriptContainedControllingPlayerToken(...args: any[]) { return (resolveScriptContainedControllingPlayerTokenImpl as any)(this, ...args); }
+  private applyScriptObjectPanelFlag(...args: any[]) { return (applyScriptObjectPanelFlagImpl as any)(this, ...args); }
+  private setScriptWanderInPlaceGoal(...args: any[]) { return (setScriptWanderInPlaceGoalImpl as any)(this, ...args); }
+  private setScriptWanderAwayFromRepulsorGoal(...args: any[]) { return (setScriptWanderAwayFromRepulsorGoalImpl as any)(this, ...args); }
+  private clearScriptWanderInPlace(...args: any[]) { return (clearScriptWanderInPlaceImpl as any)(this, ...args); }
+  private findScriptClosestEnemyInTriggerArea(...args: any[]) { return (findScriptClosestEnemyInTriggerAreaImpl as any)(this, ...args); }
+  private resolveScriptEntityTransportSlotCount(...args: any[]) { return (resolveScriptEntityTransportSlotCountImpl as any)(this, ...args); }
+  private resolveScriptTransportValidationEntity(...args: any[]) { return (resolveScriptTransportValidationEntityImpl as any)(this, ...args); }
+  private isScriptContainKindAllowed(...args: any[]) { return (isScriptContainKindAllowedImpl as any)(this, ...args); }
+  private isScriptContainRelationshipAllowed(...args: any[]) { return (isScriptContainRelationshipAllowedImpl as any)(this, ...args); }
+  private resolveScriptContainerUsedTransportSlots(...args: any[]) { return (resolveScriptContainerUsedTransportSlotsImpl as any)(this, ...args); }
+  private findScriptHuntTarget(...args: any[]) { return (findScriptHuntTargetImpl as any)(this, ...args); }
+  private normalizeScriptAttackPrioritySetName(...args: any[]) { return (normalizeScriptAttackPrioritySetNameImpl as any)(this, ...args); }
+  private isScriptReinforcementTransportValidForUnit(...args: any[]) { return (isScriptReinforcementTransportValidForUnitImpl as any)(this, ...args); }
+  private resolveScriptReinforcementDeliverPayloadProfile(...args: any[]) { return (resolveScriptReinforcementDeliverPayloadProfileImpl as any)(this, ...args); }
+  private clearScriptTeamByNameUpper(...args: any[]) { return (clearScriptTeamByNameUpperImpl as any)(this, ...args); }
+  private resolveScriptTeamTriggerIndex(...args: any[]) { return (resolveScriptTeamTriggerIndexImpl as any)(this, ...args); }
+  private getScriptPlayerPowerState(...args: any[]) { return (getScriptPlayerPowerStateImpl as any)(this, ...args); }
+  private getScriptScienceSetForPlayerToken(...args: any[]) { return (getScriptScienceSetForPlayerTokenImpl as any)(this, ...args); }
+  private getScriptSciencePurchasePointsForPlayerInput(...args: any[]) { return (getScriptSciencePurchasePointsForPlayerInputImpl as any)(this, ...args); }
+  private recordScriptTriggeredSpecialPowerEvent(...args: any[]) { return (recordScriptTriggeredSpecialPowerEventImpl as any)(this, ...args); }
+  private recordScriptCompletedSpecialPowerEvent(...args: any[]) { return (recordScriptCompletedSpecialPowerEventImpl as any)(this, ...args); }
+  private recordScriptCompletedUpgradeEvent(...args: any[]) { return (recordScriptCompletedUpgradeEventImpl as any)(this, ...args); }
+  private getScriptScienceAcquiredSet(...args: any[]) { return (getScriptScienceAcquiredSetImpl as any)(this, ...args); }
+  private resolveScriptObjectStatusMaskFromInput(...args: any[]) { return (resolveScriptObjectStatusMaskFromInputImpl as any)(this, ...args); }
+  private resolveScriptObjectStatusTokens(...args: any[]) { return (resolveScriptObjectStatusTokensImpl as any)(this, ...args); }
+  private normalizeScriptVariableName(...args: any[]) { return (normalizeScriptVariableNameImpl as any)(this, ...args); }
+  private normalizeScriptObjectName(...args: any[]) { return (normalizeScriptObjectNameImpl as any)(this, ...args); }
+  private normalizeScriptObjectTypeName(...args: any[]) { return (normalizeScriptObjectTypeNameImpl as any)(this, ...args); }
+  private resolveScriptObjectTypeEntriesForCondition(...args: any[]) { return (resolveScriptObjectTypeEntriesForConditionImpl as any)(this, ...args); }
+  private resolveScriptObjectTypeCandidatesForAction(...args: any[]) { return (resolveScriptObjectTypeCandidatesForActionImpl as any)(this, ...args); }
+  private resolveScriptEntityIdForCondition(...args: any[]) { return (resolveScriptEntityIdForConditionImpl as any)(this, ...args); }
+  private resolveScriptEntityConditionRef(...args: any[]) { return (resolveScriptEntityConditionRefImpl as any)(this, ...args); }
+  private registerScriptNamedEntity(...args: any[]) { return (registerScriptNamedEntityImpl as any)(this, ...args); }
+  private resolveScriptActionTypeName(...args: any[]) { return (resolveScriptActionTypeNameImpl as any)(this, ...args); }
+  private resolveScriptConditionTypeName(...args: any[]) { return (resolveScriptConditionTypeNameImpl as any)(this, ...args); }
+  private resolveScriptConditionParams(...args: any[]) { return (resolveScriptConditionParamsImpl as any)(this, ...args); }
+  private resolveScriptConditionParamValue(...args: any[]) { return (resolveScriptConditionParamValueImpl as any)(this, ...args); }
+  private coerceScriptConditionString(...args: any[]) { return (coerceScriptConditionStringImpl as any)(this, ...args); }
+  private coerceScriptConditionNumber(...args: any[]) { return (coerceScriptConditionNumberImpl as any)(this, ...args); }
+  private coerceScriptConditionBoolean(...args: any[]) { return (coerceScriptConditionBooleanImpl as any)(this, ...args); }
+  private resolveScriptConditionCacheId(...args: any[]) { return (resolveScriptConditionCacheIdImpl as any)(this, ...args); }
+  private countScriptObjectsByTemplateForSide(...args: any[]) { return (countScriptObjectsByTemplateForSideImpl as any)(this, ...args); }
+  private countScriptObjectsByTemplateListForSide(...args: any[]) { return (countScriptObjectsByTemplateListForSideImpl as any)(this, ...args); }
+  private countScriptStructuresForSide(...args: any[]) { return (countScriptStructuresForSideImpl as any)(this, ...args); }
+  private resolveScriptComparisonCode(...args: any[]) { return (resolveScriptComparisonCodeImpl as any)(this, ...args); }
+  private normalizeScriptCompletionName(...args: any[]) { return (normalizeScriptCompletionNameImpl as any)(this, ...args); }
+  private clearScriptCompletedName(...args: any[]) { return (clearScriptCompletedNameImpl as any)(this, ...args); }
+  private clearScriptAudioCompletionState(...args: any[]) { return (clearScriptAudioCompletionStateImpl as any)(this, ...args); }
+  private normalizeScriptTeamContextName(...args: any[]) { return (normalizeScriptTeamContextNameImpl as any)(this, ...args); }
+  private resolveScriptContextTeamName(...args: any[]) { return (resolveScriptContextTeamNameImpl as any)(this, ...args); }
+  private resolveScriptTeamName(...args: any[]) { return (resolveScriptTeamNameImpl as any)(this, ...args); }
+  private resolveScriptConditionTeams(...args: any[]) { return (resolveScriptConditionTeamsImpl as any)(this, ...args); }
+  private registerScriptTeamPrototypeInstance(...args: any[]) { return (registerScriptTeamPrototypeInstanceImpl as any)(this, ...args); }
+  private unregisterScriptTeamPrototypeInstance(...args: any[]) { return (unregisterScriptTeamPrototypeInstanceImpl as any)(this, ...args); }
+  private getScriptTeamInstancesByPrototypeName(...args: any[]) { return (getScriptTeamInstancesByPrototypeNameImpl as any)(this, ...args); }
+  private resolveScriptContextEntityId(...args: any[]) { return (resolveScriptContextEntityIdImpl as any)(this, ...args); }
+  private resolveScriptPlayerSideFromInput(...args: any[]) { return (resolveScriptPlayerSideFromInputImpl as any)(this, ...args); }
+  private resolveScriptControllingPlayerTokenFromInput(...args: any[]) { return (resolveScriptControllingPlayerTokenFromInputImpl as any)(this, ...args); }
+  private resolveScriptPlayerConditionSelector(...args: any[]) { return (resolveScriptPlayerConditionSelectorImpl as any)(this, ...args); }
+  private resolveScriptWaypointPosition(...args: any[]) { return (resolveScriptWaypointPositionImpl as any)(this, ...args); }
+  private getScriptTeamRecord(...args: any[]) { return (getScriptTeamRecordImpl as any)(this, ...args); }
+  private getScriptTeamMemberEntities(...args: any[]) { return (getScriptTeamMemberEntitiesImpl as any)(this, ...args); }
+  private isScriptTeamMemberAliveForObjects(...args: any[]) { return (isScriptTeamMemberAliveForObjectsImpl as any)(this, ...args); }
+  private isScriptTeamMemberAliveForUnits(...args: any[]) { return (isScriptTeamMemberAliveForUnitsImpl as any)(this, ...args); }
+  private resolveScriptTeamControllingSide(...args: any[]) { return (resolveScriptTeamControllingSideImpl as any)(this, ...args); }
+  private isScriptTeamMemberInsideTrigger(...args: any[]) { return (isScriptTeamMemberInsideTriggerImpl as any)(this, ...args); }
+  private resolveScriptRelationshipInput(...args: any[]) { return (resolveScriptRelationshipInputImpl as any)(this, ...args); }
+  private isScriptEntityEffectivelyDead(...args: any[]) { return (isScriptEntityEffectivelyDeadImpl as any)(this, ...args); }
+  private findScriptRepairDozerForBuilding(...args: any[]) { return (findScriptRepairDozerForBuildingImpl as any)(this, ...args); }
+  private notifyScriptObjectCreationOrDestruction(...args: any[]) { return (notifyScriptObjectCreationOrDestructionImpl as any)(this, ...args); }
+  private clearScriptTriggerTrackingForEntity(...args: any[]) { return (clearScriptTriggerTrackingForEntityImpl as any)(this, ...args); }
+  private isScriptSequentialEntityIdle(...args: any[]) { return (isScriptSequentialEntityIdleImpl as any)(this, ...args); }
+  private isScriptSequentialTeamIdle(...args: any[]) { return (isScriptSequentialTeamIdleImpl as any)(this, ...args); }
+  private isScriptSequentialTeamDead(...args: any[]) { return (isScriptSequentialTeamDeadImpl as any)(this, ...args); }
+  private clearScriptNamedMapReveals(...args: any[]) { return (clearScriptNamedMapRevealsImpl as any)(this, ...args); }
+  private notifyScriptCompletedSpecialPowerOnProjectileFired(...args: any[]) { return (notifyScriptCompletedSpecialPowerOnProjectileFiredImpl as any)(this, ...args); }
+  private recordScriptLastDamageInfo(...args: any[]) { return (recordScriptLastDamageInfoImpl as any)(this, ...args); }
+  private isScriptSupplySourceSafe(...args: any[]) { return (isScriptSupplySourceSafeImpl as any)(this, ...args); }
+
   evaluateScriptCondition(condition: unknown): boolean {
     if (!condition || typeof condition !== 'object') {
       return false;
@@ -14181,7 +11861,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptActions::doTransferTeamToPlayer uses getTeamNamed.
    * Applies to one resolved team and does not implicitly create teams.
    */
-  private transferScriptTeamToSide(teamName: string, side: string): boolean {
+  /* @internal */ transferScriptTeamToSide(teamName: string, side: string): boolean {
     const team = this.getScriptTeamRecord(teamName);
     if (!team) {
       return false;
@@ -14231,44 +11911,7 @@ export class GameLogicSubsystem implements Subsystem {
     };
   }
 
-  private resolveScriptTeamSidesForRelationship(teamName: string): string[] {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return [];
-    }
-
-    const side = this.resolveScriptTeamControllingSide(team);
-    if (!side) {
-      return [];
-    }
-    return [side];
-  }
-
-  private setScriptTeamOverrideRelationToTeam(
-    teamName: string,
-    otherTeamName: string,
-    relationshipInput: ScriptRelationshipInput,
-  ): boolean {
-    const relationship = this.resolveScriptRelationshipInput(relationshipInput);
-    if (relationship === null) {
-      return false;
-    }
-
-    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
-    const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
-    if (sourceSides.length === 0 || targetSides.length === 0) {
-      return false;
-    }
-
-    for (const sourceSide of sourceSides) {
-      for (const targetSide of targetSides) {
-        this.setTeamRelationship(sourceSide, targetSide, relationship);
-      }
-    }
-    return true;
-  }
-
-  private removeScriptTeamOverrideRelationToTeam(teamName: string, otherTeamName: string): boolean {
+  /* @internal */ removeScriptTeamOverrideRelationToTeam(teamName: string, otherTeamName: string): boolean {
     const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
     const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
     if (sourceSides.length === 0 || targetSides.length === 0) {
@@ -14283,7 +11926,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private removeScriptTeamAllOverrideRelations(teamName: string): boolean {
+  /* @internal */ removeScriptTeamAllOverrideRelations(teamName: string): boolean {
     const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
     if (sourceSides.length === 0) {
       return false;
@@ -14295,28 +11938,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private setScriptTeamOverrideRelationToPlayer(
-    teamName: string,
-    playerSide: string,
-    relationshipInput: ScriptRelationshipInput,
-  ): boolean {
-    const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
-    const targetSide = this.normalizeSide(playerSide);
-    if (sourceSides.length === 0 || !targetSide) {
-      return false;
-    }
-    const relationship = this.resolveScriptRelationshipInput(relationshipInput);
-    if (relationship === null) {
-      return false;
-    }
-
-    for (const sourceSide of sourceSides) {
-      this.setTeamRelationship(sourceSide, targetSide, relationship);
-    }
-    return true;
-  }
-
-  private removeScriptTeamOverrideRelationToPlayer(teamName: string, playerSide: string): boolean {
+  /* @internal */ removeScriptTeamOverrideRelationToPlayer(teamName: string, playerSide: string): boolean {
     const sourceSides = this.resolveScriptTeamSidesForRelationship(teamName);
     const targetSide = this.normalizeSide(playerSide);
     if (sourceSides.length === 0 || !targetSide) {
@@ -14329,28 +11951,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private setScriptPlayerOverrideRelationToTeam(
-    playerSide: string,
-    otherTeamName: string,
-    relationshipInput: ScriptRelationshipInput,
-  ): boolean {
-    const sourceSide = this.normalizeSide(playerSide);
-    const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
-    if (!sourceSide || targetSides.length === 0) {
-      return false;
-    }
-    const relationship = this.resolveScriptRelationshipInput(relationshipInput);
-    if (relationship === null) {
-      return false;
-    }
-
-    for (const targetSide of targetSides) {
-      this.setPlayerRelationship(sourceSide, targetSide, relationship);
-    }
-    return true;
-  }
-
-  private removeScriptPlayerOverrideRelationToTeam(playerSide: string, otherTeamName: string): boolean {
+  /* @internal */ removeScriptPlayerOverrideRelationToTeam(playerSide: string, otherTeamName: string): boolean {
     const sourceSide = this.normalizeSide(playerSide);
     const targetSides = this.resolveScriptTeamSidesForRelationship(otherTeamName);
     if (!sourceSide || targetSides.length === 0) {
@@ -14363,176 +11964,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private normalizeScriptCommandTypeName(commandTypeName: string): string {
-    const normalized = this.normalizeCommandTypeNameForBuildCheck(commandTypeName);
-    if (normalized.startsWith('GUICOMMANDMODE_')) {
-      return normalized.slice('GUICOMMANDMODE_'.length);
-    }
-    return normalized;
-  }
-
-  private resolveScriptCommandButtonOptionMask(commandButtonDef: CommandButtonDef): number {
-    let optionMask = 0;
-
-    const optionNames = commandButtonDef.options.length > 0
-      ? commandButtonDef.options
-      : this.extractIniValueTokens(commandButtonDef.fields['Options']).flatMap((entry) => entry);
-
-    for (const optionName of optionNames) {
-      const normalizedOptionName = optionName.trim().toUpperCase();
-      if (!normalizedOptionName) {
-        continue;
-      }
-      const mask = SCRIPT_COMMAND_OPTION_NAME_TO_MASK.get(normalizedOptionName);
-      if (mask !== undefined) {
-        optionMask |= mask;
-      }
-    }
-
-    return optionMask;
-  }
-
-  private resolveScriptWeaponSlotFromCommandButton(commandButtonDef: CommandButtonDef): number | null {
-    const weaponSlotToken = readStringField(commandButtonDef.fields, ['WeaponSlot'])?.trim().toUpperCase() ?? '';
-    switch (weaponSlotToken) {
-      case 'PRIMARY':
-      case 'PRIMARY_WEAPON':
-        return 0;
-      case 'SECONDARY':
-      case 'SECONDARY_WEAPON':
-        return 1;
-      case 'TERTIARY':
-      case 'TERTIARY_WEAPON':
-        return 2;
-      default:
-        break;
-    }
-
-    const numericSlot = readNumericField(commandButtonDef.fields, ['WeaponSlot']);
-    if (numericSlot === null || !Number.isFinite(numericSlot)) {
-      return null;
-    }
-
-    const slot = Math.trunc(numericSlot);
-    if (slot < 0 || slot > 2) {
-      return null;
-    }
-    return slot;
-  }
-
-  private resolveScriptMaxShotsToFireFromCommandButton(commandButtonDef: CommandButtonDef): number {
-    const maxShots = readNumericField(commandButtonDef.fields, ['MaxShotsToFire']);
-    if (maxShots === null || !Number.isFinite(maxShots)) {
-      return SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE;
-    }
-    return Math.trunc(maxShots);
-  }
-
-  private resolveScriptCommandButtonTemplateName(commandButtonDef: CommandButtonDef): string | null {
-    const templateName = readStringField(commandButtonDef.fields, ['Object'])
-      ?? readStringField(commandButtonDef.fields, ['ThingTemplate']);
-    if (!templateName) {
-      return null;
-    }
-    return templateName;
-  }
-
-  private resolveScriptCommandButtonUpgradeName(commandButtonDef: CommandButtonDef): string | null {
-    const upgradeName = readStringField(commandButtonDef.fields, ['Upgrade']);
-    if (!upgradeName) {
-      return null;
-    }
-    return upgradeName;
-  }
-
-  private resolveScriptScienceSideInputForEntity(sourceEntity: MapEntity): string {
-    const controllingPlayerToken = this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity);
-    if (controllingPlayerToken) {
-      return controllingPlayerToken;
-    }
-    return sourceEntity.side ?? '';
-  }
-
-  private resolveScriptCommandButtonPurchasableScienceName(
-    sourceEntity: MapEntity,
-    commandButtonDef: CommandButtonDef,
-  ): string | null {
-    const sideInput = this.resolveScriptScienceSideInputForEntity(sourceEntity);
-    const scienceNames = this.extractIniValueTokens(commandButtonDef.fields['Science']).flatMap((entry) => entry);
-    for (const scienceName of scienceNames) {
-      const normalizedScienceName = scienceName.trim().toUpperCase();
-      if (!normalizedScienceName || normalizedScienceName === 'NONE') {
-        continue;
-      }
-      const canonicalScienceName = this.resolveScienceInternalName(normalizedScienceName);
-      if (!canonicalScienceName) {
-        continue;
-      }
-      if (!this.canScriptPlayerPurchaseScience(sideInput, canonicalScienceName)) {
-        continue;
-      }
-      return canonicalScienceName;
-    }
-    return null;
-  }
-
-  private resolveScriptCommandButtonSpecialPowerName(commandButtonDef: CommandButtonDef): string | null {
-    const rawName = readStringField(commandButtonDef.fields, ['SpecialPower'])
-      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
-      ?? '';
-    const normalized = this.normalizeShortcutSpecialPowerName(rawName);
-    return normalized || null;
-  }
-
-  private resolveScriptCommandButtonSharedSpecialPowerReadyFrame(specialPowerName: string): number {
-    return resolveSharedShortcutSpecialPowerReadyFrameImpl(
-      specialPowerName,
-      this.frameCounter,
-      this.sharedShortcutSpecialPowerReadyFrames,
-      this.normalizeShortcutSpecialPowerName.bind(this),
-    );
-  }
-
-  private resolveScriptSpecialPowerCommandButtonExecution(
-    sourceEntity: MapEntity,
-    commandButtonDef: CommandButtonDef,
-  ): {
-    specialPowerName: string;
-    normalizedSpecialPowerName: string;
-    commandOption: number;
-  } | null {
-    const specialPowerName = readStringField(commandButtonDef.fields, ['SpecialPower'])
-      ?? readStringField(commandButtonDef.fields, ['SpecialPowerTemplate'])
-      ?? '';
-    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
-    if (!specialPowerName || !normalizedSpecialPowerName) {
-      return null;
-    }
-    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
-    if (!specialPowerDef) {
-      return null;
-    }
-    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
-      return null;
-    }
-
-    const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-    const isSharedSynced = readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true;
-    const readyFrame = isSharedSynced
-      ? this.resolveScriptCommandButtonSharedSpecialPowerReadyFrame(normalizedSpecialPowerName)
-      : this.resolveSpecialPowerReadyFrameForSourceEntity(normalizedSpecialPowerName, sourceEntity.id);
-    if (this.frameCounter < readyFrame) {
-      return null;
-    }
-
-    return {
-      specialPowerName,
-      normalizedSpecialPowerName,
-      commandOption,
-    };
-  }
-
-  private validateScriptSpecialPowerCommandButtonExecution(
+  /* @internal */ validateScriptSpecialPowerCommandButtonExecution(
     sourceEntity: MapEntity,
     commandButtonDef: CommandButtonDef,
     target: ScriptCommandButtonTarget,
@@ -14568,84 +12000,7 @@ export class GameLogicSubsystem implements Subsystem {
     return resolved;
   }
 
-  private resolveScriptCommandButtonHuntMode(commandButtonDef: CommandButtonDef): CommandButtonHuntMode {
-    const commandTypeName = this.normalizeScriptCommandTypeName(
-      commandButtonDef.commandTypeName
-      ?? readStringField(commandButtonDef.fields, ['Command'])
-      ?? '',
-    );
-    if (!commandTypeName) {
-      return 'NONE';
-    }
-
-    switch (commandTypeName) {
-      case 'SPECIAL_POWER':
-      case 'SPECIAL_POWER_FROM_COMMAND_CENTER':
-      case 'SPECIAL_POWER_FROM_SHORTCUT':
-      case 'SPECIAL_POWER_CONSTRUCT':
-      case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
-        const specialPowerName = this.resolveScriptCommandButtonSpecialPowerName(commandButtonDef);
-        if (!specialPowerName) {
-          return 'NONE';
-        }
-        const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-        return (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0
-          ? 'SPECIAL_POWER'
-          : 'NONE';
-      }
-      case 'SWITCH_WEAPON':
-      case 'FIRE_WEAPON':
-        return 'WEAPON';
-      case 'HIJACK_VEHICLE':
-        return 'ENTER_HIJACK';
-      case 'CONVERT_TO_CARBOMB':
-        return 'ENTER_CARBOMB';
-      case 'SABOTAGE_BUILDING':
-        return 'ENTER_SABOTAGE';
-      default:
-        return 'NONE';
-    }
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamHuntWithCommandButton.
-   * C++ validates command type and enables CommandButtonHuntUpdate per unit.
-   */
-  private executeScriptTeamHuntWithCommandButton(teamName: string, commandButtonName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const registry = this.iniDataRegistry;
-    if (!team || !registry) {
-      return false;
-    }
-
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    const huntMode = this.resolveScriptCommandButtonHuntMode(commandButtonDef);
-    if (huntMode === 'NONE') {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (!entity.commandButtonHuntProfile) {
-        continue;
-      }
-      const commandButtons = this.findScriptEntityCommandButtonsByName(entity, commandButtonDef.name);
-      if (commandButtons.length === 0) {
-        continue;
-      }
-      this.activateCommandButtonHuntForEntity(entity, commandButtonDef.name, huntMode);
-    }
-
-    return true;
-  }
-
-  private activateCommandButtonHuntForEntity(
+  /* @internal */ activateCommandButtonHuntForEntity(
     entity: MapEntity,
     commandButtonName: string,
     mode: CommandButtonHuntMode,
@@ -14671,955 +12026,6 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     this.clearCommandButtonHuntForEntity(entity);
-  }
-
-  private findScriptEntityCommandButtonsByName(
-    sourceEntity: MapEntity,
-    commandButtonName: string,
-  ): CommandButtonDef[] {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return [];
-    }
-
-    const sourceObjectDef = findObjectDefByName(registry, sourceEntity.templateName);
-    if (!sourceObjectDef) {
-      return [];
-    }
-    const commandSetName = this.resolveEntityCommandSetName(sourceEntity, sourceObjectDef);
-    if (!commandSetName) {
-      return [];
-    }
-    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
-    if (!commandSetDef) {
-      return [];
-    }
-
-    const normalizedCommandButtonName = commandButtonName.trim().toUpperCase();
-    if (!normalizedCommandButtonName) {
-      return [];
-    }
-
-    const matches: CommandButtonDef[] = [];
-    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
-      const slottedCommandButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
-      if (!slottedCommandButtonName) {
-        continue;
-      }
-      const commandButtonDef = findCommandButtonDefByName(registry, slottedCommandButtonName);
-      if (!commandButtonDef) {
-        continue;
-      }
-      if (commandButtonDef.name.trim().toUpperCase() !== normalizedCommandButtonName) {
-        continue;
-      }
-      matches.push(commandButtonDef);
-    }
-
-    return matches;
-  }
-
-  private executeScriptCommandButtonForEntity(
-    sourceEntity: MapEntity,
-    commandButtonDef: CommandButtonDef,
-    target: ScriptCommandButtonTarget,
-    validateOnly = false,
-  ): boolean {
-    const commandTypeName = this.normalizeScriptCommandTypeName(
-      commandButtonDef.commandTypeName
-      ?? readStringField(commandButtonDef.fields, ['Command'])
-      ?? '',
-    );
-    if (!commandTypeName) {
-      return false;
-    }
-    if (this.isEntityDisabledForScriptCommandButton(sourceEntity)) {
-      return false;
-    }
-
-    switch (commandTypeName) {
-      case 'SPECIAL_POWER':
-      case 'SPECIAL_POWER_FROM_COMMAND_CENTER':
-      case 'SPECIAL_POWER_FROM_SHORTCUT':
-      case 'SPECIAL_POWER_CONSTRUCT':
-      case 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT': {
-        const validated = this.validateScriptSpecialPowerCommandButtonExecution(sourceEntity, commandButtonDef, target);
-        if (!validated) {
-          return false;
-        }
-
-        let targetEntityId: number | null = null;
-        let targetX: number | null = null;
-        let targetZ: number | null = null;
-        if (target.kind === 'OBJECT') {
-          targetEntityId = target.targetEntity.id;
-        } else if (target.kind === 'POSITION') {
-          targetX = target.targetX;
-          targetZ = target.targetZ;
-        }
-
-        if (validateOnly) {
-          return true;
-        }
-
-        this.applyCommand({
-          type: 'issueSpecialPower',
-          commandSource: 'SCRIPT',
-          commandButtonId: commandButtonDef.name,
-          specialPowerName: validated.specialPowerName,
-          commandOption: validated.commandOption,
-          issuingEntityIds: [sourceEntity.id],
-          sourceEntityId: sourceEntity.id,
-          targetEntityId,
-          targetX,
-          targetZ,
-        });
-        return true;
-      }
-      case 'OBJECT_UPGRADE':
-      case 'PLAYER_UPGRADE': {
-        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
-        // these for OBJECT/POSITION targets (falls through to DEBUG_CRASH). Only NONE works.
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        const upgradeName = this.resolveScriptCommandButtonUpgradeName(commandButtonDef);
-        if (!upgradeName) {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'queueUpgradeProduction',
-          entityId: sourceEntity.id,
-          upgradeName,
-        });
-        return true;
-      }
-      case 'PURCHASE_SCIENCE': {
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        const scienceName = this.resolveScriptCommandButtonPurchasableScienceName(sourceEntity, commandButtonDef);
-        if (!scienceName) {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        const sideInput = this.resolveScriptScienceSideInputForEntity(sourceEntity);
-        return this.purchaseScriptScienceForPlayerInput(sideInput, scienceName);
-      }
-      case 'UNIT_BUILD':
-      case 'DOZER_CONSTRUCT': {
-        const templateName = this.resolveScriptCommandButtonTemplateName(commandButtonDef);
-        if (!templateName) {
-          return false;
-        }
-
-        if (target.kind === 'POSITION') {
-          if (commandTypeName !== 'DOZER_CONSTRUCT') {
-            return false;
-          }
-          if (validateOnly) {
-            return true;
-          }
-          this.applyCommand({
-            type: 'constructBuilding',
-            entityId: sourceEntity.id,
-            templateName,
-            targetPosition: [target.targetX, 0, target.targetZ],
-            angle: 0,
-            lineEndPosition: null,
-          });
-          return true;
-        }
-
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-
-        if (validateOnly) {
-          return true;
-        }
-
-        this.applyCommand({
-          type: 'queueUnitProduction',
-          entityId: sourceEntity.id,
-          unitTemplateName: templateName,
-        });
-        return true;
-      }
-      case 'STOP':
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'stop', entityId: sourceEntity.id, commandSource: 'SCRIPT' });
-        return true;
-      case 'ATTACK_MOVE':
-        if (target.kind !== 'POSITION') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'attackMoveTo',
-          entityId: sourceEntity.id,
-          targetX: target.targetX,
-          targetZ: target.targetZ,
-          attackDistance: this.resolveAttackMoveDistance(sourceEntity),
-          commandSource: 'SCRIPT',
-        });
-        return true;
-      case 'SET_RALLY_POINT': {
-        let targetX: number;
-        let targetZ: number;
-        if (target.kind === 'OBJECT') {
-          const targetPosition = this.getEntityWorldPosition(target.targetEntity.id);
-          if (!targetPosition) {
-            return false;
-          }
-          targetX = targetPosition[0];
-          targetZ = targetPosition[2];
-        } else if (target.kind === 'POSITION') {
-          targetX = target.targetX;
-          targetZ = target.targetZ;
-        } else {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'setRallyPoint',
-          entityId: sourceEntity.id,
-          targetX,
-          targetZ,
-        });
-        return true;
-      }
-      case 'GUARD':
-      case 'GUARD_WITHOUT_PURSUIT':
-      case 'GUARD_FLYING_UNITS_ONLY': {
-        const guardMode = commandTypeName === 'GUARD_WITHOUT_PURSUIT'
-          ? 1
-          : commandTypeName === 'GUARD_FLYING_UNITS_ONLY'
-          ? 2
-          : 0;
-        if (target.kind === 'OBJECT') {
-          if (validateOnly) {
-            return true;
-          }
-          this.applyCommand({
-            type: 'guardObject',
-            entityId: sourceEntity.id,
-            targetEntityId: target.targetEntity.id,
-            guardMode,
-            commandSource: 'SCRIPT',
-          });
-          return true;
-        }
-        if (target.kind === 'POSITION') {
-          if (validateOnly) {
-            return true;
-          }
-          this.applyCommand({
-            type: 'guardPosition',
-            entityId: sourceEntity.id,
-            targetX: target.targetX,
-            targetZ: target.targetZ,
-            guardMode,
-            commandSource: 'SCRIPT',
-          });
-          return true;
-        }
-        return false;
-      }
-      case 'FIRE_WEAPON': {
-        const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef) ?? 0;
-        const maxShotsToFire = this.resolveScriptMaxShotsToFireFromCommandButton(commandButtonDef);
-        const commandOption = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-        const needsObjectTarget = (commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0;
-        const needsTargetPosition = (commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
-        const attacksObjectPosition = (commandOption & SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION) !== 0;
-
-        let targetObjectId: number | null = null;
-        let targetPosition: readonly [number, number, number] | null = null;
-
-        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition} gates FIRE_WEAPON
-        // execution by command options + invocation target context.
-        if (target.kind === 'NONE') {
-          if (needsObjectTarget || needsTargetPosition) {
-            return false;
-          }
-        } else if (target.kind === 'OBJECT') {
-          if (!needsObjectTarget) {
-            return false;
-          }
-          if (!isSpecialPowerObjectRelationshipAllowed(commandOption, this.getTeamRelationship(sourceEntity, target.targetEntity))) {
-            return false;
-          }
-          targetObjectId = target.targetEntity.id;
-          if (attacksObjectPosition) {
-            targetPosition = this.getEntityWorldPosition(targetObjectId);
-            if (!targetPosition) {
-              return false;
-            }
-          }
-        } else {
-          if (!needsTargetPosition) {
-            return false;
-          }
-          targetPosition = [target.targetX, 0, target.targetZ];
-        }
-
-        if (validateOnly) {
-          return true;
-        }
-
-        this.applyCommand({
-          type: 'fireWeapon',
-          entityId: sourceEntity.id,
-          weaponSlot,
-          maxShotsToFire,
-          targetObjectId,
-          targetPosition,
-        });
-        return true;
-      }
-      case 'SWITCH_WEAPON': {
-        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
-        // SWITCH_WEAPON for OBJECT/POSITION targets. Only NONE works.
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        const weaponSlot = this.resolveScriptWeaponSlotFromCommandButton(commandButtonDef);
-        if (weaponSlot === null) {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'switchWeapon',
-          entityId: sourceEntity.id,
-          weaponSlot,
-        });
-        return true;
-      }
-      case 'HACK_INTERNET':
-        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
-        // HACK_INTERNET for OBJECT/POSITION targets. Only NONE works.
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'hackInternet', entityId: sourceEntity.id });
-        return true;
-      case 'TOGGLE_OVERCHARGE':
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'toggleOvercharge', entityId: sourceEntity.id });
-        return true;
-      case 'EXIT_CONTAINER':
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'exitContainer', entityId: sourceEntity.id });
-        return true;
-      case 'EVACUATE':
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'evacuate', entityId: sourceEntity.id });
-        return true;
-      case 'EXECUTE_RAILED_TRANSPORT':
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'executeRailedTransport', entityId: sourceEntity.id });
-        return true;
-      case 'BEACON_DELETE':
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'beaconDelete', entityId: sourceEntity.id });
-        return true;
-      case 'DOZER_CONSTRUCT_CANCEL':
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'cancelDozerConstruction', entityId: sourceEntity.id });
-        return true;
-      case 'CANCEL_UNIT_BUILD': {
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        const queuedUnit = sourceEntity.productionQueue.find((entry) => entry.type === 'UNIT');
-        if (!queuedUnit) {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'cancelUnitProduction',
-          entityId: sourceEntity.id,
-          productionId: queuedUnit.productionId,
-        });
-        return true;
-      }
-      case 'CANCEL_UPGRADE': {
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        let upgradeName = this.resolveScriptCommandButtonUpgradeName(commandButtonDef)?.trim().toUpperCase() ?? '';
-        if (upgradeName === 'NONE') {
-          upgradeName = '';
-        }
-        if (!upgradeName) {
-          const queuedUpgrade = sourceEntity.productionQueue.find((entry) => entry.type === 'UPGRADE');
-          if (!queuedUpgrade) {
-            return false;
-          }
-          upgradeName = queuedUpgrade.upgradeName;
-        } else {
-          const hasQueuedUpgrade = sourceEntity.productionQueue.some(
-            (entry) => entry.type === 'UPGRADE' && entry.upgradeName === upgradeName,
-          );
-          if (!hasQueuedUpgrade) {
-            return false;
-          }
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'cancelUpgradeProduction',
-          entityId: sourceEntity.id,
-          upgradeName,
-        });
-        return true;
-      }
-      case 'WAYPOINTS':
-        // Source parity: GeneralsMD Object::doCommandButton{,AtObject,AtPosition}
-        // does not implement these command-button types for script execution.
-        return false;
-      case 'POW_RETURN_TO_PRISON':
-      case 'PICK_UP_PRISONER':
-        // Source parity: ALLOW_SURRENDER-only command modes are not script-implemented
-        // in standard Generals/ZH builds; treat as unsupported in this port.
-        return false;
-      case 'SELL':
-        // Source parity: C++ doCommandButtonAtObject/AtPosition explicitly does NOT implement
-        // SELL for OBJECT/POSITION targets. Only NONE works.
-        if (target.kind !== 'NONE') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({ type: 'sell', entityId: sourceEntity.id });
-        return true;
-      case 'COMBATDROP': {
-        if (target.kind === 'NONE') {
-          // Source parity: no-target combat drop uses entity's current position.
-          const pos = this.getEntityWorldPosition(sourceEntity.id);
-          if (!pos) return false;
-          if (validateOnly) return true;
-          this.applyCommand({
-            type: 'combatDrop',
-            entityId: sourceEntity.id,
-            targetObjectId: null,
-            targetPosition: pos,
-            commandSource: 'SCRIPT',
-          });
-          return true;
-        }
-        if (target.kind === 'POSITION') {
-          if (validateOnly) return true;
-          this.applyCommand({
-            type: 'combatDrop',
-            entityId: sourceEntity.id,
-            targetObjectId: null,
-            targetPosition: [target.targetX, 0, target.targetZ],
-            commandSource: 'SCRIPT',
-          });
-          return true;
-        }
-        const targetObjectId = target.targetEntity.id;
-        const targetPosition = this.getEntityWorldPosition(targetObjectId);
-        if (!targetPosition) {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'combatDrop',
-          entityId: sourceEntity.id,
-          targetObjectId,
-          targetPosition,
-          commandSource: 'SCRIPT',
-        });
-        return true;
-      }
-      case 'HIJACK_VEHICLE':
-      case 'CONVERT_TO_CARBOMB':
-      case 'SABOTAGE_BUILDING':
-        if (target.kind !== 'OBJECT') {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'enterObject',
-          entityId: sourceEntity.id,
-          targetObjectId: target.targetEntity.id,
-          commandSource: 'SCRIPT',
-          action: commandTypeName === 'HIJACK_VEHICLE'
-            ? 'hijackVehicle'
-            : commandTypeName === 'CONVERT_TO_CARBOMB'
-            ? 'convertToCarBomb'
-            : 'sabotageBuilding',
-        });
-        return true;
-      case 'PLACE_BEACON': {
-        let targetX: number;
-        let targetZ: number;
-        if (target.kind === 'OBJECT') {
-          const targetPosition = this.getEntityWorldPosition(target.targetEntity.id);
-          if (!targetPosition) {
-            return false;
-          }
-          targetX = targetPosition[0];
-          targetZ = targetPosition[2];
-        } else if (target.kind === 'POSITION') {
-          targetX = target.targetX;
-          targetZ = target.targetZ;
-        } else {
-          return false;
-        }
-        if (validateOnly) {
-          return true;
-        }
-        this.applyCommand({
-          type: 'placeBeacon',
-          targetPosition: [targetX, 0, targetZ],
-        });
-        return true;
-      }
-      default:
-        // Source parity gap: unknown command button types are currently unsupported.
-        return false;
-    }
-  }
-
-  private executeScriptNamedUseCommandButtonAbility(entityId: number, commandButtonName: string): boolean {
-    const sourceEntity = this.spawnedEntities.get(entityId);
-    if (!sourceEntity || sourceEntity.destroyed) {
-      return false;
-    }
-
-    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
-    if (commandButtons.length === 0) {
-      return false;
-    }
-
-    let executed = false;
-    for (const commandButtonDef of commandButtons) {
-      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, { kind: 'NONE' })) {
-        executed = true;
-      }
-    }
-    return executed;
-  }
-
-  private executeScriptNamedUseCommandButtonAbilityOnNamed(
-    entityId: number,
-    commandButtonName: string,
-    targetEntityId: number,
-  ): boolean {
-    const sourceEntity = this.spawnedEntities.get(entityId);
-    const targetEntity = this.spawnedEntities.get(targetEntityId);
-    if (!sourceEntity || sourceEntity.destroyed || !targetEntity || targetEntity.destroyed) {
-      return false;
-    }
-
-    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
-    if (commandButtons.length === 0) {
-      return false;
-    }
-
-    let executed = false;
-    for (const commandButtonDef of commandButtons) {
-      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-        kind: 'OBJECT',
-        targetEntity,
-      })) {
-        executed = true;
-      }
-    }
-    return executed;
-  }
-
-  private executeScriptNamedUseCommandButtonAbilityAtWaypoint(
-    entityId: number,
-    commandButtonName: string,
-    waypointName: string,
-  ): boolean {
-    const sourceEntity = this.spawnedEntities.get(entityId);
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!sourceEntity || sourceEntity.destroyed || !waypoint) {
-      return false;
-    }
-
-    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
-    if (commandButtons.length === 0) {
-      return false;
-    }
-
-    let executed = false;
-    for (const commandButtonDef of commandButtons) {
-      if (this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-        kind: 'POSITION',
-        targetX: waypoint.x,
-        targetZ: waypoint.z,
-      })) {
-        executed = true;
-      }
-    }
-    return executed;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath.
-   * C++ resolves the closest waypoint on the named path and routes through
-   * Object::doCommandButtonUsingWaypoints.
-   */
-  private executeScriptNamedUseCommandButtonAbilityUsingWaypointPath(
-    entityId: number,
-    commandButtonName: string,
-    waypointPathName: string,
-  ): boolean {
-    const sourceEntity = this.spawnedEntities.get(entityId);
-    if (!sourceEntity || sourceEntity.destroyed) {
-      return false;
-    }
-    if (this.isEntityDisabledForScriptCommandButton(sourceEntity)) {
-      return false;
-    }
-
-    // Source parity: ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath
-    // uses TerrainLogic::getClosestWaypointOnPath. Our route resolver returns the
-    // closest matching waypoint as the first node.
-    const route = this.resolveScriptWaypointRouteByPathLabel(
-      waypointPathName,
-      sourceEntity.x,
-      sourceEntity.z,
-      true,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    const commandButtons = this.findScriptEntityCommandButtonsByName(sourceEntity, commandButtonName);
-    if (commandButtons.length === 0) {
-      return false;
-    }
-
-    const closestWaypoint = route[0]!;
-    let executed = false;
-    for (const commandButtonDef of commandButtons) {
-      const commandTypeName = this.normalizeScriptCommandTypeName(
-        commandButtonDef.commandTypeName
-        ?? readStringField(commandButtonDef.fields, ['Command'])
-        ?? '',
-      );
-      if (
-        commandTypeName !== 'SPECIAL_POWER'
-        && commandTypeName !== 'SPECIAL_POWER_FROM_COMMAND_CENTER'
-        && commandTypeName !== 'SPECIAL_POWER_FROM_SHORTCUT'
-        && commandTypeName !== 'SPECIAL_POWER_CONSTRUCT'
-        && commandTypeName !== 'SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT'
-      ) {
-        continue;
-      }
-
-      const resolved = this.resolveScriptSpecialPowerCommandButtonExecution(sourceEntity, commandButtonDef);
-      if (!resolved) {
-        continue;
-      }
-      if ((resolved.commandOption & SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS) === 0) {
-        continue;
-      }
-      // Source parity: doCommandButtonUsingWaypoints does not provide an object target context.
-      // Object-target special powers cannot execute through this script action.
-      if ((resolved.commandOption & SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET) !== 0) {
-        continue;
-      }
-      const usesPositionTarget = (resolved.commandOption & SCRIPT_COMMAND_OPTION_NEED_TARGET_POS) !== 0;
-
-      this.applyCommand({
-        type: 'issueSpecialPower',
-        commandSource: 'SCRIPT',
-        commandButtonId: commandButtonDef.name,
-        specialPowerName: resolved.specialPowerName,
-        commandOption: resolved.commandOption,
-        issuingEntityIds: [sourceEntity.id],
-        sourceEntityId: sourceEntity.id,
-        targetEntityId: null,
-        targetX: usesPositionTarget ? closestWaypoint.x : null,
-        targetZ: usesPositionTarget ? closestWaypoint.z : null,
-      });
-      executed = true;
-    }
-
-    return executed;
-  }
-
-  private executeScriptTeamUseCommandButtonAbility(teamName: string, commandButtonName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const registry = this.iniDataRegistry;
-    if (!team || !registry) {
-      return false;
-    }
-
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    let processedCount = 0;
-    let executed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      processedCount += 1;
-      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, { kind: 'NONE' })) {
-        executed = true;
-      }
-    }
-    return executed || processedCount === 0;
-  }
-
-  private executeScriptTeamUseCommandButtonAbilityOnNamed(
-    teamName: string,
-    commandButtonName: string,
-    targetEntityId: number,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const registry = this.iniDataRegistry;
-    const targetEntity = this.spawnedEntities.get(targetEntityId);
-    if (!team || !registry || !targetEntity || targetEntity.destroyed) {
-      return false;
-    }
-
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    let processedCount = 0;
-    let executed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      processedCount += 1;
-      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
-        kind: 'OBJECT',
-        targetEntity,
-      })) {
-        executed = true;
-      }
-    }
-    return executed || processedCount === 0;
-  }
-
-  private executeScriptTeamUseCommandButtonAbilityAtWaypoint(
-    teamName: string,
-    commandButtonName: string,
-    waypointName: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const registry = this.iniDataRegistry;
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!team || !registry || !waypoint) {
-      return false;
-    }
-
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    let processedCount = 0;
-    let executed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      processedCount += 1;
-      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
-        kind: 'POSITION',
-        targetX: waypoint.x,
-        targetZ: waypoint.z,
-      })) {
-        executed = true;
-      }
-    }
-    return executed || processedCount === 0;
-  }
-
-  private applyScriptEntityFlash(entity: MapEntity, timeInSeconds: number, color: number): boolean {
-    if (timeInSeconds <= 0) {
-      return true;
-    }
-    const frames = Math.trunc(LOGIC_FRAME_RATE * timeInSeconds);
-    const flashCount = Math.max(0, Math.trunc(frames / DRAWABLE_FRAMES_PER_FLASH));
-    entity.scriptFlashColor = color;
-    entity.scriptFlashCount = flashCount;
-    return true;
-  }
-
-  private resolveScriptEntityFlashColor(entity: MapEntity): number {
-    if (entity.customIndicatorColor !== null) {
-      return entity.customIndicatorColor >>> 0;
-    }
-    // Source parity gap: use per-side indicator color when UI player colors are wired.
-    return SOURCE_FLASH_COLOR_WHITE;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedFlash.
-   * Source parity gap: use drawable indicator color from side colors when available.
-   */
-  private executeScriptNamedFlash(entityId: number, timeInSeconds: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    return this.applyScriptEntityFlash(
-      entity,
-      timeInSeconds,
-      this.resolveScriptEntityFlashColor(entity),
-    );
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamFlash.
-   * Source parity gap: use drawable indicator color from side colors when available.
-   */
-  private executeScriptTeamFlash(teamName: string, timeInSeconds: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let flashed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.applyScriptEntityFlash(entity, timeInSeconds, this.resolveScriptEntityFlashColor(entity))) {
-        flashed = true;
-      }
-    }
-    return flashed;
-  }
-
-  private executeScriptNamedFlashWhite(entityId: number, timeInSeconds: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    return this.applyScriptEntityFlash(entity, timeInSeconds, SOURCE_FLASH_COLOR_WHITE);
-  }
-
-  private executeScriptTeamFlashWhite(teamName: string, timeInSeconds: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let flashed = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.applyScriptEntityFlash(entity, timeInSeconds, SOURCE_FLASH_COLOR_WHITE)) {
-        flashed = true;
-      }
-    }
-    return flashed;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedCustomColor.
-   * Applies an object-level custom indicator color override.
-   */
-  private executeScriptNamedCustomColor(entityId: number, color: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    if (!Number.isFinite(color)) {
-      return false;
-    }
-    entity.customIndicatorColor = Math.trunc(color) >>> 0;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doUnitReceiveUpgrade.
-   * Gives a specific upgrade to a named unit immediately.
-   */
-  private executeScriptNamedReceiveUpgrade(entityId: number, upgradeName: string): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    const normalizedUpgrade = upgradeName.trim().toUpperCase();
-    if (!normalizedUpgrade || normalizedUpgrade === 'NONE') {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry || !findUpgradeDefByName(registry, normalizedUpgrade)) {
-      return false;
-    }
-
-    if (this.applyUpgradeToEntity(entityId, normalizedUpgrade)) {
-      return true;
-    }
-    return entity.completedUpgrades.has(normalizedUpgrade);
   }
 
   private tryScriptConstructBuildingAtPosition(
@@ -15652,15 +12058,7 @@ export class GameLogicSubsystem implements Subsystem {
     return afterPending !== undefined && afterPending !== beforePending;
   }
 
-  private resolveScriptBuildPlacementAngle(objectDef: ObjectDef): number {
-    const placementAngleDegrees = readNumericField(objectDef.fields, ['PlacementViewAngle']) ?? 0;
-    if (!Number.isFinite(placementAngleDegrees)) {
-      return 0;
-    }
-    return placementAngleDegrees * (Math.PI / 180);
-  }
-
-  private tryScriptConstructBuildingWithWiggleSearch(
+  /* @internal */ tryScriptConstructBuildingWithWiggleSearch(
     side: string,
     objectDef: ObjectDef,
     centerX: number,
@@ -15707,386 +12105,7 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  /**
-   * Source parity: ScriptActions::doBuildObjectNearestTeam.
-   * Mirrors AIPlayer::buildSpecificBuildingNearestTeam by trying the
-   * target team center first, then expanding along square rings.
-   */
-  private executeScriptAIPlayerBuildTypeNearestTeam(
-    explicitPlayerSide: string,
-    templateName: string,
-    teamName: string,
-  ): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const normalizedTemplateName = templateName.trim().toUpperCase();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
-    if (!objectDef) {
-      return false;
-    }
-    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
-      return false;
-    }
-
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const angle = this.resolveScriptBuildPlacementAngle(objectDef);
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    const location = this.resolveScriptTeamCenter(teamMembers);
-    if (!location) {
-      return false;
-    }
-
-    return this.tryScriptConstructBuildingWithWiggleSearch(
-      side,
-      objectDef,
-      location.x,
-      location.z,
-      angle,
-    );
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildSupplyCenter -> AIPlayer::buildBySupplies.
-   * Uses supply-source anchoring and source-style ring search for legal placement.
-   */
-  private executeScriptAIPlayerBuildSupplyCenter(
-    explicitPlayerSide: string,
-    templateName: string,
-    minimumCash: number,
-  ): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const normalizedTemplateName = templateName.trim().toUpperCase();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
-    if (!objectDef) {
-      return false;
-    }
-    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
-      return false;
-    }
-
-    const isCashGenerator = this.normalizeKindOf(objectDef.kindOf).has('CASH_GENERATOR');
-    let sourceWarehouse = this.findScriptSupplySourceForSide(side, Math.trunc(minimumCash));
-
-    if (!isCashGenerator) {
-      const currentWarehouseId = this.scriptCurrentSupplyWarehouseBySide.get(side);
-      if (currentWarehouseId !== undefined) {
-        const currentWarehouse = this.spawnedEntities.get(currentWarehouseId);
-        if (currentWarehouse && !currentWarehouse.destroyed) {
-          sourceWarehouse = currentWarehouse;
-        }
-      }
-    }
-    if (!sourceWarehouse) {
-      return false;
-    }
-
-    const baseCenter = this.resolveAiBaseCenter(side);
-    const enemyCenter = this.resolveScriptEnemyBaseCenter(side);
-    let directionX = baseCenter ? sourceWarehouse.x - baseCenter.x : 0;
-    let directionZ = baseCenter ? sourceWarehouse.z - baseCenter.z : 0;
-    let radius = 3 * PATHFIND_CELL_SIZE;
-
-    if (!isCashGenerator) {
-      if (enemyCenter) {
-        directionX = sourceWarehouse.x - enemyCenter.x;
-        directionZ = sourceWarehouse.z - enemyCenter.z;
-      }
-      radius = this.resolveEntityMajorRadius(sourceWarehouse);
-    }
-
-    let targetX = sourceWarehouse.x;
-    let targetZ = sourceWarehouse.z;
-    const directionLength = Math.hypot(directionX, directionZ);
-    if (directionLength > 0.00001) {
-      directionX /= directionLength;
-      directionZ /= directionLength;
-      targetX -= directionX * radius;
-      targetZ -= directionZ * radius;
-    }
-
-    const angle = this.resolveScriptBuildPlacementAngle(objectDef);
-    const queued = this.tryScriptConstructBuildingWithWiggleSearch(side, objectDef, targetX, targetZ, angle);
-    if (queued) {
-      this.scriptCurrentSupplyWarehouseBySide.set(side, sourceWarehouse.id);
-    }
-    return queued;
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildUpgrade -> AIPlayer::buildUpgrade.
-   * Queues a player upgrade on the first side-owned eligible production structure.
-   */
-  private executeScriptAIPlayerBuildUpgrade(
-    explicitPlayerSide: string,
-    upgradeName: string,
-  ): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const normalizedUpgradeInput = upgradeName.trim().toUpperCase();
-    if (!normalizedUpgradeInput) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const upgradeDef = findUpgradeDefByName(registry, normalizedUpgradeInput);
-    if (!upgradeDef) {
-      return false;
-    }
-    if (resolveUpgradeType(upgradeDef) !== 'PLAYER') {
-      return false;
-    }
-
-    const normalizedUpgradeName = upgradeDef.name.trim().toUpperCase();
-    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
-      return false;
-    }
-
-    const eligibleFactories = Array.from(this.spawnedEntities.values())
-      .filter((entity) =>
-        !entity.destroyed
-        && this.normalizeSide(entity.side) === side
-        && !entity.objectStatusFlags.has('UNDER_CONSTRUCTION')
-        && !entity.objectStatusFlags.has('SOLD')
-        && entity.productionProfile !== null)
-      .sort((left, right) => left.id - right.id);
-
-    for (const factory of eligibleFactories) {
-      if (this.queueUpgradeProduction(factory.id, normalizedUpgradeName)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildBuilding -> Player::buildSpecificBuilding.
-   * Current-player script context is bridged via setScriptCurrentPlayerSide().
-   */
-  private executeScriptSkirmishBuildBuilding(
-    templateName: string,
-    explicitPlayerSide: string,
-  ): boolean {
-    const normalizedTemplateName = templateName.trim().toUpperCase();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-
-    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
-    if (!objectDef) {
-      return false;
-    }
-    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
-      return false;
-    }
-
-    const dozer = this.findScriptBuildDozerForTemplate(side, objectDef.name);
-    if (!dozer) {
-      return false;
-    }
-
-    const beforePending = this.pendingConstructionActions.get(dozer.id);
-    this.handleConstructBuildingCommand({
-      type: 'constructBuilding',
-      entityId: dozer.id,
-      templateName: objectDef.name,
-      targetPosition: [
-        dozer.x,
-        this.resolveGroundHeight(dozer.x, dozer.z),
-        dozer.z,
-      ],
-      angle: dozer.rotationY,
-      lineEndPosition: null,
-    });
-
-    const afterPending = this.pendingConstructionActions.get(dozer.id);
-    return afterPending !== undefined && afterPending !== beforePending;
-  }
-
-  /**
-   * Source parity: AISkirmishPlayer::buildAIBaseDefenseStructure.
-   * Places front/flank defenses around the base-radius ring, alternating angles.
-   */
-  private executeScriptSkirmishBuildBaseDefenseStructureForSide(
-    side: string,
-    templateName: string,
-    flank: boolean,
-  ): boolean {
-    const normalizedTemplateName = templateName.trim().toUpperCase();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const objectDef = findObjectDefByName(registry, normalizedTemplateName);
-    if (!objectDef) {
-      return false;
-    }
-    if (!this.canSideBuildUnitTemplate(side, objectDef)) {
-      return false;
-    }
-
-    const baseCenterAndRadius = this.resolveCachedSkirmishBaseCenterAndRadius(side);
-    if (!baseCenterAndRadius) {
-      // Source parity fallback: no usable base center, so fall back to generic build placement.
-      return this.executeScriptSkirmishBuildBuilding(objectDef.name, side);
-    }
-
-    const defenseState = this.getOrCreateScriptSkirmishBaseDefenseState(side);
-    const startPosition = this.resolveScriptSkirmishStartPositionOneBased(side);
-    const normalizedPathLabel = flank
-      ? `${(defenseState.curFlankBaseDefense & 1) !== 0 ? SCRIPT_SKIRMISH_PATH_FLANK_LABEL : SCRIPT_SKIRMISH_PATH_BACKDOOR_LABEL}${startPosition}`
-      : `${SCRIPT_SKIRMISH_PATH_CENTER_LABEL}${startPosition}`;
-
-    let goalX = baseCenterAndRadius.centerX;
-    let goalZ = baseCenterAndRadius.centerZ;
-    const route = this.resolveScriptWaypointRouteByNormalizedLabel(
-      normalizedPathLabel,
-      baseCenterAndRadius.centerX,
-      baseCenterAndRadius.centerZ,
-    );
-    if (route && route.length > 0) {
-      goalX = route[0]!.x;
-      goalZ = route[0]!.z;
-    } else if (flank) {
-      return false;
-    } else {
-      const enemySide = this.resolveScriptSkirmishEnemySide(side);
-      const bounds = enemySide
-        ? this.getScriptSideStructureBounds(enemySide)
-        : { loX: 0, loZ: 0, hiX: 0, hiZ: 0 };
-      goalX = bounds.loX + ((bounds.hiX - bounds.loX) * 0.5);
-      goalZ = bounds.loZ + ((bounds.hiZ - bounds.loZ) * 0.5);
-    }
-
-    let offsetX = goalX - baseCenterAndRadius.centerX;
-    let offsetZ = goalZ - baseCenterAndRadius.centerZ;
-    const offsetLength = Math.hypot(offsetX, offsetZ);
-    if (offsetLength > 0.00001) {
-      offsetX /= offsetLength;
-      offsetZ /= offsetLength;
-    } else {
-      offsetX = 0;
-      offsetZ = 0;
-    }
-
-    const defenseDistance = baseCenterAndRadius.radius + this.resolveSkirmishBaseDefenseExtraDistance();
-    offsetX *= defenseDistance;
-    offsetZ *= defenseDistance;
-
-    const structureRadius = this.resolveObjectDefBoundingCircleRadius2D(objectDef);
-    const baseCircumference = 2 * Math.PI * defenseDistance;
-    if (baseCircumference <= 0 || !Number.isFinite(baseCircumference)) {
-      return false;
-    }
-
-    const angleOffset = 2 * Math.PI * ((structureRadius * 4) / baseCircumference);
-    if (!Number.isFinite(angleOffset) || angleOffset <= 0) {
-      return false;
-    }
-
-    const placeAngle = this.resolveScriptBuildPlacementAngle(objectDef);
-    for (let attempt = 0; attempt < SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS; attempt += 1) {
-      let angle = 0;
-      if (flank) {
-        const selector = defenseState.curFlankBaseDefense >> 1;
-        if ((defenseState.curFlankBaseDefense & 1) !== 0) {
-          if ((selector & 1) !== 0) {
-            defenseState.curLeftFlankRightDefenseAngle -= angleOffset;
-            angle = defenseState.curLeftFlankRightDefenseAngle;
-          } else {
-            angle = defenseState.curLeftFlankLeftDefenseAngle;
-            defenseState.curLeftFlankLeftDefenseAngle += angleOffset;
-          }
-        } else if ((selector & 1) !== 0) {
-          defenseState.curRightFlankRightDefenseAngle -= angleOffset;
-          angle = defenseState.curRightFlankRightDefenseAngle;
-        } else {
-          angle = defenseState.curRightFlankLeftDefenseAngle;
-          defenseState.curRightFlankLeftDefenseAngle += angleOffset;
-        }
-      } else {
-        const selector = defenseState.curFrontBaseDefense;
-        if ((selector & 1) !== 0) {
-          defenseState.curFrontRightDefenseAngle -= angleOffset;
-          angle = defenseState.curFrontRightDefenseAngle;
-        } else {
-          angle = defenseState.curFrontLeftDefenseAngle;
-          defenseState.curFrontLeftDefenseAngle += angleOffset;
-        }
-      }
-
-      if (angle > SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE) {
-        return false;
-      }
-
-      const sinAngle = Math.sin(angle);
-      const cosAngle = Math.cos(angle);
-      const buildX = baseCenterAndRadius.centerX + (offsetX * cosAngle - offsetZ * sinAngle);
-      const buildZ = baseCenterAndRadius.centerZ + (offsetZ * cosAngle + offsetX * sinAngle);
-
-      if (flank) {
-        defenseState.curFlankBaseDefense += 1;
-      } else {
-        defenseState.curFrontBaseDefense += 1;
-      }
-
-      if (this.tryScriptConstructBuildingAtPosition(side, objectDef, buildX, buildZ, placeAngle)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private getOrCreateScriptSkirmishBaseDefenseState(side: string): ScriptSkirmishBaseDefenseState {
+  /* @internal */ getOrCreateScriptSkirmishBaseDefenseState(side: string): ScriptSkirmishBaseDefenseState {
     let state = this.scriptSkirmishBaseDefenseStateBySide.get(side);
     if (state) {
       return state;
@@ -16106,20 +12125,11 @@ export class GameLogicSubsystem implements Subsystem {
     return state;
   }
 
-  private resolveScriptSkirmishStartPositionOneBased(side: string): number {
-    const startPosition = this.getSkirmishPlayerStartPosition(side);
-    if (startPosition === null || !Number.isFinite(startPosition) || startPosition <= 0) {
-      // Source parity: Player::getMpStartIndex defaults to 0 (=> 1 when one-based).
-      return 1;
-    }
-    return Math.trunc(startPosition);
-  }
-
-  private resolveSkirmishBaseDefenseExtraDistance(): number {
+  /* @internal */ resolveSkirmishBaseDefenseExtraDistance(): number {
     return this.skirmishBaseDefenseExtraDistance;
   }
 
-  private resolveCachedSkirmishBaseCenterAndRadius(side: string): ScriptBaseCenterAndRadius | null {
+  /* @internal */ resolveCachedSkirmishBaseCenterAndRadius(side: string): ScriptBaseCenterAndRadius | null {
     const cached = this.scriptSkirmishBaseCenterAndRadiusBySide.get(side);
     if (cached) {
       return cached;
@@ -16139,373 +12149,6 @@ export class GameLogicSubsystem implements Subsystem {
     return state;
   }
 
-  /**
-   * Source parity: ScriptActions::doBuildBaseDefense(false).
-   * Chooses a defense structure from the current player's dozer build options.
-   */
-  private executeScriptSkirmishBuildBaseDefenseFront(explicitPlayerSide: string): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const templateName = this.resolveScriptSkirmishDefenseTemplateName(side);
-    if (!templateName) {
-      return false;
-    }
-
-    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, false);
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildBaseDefense(true).
-   */
-  private executeScriptSkirmishBuildBaseDefenseFlank(explicitPlayerSide: string): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const templateName = this.resolveScriptSkirmishDefenseTemplateName(side);
-    if (!templateName) {
-      return false;
-    }
-
-    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, true);
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildBaseStructure(..., false).
-   */
-  private executeScriptSkirmishBuildStructureFront(
-    templateName: string,
-    explicitPlayerSide: string,
-  ): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, false);
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildBaseStructure(..., true).
-   */
-  private executeScriptSkirmishBuildStructureFlank(
-    templateName: string,
-    explicitPlayerSide: string,
-  ): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    return this.executeScriptSkirmishBuildBaseDefenseStructureForSide(side, templateName, true);
-  }
-
-  /**
-   * Source parity: ScriptActions::doSkirmishAttackNearestGroupWithValue.
-   * Uses PartitionManager::getNearestGroupWithValue-style partition-cell value scan.
-   */
-  private executeScriptSkirmishAttackNearestGroupWithValue(
-    teamName: string,
-    comparison: number,
-    value: number,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    // Source parity: C++ only performs the query for GREATER_EQUAL and GREATER comparisons.
-    const GREATER_EQUAL = 3;
-    const GREATER = 4;
-    if (comparison !== GREATER_EQUAL && comparison !== GREATER) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptAIGroupCenter(teamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const source = teamMembers[0]!;
-    const target = this.resolveScriptNearestEnemyGroupLocationWithValue(team, source, center, value);
-    if (!target) {
-      return false;
-    }
-
-    let movedAny = false;
-    for (const entity of teamMembers) {
-      this.applyCommand({
-        type: 'attackMoveTo',
-        entityId: entity.id,
-        targetX: target.x,
-        targetZ: target.z,
-        attackDistance: this.resolveAttackMoveDistance(entity),
-        commandSource: 'SCRIPT',
-      });
-      if (entity.moveTarget !== null || entity.attackTargetPosition !== null) {
-        movedAny = true;
-      }
-    }
-    return movedAny;
-  }
-
-  /**
-   * Source parity: PartitionManager::getNearestGroupWithValue(VOT_CashValue, ALLOW_ENEMIES).
-   * Aggregates enemy build cost per map cell, then breadth-first scans cells from source.
-   */
-  private resolveScriptNearestEnemyGroupLocationWithValue(
-    team: ScriptTeamRecord,
-    sourceEntity: MapEntity,
-    sourceLocation: VectorXZ,
-    valueRequired: number,
-  ): VectorXZ | null {
-    if (!this.mapHeightmap) {
-      return null;
-    }
-
-    const partitionCellSize = Number.isFinite(this.config.partitionCellSize) && this.config.partitionCellSize > 0
-      ? this.config.partitionCellSize
-      : PATHFIND_CELL_SIZE;
-    const mapCellWidth = Math.max(1, Math.ceil(this.mapHeightmap.worldWidth / partitionCellSize));
-    const mapCellHeight = Math.max(1, Math.ceil(this.mapHeightmap.worldDepth / partitionCellSize));
-    const [startCellX, startCellZ] = this.worldToPartitionCell(
-      sourceLocation.x,
-      sourceLocation.z,
-      partitionCellSize,
-      mapCellWidth,
-      mapCellHeight,
-    );
-    if (startCellX === null || startCellZ === null) {
-      return null;
-    }
-
-    const sourceOffMap = this.isEntityOffMap(sourceEntity);
-    const cellCashValue = new Map<number, number>();
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-        continue;
-      }
-      const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
-      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
-        team,
-        sourceEntity,
-        candidate,
-      );
-      if (relation !== RELATIONSHIP_ENEMIES && !sameControllingPlayer) {
-        continue;
-      }
-
-      const [candidateCellX, candidateCellZ] = this.worldToPartitionCell(
-        candidate.x,
-        candidate.z,
-        partitionCellSize,
-        mapCellWidth,
-        mapCellHeight,
-      );
-      if (candidateCellX === null || candidateCellZ === null) {
-        continue;
-      }
-
-      const index = candidateCellZ * mapCellWidth + candidateCellX;
-      const nextValue = (cellCashValue.get(index) ?? 0) + this.resolveEntityBuildCostRaw(candidate);
-      cellCashValue.set(index, nextValue);
-    }
-
-    // Source parity quirk: PartitionManager.cpp currently assigns this flag from valueRequired.
-    // For positive values (the skirmish script use-case), this resolves to strict ">" matching.
-    const greaterThan = valueRequired !== 0;
-    const visited = new Uint8Array(mapCellWidth * mapCellHeight);
-    const queueX: number[] = [startCellX];
-    const queueZ: number[] = [startCellZ];
-    visited[startCellZ * mapCellWidth + startCellX] = 1;
-
-    let head = 0;
-    while (head < queueX.length) {
-      const cellX = queueX[head]!;
-      const cellZ = queueZ[head]!;
-      head += 1;
-
-      const index = cellZ * mapCellWidth + cellX;
-      const valueAtCell = cellCashValue.get(index) ?? 0;
-      if ((valueAtCell > valueRequired && greaterThan) || (valueAtCell < valueRequired && !greaterThan)) {
-        return {
-          x: cellX * partitionCellSize,
-          z: cellZ * partitionCellSize,
-        };
-      }
-
-      if (cellX - 1 >= 0) {
-        const nextIndex = cellZ * mapCellWidth + (cellX - 1);
-        if (visited[nextIndex] === 0) {
-          visited[nextIndex] = 1;
-          queueX.push(cellX - 1);
-          queueZ.push(cellZ);
-        }
-      }
-      if (cellZ - 1 >= 0) {
-        const nextIndex = (cellZ - 1) * mapCellWidth + cellX;
-        if (visited[nextIndex] === 0) {
-          visited[nextIndex] = 1;
-          queueX.push(cellX);
-          queueZ.push(cellZ - 1);
-        }
-      }
-      if (cellX + 1 < mapCellWidth) {
-        const nextIndex = cellZ * mapCellWidth + (cellX + 1);
-        if (visited[nextIndex] === 0) {
-          visited[nextIndex] = 1;
-          queueX.push(cellX + 1);
-          queueZ.push(cellZ);
-        }
-      }
-      if (cellZ + 1 < mapCellHeight) {
-        const nextIndex = (cellZ + 1) * mapCellWidth + cellX;
-        if (visited[nextIndex] === 0) {
-          visited[nextIndex] = 1;
-          queueX.push(cellX);
-          queueZ.push(cellZ + 1);
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Source parity: ScriptActions::doSkirmishCommandButtonOnMostValuable.
-   * Uses iterateObjectsInRange(FROM_CENTER_2D, ITER_SORTED_EXPENSIVE_TO_CHEAP) semantics.
-   */
-  private executeScriptSkirmishCommandButtonOnMostValuableObject(
-    teamName: string,
-    abilityName: string,
-    range: number,
-    allTeamMembers: boolean,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const normalizedAbilityName = abilityName.trim();
-    if (!normalizedAbilityName) {
-      return false;
-    }
-
-    // Source parity: parameter is currently ignored by C++ implementation.
-    void allTeamMembers;
-
-    const searchRange = Number.isFinite(range) ? Math.max(0, range) : 0;
-    const searchRangeSqr = searchRange * searchRange;
-    const resolved = this.resolveScriptTeamCommandButtonSource(team, normalizedAbilityName);
-    if (!resolved) {
-      return false;
-    }
-    const { teamMembers, sourceEntity, commandButtonDef } = resolved;
-
-    const center = this.resolveScriptAIGroupCenter(teamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const sourceOffMap = this.isEntityOffMap(sourceEntity);
-    const candidates: Array<{ entity: MapEntity; buildCost: number }> = [];
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-        continue;
-      }
-      const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
-      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
-        team,
-        sourceEntity,
-        candidate,
-      );
-      if (relation !== RELATIONSHIP_ENEMIES && !sameControllingPlayer) {
-        continue;
-      }
-
-      const dx = candidate.x - center.x;
-      const dz = candidate.z - center.z;
-      const distSqr = (dx * dx) + (dz * dz);
-      if (distSqr >= searchRangeSqr) {
-        continue;
-      }
-
-      if (!this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-        kind: 'OBJECT',
-        targetEntity: candidate,
-      }, true)) {
-        continue;
-      }
-
-      candidates.push({
-        entity: candidate,
-        buildCost: this.resolveEntityBuildCostRaw(candidate),
-      });
-    }
-
-    candidates.sort((left, right) => right.buildCost - left.buildCost);
-
-    const target = candidates[0]?.entity;
-    if (!target) {
-      return false;
-    }
-
-    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(
-      team,
-      commandButtonDef.name,
-      target,
-    );
-  }
-
-  private appendScriptSequentialScript(script: ScriptSequentialScriptState): void {
-    const newScript: ScriptSequentialScriptState = {
-      ...script,
-      currentInstruction: -1,
-      framesToWait: script.framesToWait ?? -1,
-      dontAdvanceInstruction: false,
-      nextScript: null,
-    };
-
-    const hasObject = newScript.objectId !== null && newScript.objectId !== 0;
-    const hasTeam = !!newScript.teamNameUpper;
-    for (const seqScript of this.scriptSequentialScripts) {
-      if (hasObject && seqScript.objectId === newScript.objectId) {
-        let tail = seqScript;
-        while (tail.nextScript) {
-          tail = tail.nextScript;
-        }
-        tail.nextScript = newScript;
-        return;
-      }
-      if (!hasObject && hasTeam && seqScript.teamNameUpper === newScript.teamNameUpper) {
-        let tail = seqScript;
-        while (tail.nextScript) {
-          tail = tail.nextScript;
-        }
-        tail.nextScript = newScript;
-        return;
-      }
-    }
-
-    this.scriptSequentialScripts.push(newScript);
-  }
-
   private removeAllSequentialScriptsForEntity(entityId: number): void {
     for (let index = this.scriptSequentialScripts.length - 1; index >= 0; index -= 1) {
       const seqScript = this.scriptSequentialScripts[index];
@@ -16515,7 +12158,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private removeAllSequentialScriptsForTeam(teamNameUpper: string): void {
+  /* @internal */ removeAllSequentialScriptsForTeam(teamNameUpper: string): void {
     for (let index = this.scriptSequentialScripts.length - 1; index >= 0; index -= 1) {
       const seqScript = this.scriptSequentialScripts[index];
       if (seqScript && seqScript.teamNameUpper === teamNameUpper) {
@@ -16524,650 +12167,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private setScriptSequentialTimerForEntity(entityId: number, frameCount: number): void {
-    for (const seqScript of this.scriptSequentialScripts) {
-      if (seqScript.objectId === entityId) {
-        seqScript.framesToWait = Math.trunc(frameCount);
-        return;
-      }
-    }
-  }
-
-  private setScriptSequentialTimerForTeam(teamNameUpper: string, frameCount: number): void {
-    for (const seqScript of this.scriptSequentialScripts) {
-      if (seqScript.teamNameUpper === teamNameUpper) {
-        seqScript.framesToWait = Math.trunc(frameCount);
-        return;
-      }
-    }
-  }
-
-  private executeScriptUnitExecuteSequentialScript(
-    entityId: number,
-    scriptName: string,
-    timesToLoop: number,
-  ): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    const normalizedScriptName = scriptName.trim().toUpperCase();
-    if (!normalizedScriptName) {
-      return false;
-    }
-    this.appendScriptSequentialScript({
-      scriptNameUpper: normalizedScriptName,
-      objectId: entityId,
-      teamNameUpper: null,
-      currentInstruction: -1,
-      timesToLoop: Math.trunc(timesToLoop),
-      framesToWait: -1,
-      dontAdvanceInstruction: false,
-      nextScript: null,
-    });
-    return true;
-  }
-
-  private executeScriptTeamExecuteSequentialScript(
-    teamName: string,
-    scriptName: string,
-    timesToLoop: number,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    const normalizedScriptName = scriptName.trim().toUpperCase();
-    if (!normalizedScriptName) {
-      return false;
-    }
-
-    // Source parity: idle the team before executing the sequential script.
-    this.executeScriptTeamStop(team.nameUpper);
-
-    this.appendScriptSequentialScript({
-      scriptNameUpper: normalizedScriptName,
-      objectId: null,
-      teamNameUpper: team.nameUpper,
-      currentInstruction: -1,
-      timesToLoop: Math.trunc(timesToLoop),
-      framesToWait: -1,
-      dontAdvanceInstruction: false,
-      nextScript: null,
-    });
-    return true;
-  }
-
-  private executeScriptUnitStopSequentialScript(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity) {
-      return false;
-    }
-    this.removeAllSequentialScriptsForEntity(entityId);
-    return true;
-  }
-
-  private executeScriptTeamStopSequentialScript(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    this.removeAllSequentialScriptsForTeam(team.nameUpper);
-    return true;
-  }
-
-  private executeScriptUnitGuardForFramecount(entityId: number, frameCount: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.applyCommand({
-      type: 'guardPosition',
-      entityId,
-      targetX: entity.x,
-      targetZ: entity.z,
-      guardMode: 0,
-      commandSource: 'SCRIPT',
-    });
-    this.setScriptSequentialTimerForEntity(entityId, frameCount);
-    return true;
-  }
-
-  private executeScriptUnitIdleForFramecount(entityId: number, frameCount: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.applyCommand({ type: 'stop', entityId, commandSource: 'SCRIPT' });
-    this.setScriptSequentialTimerForEntity(entityId, frameCount);
-    return true;
-  }
-
-  private executeScriptTeamIdleForFramecount(teamName: string, frameCount: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
-    }
-    this.setScriptSequentialTimerForTeam(team.nameUpper, frameCount);
-    return true;
-  }
-
-  private executeScriptWaterChangeHeight(waterName: string, newHeight: number): boolean {
-    const waterIndices = this.resolveWaterPolygonIndicesByName(waterName);
-    if (waterIndices.length === 0) {
-      return false;
-    }
-    for (const index of waterIndices) {
-      // Source parity: ScriptActions::doWaterChangeHeight uses large damage amount to kill underwater objects.
-      this.applyWaterHeightChange(index, newHeight, 999999.9, true);
-    }
-    return true;
-  }
-
-  private executeScriptWaterChangeHeightOverTime(
-    waterName: string,
-    newHeight: number,
-    timeSeconds: number,
-    damageAmount: number,
-  ): boolean {
-    const waterIndices = this.resolveWaterPolygonIndicesByName(waterName);
-    if (waterIndices.length === 0) {
-      return false;
-    }
-    for (const waterIndex of waterIndices) {
-      // Remove any existing update for this water table.
-      for (let index = this.dynamicWaterUpdates.length - 1; index >= 0; index -= 1) {
-        if (this.dynamicWaterUpdates[index]!.waterIndex === waterIndex) {
-          this.dynamicWaterUpdates.splice(index, 1);
-        }
-      }
-      if (this.dynamicWaterUpdates.length >= MAX_DYNAMIC_WATER) {
-        return false;
-      }
-      const currentHeight = this.waterPolygonData[waterIndex]?.waterHeight ?? 0;
-      const denom = LOGIC_FRAME_RATE * timeSeconds;
-      const changePerFrame = denom !== 0
-        ? (newHeight - currentHeight) / denom
-        : (newHeight > currentHeight
-          ? Number.POSITIVE_INFINITY
-          : (newHeight < currentHeight ? Number.NEGATIVE_INFINITY : 0));
-      this.dynamicWaterUpdates.push({
-        waterIndex,
-        targetHeight: newHeight,
-        changePerFrame,
-        damageAmount,
-        currentHeight,
-      });
-    }
-    return true;
-  }
-
-  private executeScriptMapSwitchBorder(borderIndex: number): boolean {
-    // Source parity: ScriptActions::doBorderSwitch temporarily removes permanent
-    // replay-observer reveal before boundary swap, then reapplies it.
-    const observerSide = this.scriptPlayerSideByName.get('REPLAYOBSERVER') ?? '';
-    const observerPlayerIndex = observerSide
-      ? this.resolvePlayerIndexForSide(observerSide)
-      : -1;
-    if (observerPlayerIndex >= 0 && this.fogOfWarGrid) {
-      this.fogOfWarGrid.undoRevealMapForPlayerPermanently(observerPlayerIndex);
-    }
-
-    this.scriptActiveBoundaryIndex = Math.trunc(borderIndex);
-    if (this.scriptActiveBoundaryIndex < 0) {
-      this.scriptActiveBoundaryIndex = 0;
-    }
-
-    if (observerPlayerIndex >= 0 && this.fogOfWarGrid) {
-      this.fogOfWarGrid.revealMapForPlayerPermanently(observerPlayerIndex);
-    }
-
-    // Source parity: PartitionManager::refreshShroudForLocalPlayer.
-    this.updateFogOfWar();
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptEngine sequential handling of
-   * SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_{ALL|PARTIAL}.
-   */
-  private executeScriptSkirmishWaitForCommandButtonAvailability(
-    teamName: string,
-    commandButtonName: string,
-    allReady: boolean,
-  ): boolean {
-    return this.evaluateScriptTeamCommandButtonReadinessByName(teamName, commandButtonName, allReady);
-  }
-
-  /**
-   * Source parity: ScriptEngine sequential handling of
-   * TEAM_WAIT_FOR_NOT_CONTAINED_{ALL|PARTIAL}.
-   */
-  private executeScriptTeamWaitForNotContained(teamName: string, allContained: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    return !this.evaluateScriptTeamIsContained({
-      teamName: team.nameUpper,
-      allContained,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamSpinForFramecount.
-   * Stores Team sequential spin timer frame for ScriptEngine parity bridges.
-   */
-  private executeScriptTeamSpinForFramecount(teamName: string, waitForFrames: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    const waitFrames = Math.max(0, Math.trunc(waitForFrames));
-    this.setScriptSequentialTimerForTeam(team.nameUpper, waitFrames);
-    return true;
-  }
-
-  private resolveScriptTeamCommandButtonSource(
-    team: ScriptTeamRecord,
-    commandButtonName: string,
-    excludedEntityIds: Set<number> | null = null,
-  ): {
-    teamMembers: MapEntity[];
-    sourceEntity: MapEntity;
-    commandButtonDef: CommandButtonDef;
-  } | null {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return null;
-    }
-
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return null;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && (excludedEntityIds ? !excludedEntityIds.has(entity.id) : true));
-    if (teamMembers.length === 0) {
-      return null;
-    }
-
-    for (const member of teamMembers) {
-      const memberButtons = this.findScriptEntityCommandButtonsByName(member, commandButtonDef.name);
-      if (memberButtons.length > 0) {
-        return {
-          teamMembers,
-          sourceEntity: member,
-          commandButtonDef,
-        };
-      }
-    }
-
-    return null;
-  }
-
-  private getScriptTeamCandidateRelationship(
-    team: ScriptTeamRecord,
-    sourceEntity: MapEntity,
-    candidate: MapEntity,
-  ): number {
-    const teamSide = this.resolveScriptTeamControllingSide(team);
-    const candidateSide = this.normalizeSide(candidate.side ?? '');
-    if (teamSide && candidateSide) {
-      return this.getTeamRelationshipBySides(teamSide, candidateSide);
-    }
-    return this.getTeamRelationship(sourceEntity, candidate);
-  }
-
   private resolveEntityControllingPlayerTokenForAffiliation(entity: MapEntity): string | null {
     return (
       this.normalizeControllingPlayerToken(entity.controllingPlayerToken ?? undefined)
       ?? this.normalizeControllingPlayerToken(this.normalizeSide(entity.side ?? '') ?? undefined)
     );
-  }
-
-  private resolveScriptTeamControllingPlayerTokenForAffiliation(
-    team: ScriptTeamRecord,
-    sourceEntity: MapEntity,
-  ): string | null {
-    return (
-      this.normalizeControllingPlayerToken(team.controllingPlayerToken ?? undefined)
-      ?? this.normalizeControllingPlayerToken(team.controllingSide ?? undefined)
-      ?? this.resolveEntityControllingPlayerTokenForAffiliation(sourceEntity)
-    );
-  }
-
-  private isScriptTeamCandidateSameControllingPlayer(
-    team: ScriptTeamRecord,
-    sourceEntity: MapEntity,
-    candidate: MapEntity,
-  ): boolean {
-    const teamOwnerToken = this.resolveScriptTeamControllingPlayerTokenForAffiliation(team, sourceEntity);
-    if (!teamOwnerToken) {
-      return false;
-    }
-    const candidateOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(candidate);
-    return candidateOwnerToken !== null && candidateOwnerToken === teamOwnerToken;
-  }
-
-  private executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(
-    teamName: string,
-    commandButtonName: string,
-    filter: {
-      allowEnemies: boolean;
-      allowNeutral: boolean;
-      requireStructure: boolean;
-      requireGarrisonable: boolean;
-      requiredKindOf: string | null;
-      requiredTemplateName: string | null;
-      requiredTemplateNames?: string[] | null;
-    },
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    return this.executeScriptTeamCommandButtonOnNearestObject(team, commandButtonName, filter);
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNamed.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNamed(
-    teamName: string,
-    commandButtonName: string,
-    targetEntityId: unknown,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const resolvedTargetId = this.resolveScriptEntityId(targetEntityId);
-    const targetEntity = resolvedTargetId !== null ? this.spawnedEntities.get(resolvedTargetId) : null;
-    if (!team || !targetEntity || targetEntity.destroyed) {
-      return false;
-    }
-
-    const resolved = this.resolveScriptTeamCommandButtonSource(team, commandButtonName);
-    if (!resolved) {
-      return false;
-    }
-    if (!this.executeScriptCommandButtonForEntity(
-      resolved.sourceEntity,
-      resolved.commandButtonDef,
-      { kind: 'OBJECT', targetEntity },
-      true,
-    )) {
-      return false;
-    }
-    return this.executeScriptTeamCommandButtonAtObjectForAllMembers(
-      team,
-      resolved.commandButtonDef.name,
-      targetEntity,
-    );
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestEnemy.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNearestEnemyUnit(
-    teamName: string,
-    commandButtonName: string,
-  ): boolean {
-    return this.executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(teamName, commandButtonName, {
-      allowEnemies: true,
-      allowNeutral: false,
-      requireStructure: false,
-      requireGarrisonable: false,
-      requiredKindOf: null,
-      requiredTemplateName: null,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestGarrisonedBuilding.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNearestGarrisonedBuilding(
-    teamName: string,
-    commandButtonName: string,
-  ): boolean {
-    return this.executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(teamName, commandButtonName, {
-      allowEnemies: true,
-      allowNeutral: false,
-      requireStructure: true,
-      requireGarrisonable: true,
-      requiredKindOf: null,
-      requiredTemplateName: null,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestKindof.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNearestKindOf(
-    teamName: string,
-    commandButtonName: string,
-    kindOfInput: unknown,
-  ): boolean {
-    const kindOfName = this.resolveScriptKindOfNameFromInput(kindOfInput);
-    if (!kindOfName) {
-      return false;
-    }
-    return this.executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(teamName, commandButtonName, {
-      allowEnemies: true,
-      allowNeutral: false,
-      requireStructure: false,
-      requireGarrisonable: false,
-      requiredKindOf: kindOfName,
-      requiredTemplateName: null,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestBuilding.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuilding(
-    teamName: string,
-    commandButtonName: string,
-  ): boolean {
-    return this.executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(teamName, commandButtonName, {
-      allowEnemies: true,
-      allowNeutral: false,
-      requireStructure: true,
-      requireGarrisonable: false,
-      requiredKindOf: null,
-      requiredTemplateName: null,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestBuildingClass.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNearestEnemyBuildingClass(
-    teamName: string,
-    commandButtonName: string,
-    kindOfInput: unknown,
-  ): boolean {
-    const kindOfName = this.resolveScriptKindOfNameFromInput(kindOfInput);
-    if (!kindOfName) {
-      return false;
-    }
-    return this.executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(teamName, commandButtonName, {
-      allowEnemies: true,
-      allowNeutral: false,
-      requireStructure: true,
-      requireGarrisonable: false,
-      requiredKindOf: kindOfName,
-      requiredTemplateName: null,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamUseCommandButtonOnNearestObjectType.
-   */
-  private executeScriptTeamAllUseCommandButtonOnNearestObjectType(
-    teamName: string,
-    commandButtonName: string,
-    templateName: string,
-  ): boolean {
-    const objectTypes = this.resolveScriptObjectTypeCandidatesForAction(templateName);
-    if (!objectTypes || objectTypes.length === 0) {
-      return false;
-    }
-    return this.executeScriptTeamCommandButtonOnNearestObjectAcrossTeams(teamName, commandButtonName, {
-      allowEnemies: true,
-      allowNeutral: true,
-      requireStructure: false,
-      requireGarrisonable: false,
-      requiredKindOf: null,
-      requiredTemplateName: null,
-      requiredTemplateNames: objectTypes,
-    });
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamPartialUseCommandButton.
-   */
-  private executeScriptTeamPartialUseCommandButton(
-    percentage: number,
-    teamName: string,
-    commandButtonName: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const registry = this.iniDataRegistry;
-    if (!team || !registry) {
-      return false;
-    }
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (teamMembers.length === 0) {
-      return true;
-    }
-
-    const candidates: MapEntity[] = [];
-    for (const entity of teamMembers) {
-      if (!this.executeScriptCommandButtonForEntity(entity, commandButtonDef, { kind: 'NONE' }, true)) {
-        continue;
-      }
-      candidates.push(entity);
-    }
-
-    const percentageValue = Number.isFinite(percentage) ? percentage : 0;
-    const toExecuteCount = Math.max(0, Math.trunc((percentageValue / 100) * candidates.length));
-    if (toExecuteCount <= 0) {
-      return true;
-    }
-
-    let executedAny = false;
-    for (let index = 0; index < candidates.length && index < toExecuteCount; index += 1) {
-      const candidate = candidates[index]!;
-      if (this.executeScriptCommandButtonForEntity(candidate, commandButtonDef, { kind: 'NONE' })) {
-        executedAny = true;
-      }
-    }
-    return executedAny || candidates.length === 0;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit.
-   */
-  private executeScriptTeamCaptureNearestUnownedFactionUnit(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const allTeamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (allTeamMembers.length === 0) {
-      return false;
-    }
-    const controllingSourceEntity = allTeamMembers[0]!;
-
-    const center = this.resolveScriptAIGroupCenter(allTeamMembers);
-    if (!center) {
-      return false;
-    }
-    let closestTarget: MapEntity | null = null;
-    let closestDistSqr = Number.POSITIVE_INFINITY;
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate)) {
-        continue;
-      }
-      if (!this.entityHasObjectStatus(candidate, 'DISABLED_UNMANNED')) {
-        continue;
-      }
-
-      // Source parity: PartitionFilterPlayerAffiliation(ALLOW_ENEMIES | ALLOW_NEUTRAL)
-      // also admits objects controlled by the same player via its explicit self-player check.
-      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
-        team,
-        controllingSourceEntity,
-        candidate,
-      );
-      const relation = this.getScriptTeamCandidateRelationship(team, controllingSourceEntity, candidate);
-      if (!sameControllingPlayer) {
-        if (relation !== RELATIONSHIP_ENEMIES && relation !== RELATIONSHIP_NEUTRAL) {
-          continue;
-        }
-      }
-
-      const dx = candidate.x - center.x;
-      const dz = candidate.z - center.z;
-      const distSqr = (dx * dx) + (dz * dz);
-      if (distSqr < closestDistSqr || (distSqr === closestDistSqr && (closestTarget === null || candidate.id < closestTarget.id))) {
-        closestTarget = candidate;
-        closestDistSqr = distSqr;
-      }
-    }
-    if (!closestTarget) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of allTeamMembers) {
-      // Source parity: ScriptActions::doTeamCaptureNearestUnownedFactionUnit calls
-      // AIGroup::groupEnter on the full group membership; per-unit enter validation
-      // remains in enter-action handling.
-      if (this.canQueueEnterObjectAction(entity, closestTarget, 'captureUnmannedFactionUnit', 'SCRIPT')) {
-        issuedAny = true;
-      }
-      this.applyCommand({
-        type: 'enterObject',
-        entityId: entity.id,
-        targetObjectId: closestTarget.id,
-        commandSource: 'SCRIPT',
-        action: 'captureUnmannedFactionUnit',
-      });
-    }
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doCreateTeamFromCapturedUnits.
-   * C++ implementation currently only validates the team and performs no further logic.
-   */
-  private executeScriptPlayerCreateTeamFromCapturedUnits(
-    playerName: string,
-    teamName: string,
-  ): boolean {
-    // Source parity: player parameter is currently unused by C++.
-    void playerName;
-    return this.getScriptTeamRecord(teamName) !== null;
   }
 
   /**
@@ -17229,642 +12233,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: team command-button nearest-target scans.
-   */
-  private executeScriptTeamCommandButtonOnNearestObject(
-    team: ScriptTeamRecord,
-    commandButtonName: string,
-    filter: {
-      allowEnemies: boolean;
-      allowNeutral: boolean;
-      requireStructure: boolean;
-      requireGarrisonable: boolean;
-      requiredKindOf: string | null;
-      requiredTemplateName: string | null;
-      requiredTemplateNames?: string[] | null;
-    },
-    handledEntityIds: Set<number> | null = null,
-  ): boolean {
-    const resolved = this.resolveScriptTeamCommandButtonSource(team, commandButtonName, handledEntityIds);
-    if (!resolved) {
-      return false;
-    }
-    const { teamMembers, sourceEntity, commandButtonDef } = resolved;
-
-    const center = this.resolveScriptAIGroupCenter(teamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const sourceOffMap = this.isEntityOffMap(sourceEntity);
-    const candidates: MapEntity[] = [];
-    const normalizedTemplateName = filter.requiredTemplateName
-      ? this.normalizeScriptObjectTypeName(filter.requiredTemplateName)
-      : null;
-    const requiredTemplateNames = filter.requiredTemplateNames
-      ? Array.from(new Set(filter.requiredTemplateNames
-        .map((name) => this.normalizeScriptObjectTypeName(name))
-        .filter(Boolean)))
-      : null;
-    const requiredKindOf = filter.requiredKindOf?.trim().toUpperCase() ?? null;
-    if (requiredTemplateNames && requiredTemplateNames.length === 0) {
-      return false;
-    }
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-        continue;
-      }
-
-      const relation = this.getScriptTeamCandidateRelationship(team, sourceEntity, candidate);
-      const sameControllingPlayer = this.isScriptTeamCandidateSameControllingPlayer(
-        team,
-        sourceEntity,
-        candidate,
-      );
-      const relationAllowed = sameControllingPlayer
-        || (filter.allowEnemies && relation === RELATIONSHIP_ENEMIES)
-        || (filter.allowNeutral && relation === RELATIONSHIP_NEUTRAL);
-      if (!relationAllowed) {
-        continue;
-      }
-
-      if (filter.requireStructure && !candidate.kindOf.has('STRUCTURE')) {
-        continue;
-      }
-      if (filter.requireGarrisonable) {
-        if (candidate.containProfile?.moduleType !== 'GARRISON' || candidate.containProfile.garrisonCapacity <= 0) {
-          continue;
-        }
-      }
-      if (requiredKindOf && !candidate.kindOf.has(requiredKindOf)) {
-        continue;
-      }
-      if (requiredTemplateNames && requiredTemplateNames.length > 0) {
-        if (!this.matchesScriptObjectTypeList(candidate.templateName, requiredTemplateNames)) {
-          continue;
-        }
-      } else if (normalizedTemplateName
-        && !this.areEquivalentTemplateNames(candidate.templateName, normalizedTemplateName)) {
-        continue;
-      }
-
-      if (!this.executeScriptCommandButtonForEntity(sourceEntity, commandButtonDef, {
-        kind: 'OBJECT',
-        targetEntity: candidate,
-      }, true)) {
-        continue;
-      }
-
-      candidates.push(candidate);
-    }
-
-    candidates.sort((left, right) => {
-      const leftDx = left.x - center.x;
-      const leftDz = left.z - center.z;
-      const rightDx = right.x - center.x;
-      const rightDz = right.z - center.z;
-      const leftDistSqr = (leftDx * leftDx) + (leftDz * leftDz);
-      const rightDistSqr = (rightDx * rightDx) + (rightDz * rightDz);
-      if (leftDistSqr !== rightDistSqr) {
-        return leftDistSqr - rightDistSqr;
-      }
-      return left.id - right.id;
-    });
-
-    for (const candidate of candidates) {
-      if (this.executeScriptTeamCommandButtonAtObjectForAllMembers(
-        team,
-        commandButtonDef.name,
-        candidate,
-        handledEntityIds,
-      )) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Source parity: AIGroup::groupDoCommandButtonAtObject for script team members.
-   */
-  private executeScriptTeamCommandButtonAtObjectForAllMembers(
-    team: ScriptTeamRecord,
-    commandButtonName: string,
-    targetEntity: MapEntity,
-    handledEntityIds: Set<number> | null = null,
-  ): boolean {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const commandButtonDef = findCommandButtonDefByName(registry, commandButtonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && (handledEntityIds ? !handledEntityIds.has(entity.id) : true));
-    if (teamMembers.length === 0) {
-      return handledEntityIds === null;
-    }
-
-    let executedAny = false;
-    for (const entity of teamMembers) {
-      handledEntityIds?.add(entity.id);
-      if (this.executeScriptCommandButtonForEntity(entity, commandButtonDef, {
-        kind: 'OBJECT',
-        targetEntity,
-      })) {
-        executedAny = true;
-      }
-    }
-    return executedAny;
-  }
-
-  private resolveScriptKindOfNameFromInput(kindOfInput: unknown): string | null {
-    if (typeof kindOfInput === 'number' && Number.isFinite(kindOfInput)) {
-      return this.resolveScriptKindOfNameFromSourceBit(kindOfInput);
-    }
-    const token = this.coerceScriptConditionString(kindOfInput).trim().toUpperCase();
-    if (!token) {
-      return null;
-    }
-    if (token.startsWith('KINDOF_')) {
-      return token.slice('KINDOF_'.length);
-    }
-    return token;
-  }
-
-  private resolveScriptNamedSpecialPowerSource(
-    entityId: number,
-    specialPowerName: string,
-  ): {
-    sourceEntity: MapEntity;
-    specialPowerToken: string;
-    normalizedSpecialPowerName: string;
-    isSharedSynced: boolean;
-  } | null {
-    const sourceEntity = this.spawnedEntities.get(entityId);
-    if (!sourceEntity || sourceEntity.destroyed) {
-      return null;
-    }
-
-    const specialPowerToken = specialPowerName.trim();
-    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
-    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
-      return null;
-    }
-
-    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
-    if (!specialPowerDef) {
-      return null;
-    }
-    if (!sourceEntity.specialPowerModules.has(normalizedSpecialPowerName)) {
-      return null;
-    }
-
-    return {
-      sourceEntity,
-      specialPowerToken,
-      normalizedSpecialPowerName,
-      isSharedSynced: readBooleanField(specialPowerDef.fields, ['SharedSyncedTimer']) === true,
-    };
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedStopSpecialPowerCountdown.
-   * Mirrors SpecialPowerModule::pauseCountdown pause counter semantics.
-   */
-  private executeScriptNamedStopSpecialPowerCountdown(
-    entityId: number,
-    specialPowerName: string,
-    stop: boolean,
-  ): boolean {
-    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
-    if (!resolved) {
-      return false;
-    }
-
-    // Source parity: SharedNSync ready frame lookup bypasses module pause state.
-    if (resolved.isSharedSynced) {
-      return true;
-    }
-
-    if (stop) {
-      this.pauseNonSharedSpecialPowerCountdown(resolved.normalizedSpecialPowerName, resolved.sourceEntity.id, true);
-      return true;
-    }
-
-    this.unpauseNonSharedSpecialPowerCountdown(resolved.normalizedSpecialPowerName, resolved.sourceEntity.id);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetSpecialPowerCountdown.
-   */
-  private executeScriptNamedSetSpecialPowerCountdown(
-    entityId: number,
-    specialPowerName: string,
-    seconds: number,
-  ): boolean {
-    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
-    if (!resolved) {
-      return false;
-    }
-
-    const frames = LOGIC_FRAME_RATE * Math.trunc(seconds);
-    this.setSpecialPowerReadyFrame(
-      resolved.normalizedSpecialPowerName,
-      resolved.sourceEntity.id,
-      resolved.isSharedSynced,
-      this.frameCounter + frames,
-    );
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedAddSpecialPowerCountdown.
-   */
-  private executeScriptNamedAddSpecialPowerCountdown(
-    entityId: number,
-    specialPowerName: string,
-    seconds: number,
-  ): boolean {
-    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
-    if (!resolved) {
-      return false;
-    }
-
-    const frames = LOGIC_FRAME_RATE * Math.trunc(seconds);
-    if (resolved.isSharedSynced) {
-      const currentReadyFrame = resolveSharedShortcutSpecialPowerReadyFrameImpl(
-        resolved.normalizedSpecialPowerName,
-        this.frameCounter,
-        this.sharedShortcutSpecialPowerReadyFrames,
-        this.normalizeShortcutSpecialPowerName.bind(this),
-      );
-      this.setSpecialPowerReadyFrame(
-        resolved.normalizedSpecialPowerName,
-        resolved.sourceEntity.id,
-        true,
-        currentReadyFrame + frames,
-      );
-      return true;
-    }
-
-    const currentReadyFrame = this.resolveSpecialPowerReadyFrameForSourceEntity(
-      resolved.normalizedSpecialPowerName,
-      resolved.sourceEntity.id,
-    );
-    this.setSpecialPowerReadyFrame(
-      resolved.normalizedSpecialPowerName,
-      resolved.sourceEntity.id,
-      false,
-      currentReadyFrame + frames,
-    );
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedFireSpecialPowerAtWaypoint.
-   */
-  private executeScriptNamedFireSpecialPowerAtWaypoint(
-    entityId: number,
-    specialPowerName: string,
-    waypointName: string,
-  ): boolean {
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
-    if (!resolved || !waypoint) {
-      return false;
-    }
-
-    this.applyCommand({
-      type: 'issueSpecialPower',
-      commandSource: 'SCRIPT',
-      commandButtonId: '',
-      specialPowerName: resolved.specialPowerToken,
-      commandOption: SCRIPT_COMMAND_OPTION_NEED_TARGET_POS,
-      issuingEntityIds: [resolved.sourceEntity.id],
-      sourceEntityId: resolved.sourceEntity.id,
-      targetEntityId: null,
-      targetX: waypoint.x,
-      targetZ: waypoint.z,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedFireSpecialPowerAtNamed.
-   */
-  private executeScriptNamedFireSpecialPowerAtNamed(
-    entityId: number,
-    specialPowerName: string,
-    targetEntityId: number,
-  ): boolean {
-    const resolved = this.resolveScriptNamedSpecialPowerSource(entityId, specialPowerName);
-    const targetEntity = this.spawnedEntities.get(targetEntityId);
-    if (!resolved || !targetEntity || targetEntity.destroyed) {
-      return false;
-    }
-
-    this.applyCommand({
-      type: 'issueSpecialPower',
-      commandSource: 'SCRIPT',
-      commandButtonId: '',
-      specialPowerName: resolved.specialPowerToken,
-      commandOption: SCRIPT_COMMAND_OPTION_NEED_OBJECT_TARGET,
-      issuingEntityIds: [resolved.sourceEntity.id],
-      sourceEntityId: resolved.sourceEntity.id,
-      targetEntityId: targetEntity.id,
-      targetX: null,
-      targetZ: null,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doSkirmishFireSpecialPowerAtMostCost.
-   * Resolves the enemy's most-costly area and fires the named special power at that location.
-   */
-  private executeScriptSkirmishFireSpecialPowerAtMostCost(
-    explicitPlayerSide: string,
-    specialPowerName: string,
-  ): boolean {
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const specialPowerToken = specialPowerName.trim();
-    const normalizedSpecialPowerName = specialPowerToken.toUpperCase();
-    if (!normalizedSpecialPowerName || normalizedSpecialPowerName === 'NONE') {
-      return false;
-    }
-
-    const specialPowerDef = this.resolveSpecialPowerDefByName(normalizedSpecialPowerName);
-    if (!specialPowerDef) {
-      return false;
-    }
-
-    const enemySide = this.resolveScriptSkirmishEnemySide(side);
-    if (!enemySide) {
-      return false;
-    }
-
-    let weaponRadius = 50;
-    const radiusCursorRadius = readNumericField(specialPowerDef.fields, ['RadiusCursorRadius']) ?? 0;
-    if (radiusCursorRadius > weaponRadius) {
-      weaponRadius = radiusCursorRadius;
-    }
-
-    const target = this.computeScriptSuperweaponTarget(enemySide, weaponRadius);
-
-    let sourceEntity: MapEntity | null = null;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== side) {
-        continue;
-      }
-      if (!entity.specialPowerModules.has(normalizedSpecialPowerName)) {
-        continue;
-      }
-      sourceEntity = entity;
-      break;
-    }
-    if (!sourceEntity) {
-      return false;
-    }
-
-    this.applyCommand({
-      type: 'issueSpecialPower',
-      commandSource: 'SCRIPT',
-      commandButtonId: '',
-      specialPowerName: specialPowerToken,
-      commandOption: 0x20, // NEED_TARGET_POS
-      issuingEntityIds: [sourceEntity.id],
-      sourceEntityId: sourceEntity.id,
-      targetEntityId: null,
-      targetX: target.x,
-      targetZ: target.z,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: AIPlayer::computeSuperweaponTarget.
-   */
-  private computeScriptSuperweaponTarget(
-    targetSide: string,
-    weaponRadius: number,
-  ): { x: number; z: number } {
-    const bounds = this.getScriptSideStructureBounds(targetSide);
-    let radius = weaponRadius;
-    if (!Number.isFinite(radius) || radius < 1) {
-      radius = 1;
-    }
-
-    let loX = bounds.loX + radius;
-    let hiX = bounds.hiX - radius;
-    if (hiX < loX) {
-      const middle = (hiX + loX) / 2;
-      loX = middle;
-      hiX = middle;
-    }
-
-    let loZ = bounds.loZ + radius;
-    let hiZ = bounds.hiZ - radius;
-    if (hiZ < loZ) {
-      const middle = (hiZ + loZ) / 2;
-      loZ = middle;
-      hiZ = middle;
-    }
-
-    const width = hiX - loX;
-    const height = hiZ - loZ;
-    let xCount = Math.ceil(width / radius) + 1;
-    let zCount = Math.ceil(height / radius) + 1;
-    if (xCount > 10) xCount = 10;
-    if (zCount > 10) zCount = 10;
-
-    let bestValue = -1;
-    let bestX = loX;
-    let bestZ = loZ;
-    for (let i = 0; i < xCount; i += 1) {
-      for (let j = 0; j < zCount; j += 1) {
-        const x = loX + (width * i) / xCount;
-        const z = loZ + (height * j) / zCount;
-        const currentValue = this.getScriptSuperweaponTargetValue(x, z, targetSide, 2 * radius);
-        if (currentValue > bestValue) {
-          bestValue = currentValue;
-          bestX = x;
-          bestZ = z;
-        }
-      }
-    }
-
-    let finalBestValue = -1;
-    let finalBestX = 0;
-    let finalBestZ = 0;
-    let tieCount = 0;
-    for (let i = 0; i < 11; i += 1) {
-      for (let j = 0; j < 11; j += 1) {
-        const x = bestX + (i - 5) * (radius / 10);
-        const z = bestZ + (j - 5) * (radius / 10);
-        const currentValue = this.getScriptSuperweaponTargetValue(x, z, targetSide, radius);
-        if (currentValue > finalBestValue) {
-          finalBestValue = currentValue;
-          finalBestX = x;
-          finalBestZ = z;
-          tieCount = 1;
-        } else if (currentValue === finalBestValue) {
-          finalBestX += x;
-          finalBestZ += z;
-          tieCount += 1;
-        }
-      }
-    }
-
-    if (tieCount > 1) {
-      finalBestX /= tieCount;
-      finalBestZ /= tieCount;
-    }
-
-    return { x: finalBestX, z: finalBestZ };
-  }
-
-  /**
-   * Source parity: AIPlayer::getPlayerStructureBounds.
-   */
-  private getScriptSideStructureBounds(targetSide: string): { loX: number; loZ: number; hiX: number; hiZ: number } {
-    const normalizedTargetSide = this.normalizeSide(targetSide);
-    if (!normalizedTargetSide) {
-      return { loX: 0, loZ: 0, hiX: 0, hiZ: 0 };
-    }
-
-    let hasStructure = false;
-    let loX = 0;
-    let loZ = 0;
-    let hiX = 0;
-    let hiZ = 0;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedTargetSide) {
-        continue;
-      }
-      if (!entity.kindOf.has('STRUCTURE')) {
-        continue;
-      }
-
-      if (!hasStructure) {
-        loX = hiX = entity.x;
-        loZ = hiZ = entity.z;
-        hasStructure = true;
-      } else {
-        if (entity.x < loX) loX = entity.x;
-        if (entity.z < loZ) loZ = entity.z;
-        if (entity.x > hiX) hiX = entity.x;
-        if (entity.z > hiZ) hiZ = entity.z;
-      }
-    }
-
-    if (!hasStructure) {
-      return { loX: 0, loZ: 0, hiX: 0, hiZ: 0 };
-    }
-
-    return { loX, loZ, hiX, hiZ };
-  }
-
-  /**
-   * Source parity: AIPlayer::getPlayerSuperweaponValue.
-   */
-  private getScriptSuperweaponTargetValue(
-    centerX: number,
-    centerZ: number,
-    targetSide: string,
-    radius: number,
-  ): number {
-    const minimumRadius = 4 * PATHFIND_CELL_SIZE;
-    const effectiveRadius = radius < minimumRadius ? minimumRadius : radius;
-    const radiusSqr = effectiveRadius * effectiveRadius;
-    const normalizedTargetSide = this.normalizeSide(targetSide);
-    if (!normalizedTargetSide) {
-      return 0;
-    }
-
-    let valueTotal = 0;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedTargetSide) {
-        continue;
-      }
-      if (entity.kindOf.has('AIRCRAFT')) {
-        const terrainY = this.resolveGroundHeight(entity.x, entity.z);
-        if ((entity.y - entity.baseHeight - terrainY) > SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD) {
-          continue;
-        }
-      }
-
-      const dx = centerX - entity.x;
-      const dz = centerZ - entity.z;
-      const distanceSqr = dx * dx + dz * dz;
-      if (distanceSqr >= radiusSqr) {
-        continue;
-      }
-
-      const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
-      if (!objectDef) {
-        continue;
-      }
-      const distance = Math.sqrt(distanceSqr);
-      const distanceFactor = 1 - (distance / (2 * effectiveRadius)); // 1.0 at center, 0.5 at radius edge.
-      let buildCost = this.resolveObjectBuildCost(objectDef, entity.side ?? '');
-      if (entity.kindOf.has('COMMANDCENTER')) {
-        buildCost /= 10;
-      }
-      if (buildCost > 3000) {
-        buildCost /= 10;
-      }
-      valueTotal += distanceFactor * buildCost;
-    }
-
-    return valueTotal;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerRepairStructure -> Player::repairStructure.
-   * Source only validates player + named object lookup, then forwards object ID to the
-   * AI repair queue (if this player has AI). Ownership is not validated here.
-   */
-  private executeScriptPlayerRepairNamedStructure(playerSide: string, targetBuildingId: number): boolean {
-    const normalizedSide = this.normalizeSide(playerSide);
-    if (!normalizedSide) {
-      return false;
-    }
-
-    const building = this.spawnedEntities.get(targetBuildingId);
-    if (!building || building.destroyed) {
-      return false;
-    }
-
-    // Source parity: Player::repairStructure only delegates when the player has an AI controller.
-    if (this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
-      return true;
-    }
-
-    return this.queueScriptSideRepairRequest(normalizedSide, building.id);
-  }
-
-  /**
    * Source parity: AIPlayer::repairStructure queueing.
    * Queues one repair request per target ID for the owning AI player.
    */
@@ -17898,60 +12266,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private resolveScriptCurrentPlayerSide(explicitPlayerSide: string): string | null {
-    const resolvedExplicit = this.resolveScriptPlayerSideFromInput(explicitPlayerSide);
-    if (resolvedExplicit) {
-      return resolvedExplicit;
-    }
-    return this.resolveScriptCurrentPlayerSideFromContext();
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedFireWeaponFollowingWaypointPath.
-   * C++ selects a waypoint-following-capable weapon, force-fires a projectile, then orders
-   * the projectile AI to follow the waypoint path from the closest node.
-   * This implementation mirrors that behavior by queuing a projectile damage event directly
-   * (without requiring a target object) and using route-length travel time from source to path end.
-   */
-  private executeScriptNamedFireWeaponFollowingWaypointPath(
-    entityId: number,
-    waypointPathLabel: string,
-  ): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    const route = this.resolveScriptWaypointRouteByPathLabel(waypointPathLabel, entity.x, entity.z);
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    const weaponSlot = this.findWaypointFollowingCapableWeaponSlot(entity);
-    if (weaponSlot === null) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-
-    const weapon = this.resolveAttackWeaponProfileForSetSelection(
-      entity.weaponTemplateSets,
-      entity.weaponSetFlagsMask,
-      registry,
-      weaponSlot,
-    );
-    if (!weapon || !weapon.projectileObjectName) {
-      return false;
-    }
-
-    this.queueWaypointPathProjectileEvent(entity, weapon, route);
-    return true;
-  }
-
-  private queueWaypointPathProjectileEvent(
+  /* @internal */ queueWaypointPathProjectileEvent(
     attacker: MapEntity,
     weapon: AttackWeaponProfile,
     route: readonly ScriptWaypointRouteNode[],
@@ -18016,18 +12331,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.emitWeaponFiredVisualEvent(attacker, weapon, { x: impactX, y: impactY, z: impactZ });
     this.registerActiveWeaponProjectileState(projectileVisualId, attacker, weapon, sourceX, sourceY, sourceZ);
     this.pendingWeaponDamageEvents.push(event);
-  }
-
-  private buildScriptProjectileWaypointPath(
-    sourceX: number,
-    sourceZ: number,
-    route: readonly ScriptWaypointRouteNode[],
-  ): VectorXZ[] {
-    const path: VectorXZ[] = [{ x: sourceX, z: sourceZ }];
-    for (const waypoint of route) {
-      path.push({ x: waypoint.x, z: waypoint.z });
-    }
-    return path;
   }
 
   private computeWaypointRouteTravelDistance(
@@ -18146,7 +12449,7 @@ export class GameLogicSubsystem implements Subsystem {
     return bestTarget;
   }
 
-  private findWaypointFollowingCapableWeaponSlot(entity: MapEntity): number | null {
+  /* @internal */ findWaypointFollowingCapableWeaponSlot(entity: MapEntity): number | null {
     const registry = this.iniDataRegistry;
     if (!registry) {
       return null;
@@ -18177,275 +12480,11 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: ScriptActions::doNamedFollowWaypoints / doNamedFollowWaypointsExact.
-   */
-  private executeScriptNamedFollowWaypoints(
-    entityId: number,
-    waypointPathLabel: string,
-    exact: boolean,
-  ): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed || !entity.canMove) {
-      return false;
-    }
-
-    const route = this.resolveScriptWaypointRouteByPathLabel(
-      waypointPathLabel,
-      entity.x,
-      entity.z,
-      exact,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
-    if (exact) {
-      return this.enqueueScriptWaypointRouteExact(entity, route, waypointPathLabel);
-    }
-    return this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel);
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamFollowWaypoints / doTeamFollowWaypointsExact.
-   */
-  private executeScriptTeamFollowWaypoints(
-    teamName: string,
-    waypointPathLabel: string,
-    asTeam: boolean,
-    exact: boolean,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const allTeamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (allTeamMembers.length === 0) {
-      return false;
-    }
-
-    const teamMembers = allTeamMembers.filter((entity) => entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptTeamCenter(allTeamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const route = this.resolveScriptWaypointRouteByPathLabel(
-      waypointPathLabel,
-      center.x,
-      center.z,
-      exact,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    let movedAny = false;
-    for (const entity of teamMembers) {
-      const routeToUse = asTeam
-        ? this.buildScriptWaypointRouteWithOffset(route, entity.x - center.x, entity.z - center.z)
-        : route;
-      const moved = exact
-        ? this.enqueueScriptWaypointRouteExact(entity, routeToUse, waypointPathLabel)
-        : this.enqueueScriptWaypointRoute(entity, routeToUse, waypointPathLabel);
-      if (moved) {
-        movedAny = true;
-      }
-    }
-    return movedAny;
-  }
-
-  private buildScriptWaypointRouteWithOffset(
-    route: readonly ScriptWaypointRouteNode[],
-    offsetX: number,
-    offsetZ: number,
-  ): ScriptWaypointRouteNode[] {
-    if (offsetX === 0 && offsetZ === 0) {
-      return route.map((node) => ({
-        x: node.x,
-        z: node.z,
-        pathLabels: [...node.pathLabels],
-      }));
-    }
-    return route.map((node) => ({
-      x: node.x + offsetX,
-      z: node.z + offsetZ,
-      pathLabels: [...node.pathLabels],
-    }));
-  }
-
-  /**
-   * Source parity: AIUpdateInterface::setPathFromWaypoint used by
-   * aiFollowWaypointPathExact{AsTeam}. Exact mode follows waypoint nodes
-   * directly without pathfinder-generated intermediate routing.
-   */
-  private enqueueScriptWaypointRouteExact(
-    entity: MapEntity,
-    route: readonly ScriptWaypointRouteNode[],
-    _completionPathName?: string,
-  ): boolean {
-    if (route.length === 0) {
-      return false;
-    }
-
-    this.cancelEntityCommandPathActions(entity.id);
-    this.clearAttackTarget(entity.id);
-
-    const directPath: VectorXZ[] = [{ x: entity.x, z: entity.z }];
-    for (const waypoint of route) {
-      directPath.push({ x: waypoint.x, z: waypoint.z });
-    }
-
-    entity.moving = true;
-    entity.movePath = directPath;
-    entity.pathIndex = 0;
-    entity.moveTarget = entity.movePath[0]!;
-    this.updatePathfindGoalCellFromPath(entity);
-
-    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route, 'START');
-    if (completionPathNames.length > 0) {
-      this.scriptPendingWaypointPathByEntityId.set(entity.id, {
-        pathNames: completionPathNames,
-        completionMode: 'ON_STATE_EXIT',
-      });
-    } else {
-      this.scriptPendingWaypointPathByEntityId.delete(entity.id);
-    }
-    return true;
-  }
-
-  private findScriptBuildDozerForTemplate(side: string, templateName: string): MapEntity | null {
-    let bestDozer: MapEntity | null = null;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (this.normalizeSide(entity.side) !== side) continue;
-      if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
-      if (!this.isEntityDozerCapable(entity)) continue;
-      if (!this.canEntityIssueBuildCommandForTemplate(entity, templateName, ['DOZER_CONSTRUCT', 'UNIT_BUILD'])) {
-        continue;
-      }
-      if (!bestDozer || entity.id < bestDozer.id) {
-        bestDozer = entity;
-      }
-    }
-    return bestDozer;
-  }
-
-  private resolveScriptSkirmishDefenseTemplateName(side: string): string | null {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (this.normalizeSide(entity.side) !== side) continue;
-      if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
-      if (!this.isEntityDozerCapable(entity)) continue;
-
-      let buildableTemplates = this.collectCommandSetTemplates(entity, ['DOZER_CONSTRUCT', 'UNIT_BUILD']);
-      if (buildableTemplates.length === 0 && entity.productionProfile) {
-        buildableTemplates = entity.productionProfile.quantityModifiers
-          .filter((modifier) => {
-            const upper = modifier.templateName.trim().toUpperCase();
-            return upper.length > 0 && !upper.includes('UPGRADE') && !upper.includes('SCIENCE');
-          })
-          .map((modifier) => modifier.templateName);
-      }
-
-      for (const templateName of buildableTemplates) {
-        if (this.isScriptSkirmishDefenseTemplateName(templateName)) {
-          return templateName;
-        }
-      }
-    }
-    return null;
-  }
-
-  private isScriptSkirmishDefenseTemplateName(templateName: string): boolean {
-    const normalizedTemplate = templateName.trim().toUpperCase();
-    if (!normalizedTemplate) {
-      return false;
-    }
-
-    for (const keyword of SCRIPT_SKIRMISH_DEFENSE_TEMPLATE_KEYWORDS) {
-      if (normalizedTemplate.includes(keyword)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamFollowSkirmishApproachPath.
-   * Uses waypoint path labels suffixed with enemy MP start index (e.g. "AttackPath2").
-   */
-  private executeScriptTeamFollowSkirmishApproachPath(
-    teamName: string,
-    waypointPathLabel: string,
-    asTeam: boolean,
-    explicitPlayerSide: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const allTeamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (allTeamMembers.length === 0) {
-      return false;
-    }
-
-    const teamMembers = allTeamMembers.filter((entity) => entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptTeamCenter(allTeamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const route = this.resolveScriptSkirmishApproachRoute(
-      waypointPathLabel,
-      side,
-      center.x,
-      center.z,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    const firstUnit = allTeamMembers[0] ?? null;
-    if (firstUnit) {
-      this.checkScriptSkirmishApproachPathBridges(side, firstUnit, route);
-    }
-
-    let movedAny = false;
-    for (const entity of teamMembers) {
-      const routeToUse = asTeam
-        ? this.buildScriptWaypointRouteWithOffset(route, entity.x - center.x, entity.z - center.z)
-        : route;
-      if (this.enqueueScriptWaypointRoute(entity, routeToUse)) {
-        movedAny = true;
-      }
-    }
-    return movedAny;
-  }
-
-  /**
    * Source parity: AISkirmishPlayer::checkBridges preflight used by
    * doTeamFollowSkirmishApproachPath. If a broken bridge is required for pathing,
    * queue an AI repair request for the controlling player.
    */
-  private checkScriptSkirmishApproachPathBridges(
+  /* @internal */ checkScriptSkirmishApproachPathBridges(
     controllingSide: string,
     firstUnit: MapEntity,
     route: readonly ScriptWaypointRouteNode[],
@@ -18481,33 +12520,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private findScriptBrokenBridgeRepairTarget(
-    startX: number,
-    startZ: number,
-    targetX: number,
-    targetZ: number,
-    mover: MapEntity,
-  ): number | null {
-    for (const [segmentId, segment] of this.bridgeSegments.entries()) {
-      if (segment.passable) {
-        continue;
-      }
-      const pathExistsIfRepaired = this.withTemporarilyPassableBridgeSegment(segmentId, () => {
-        const repairedPath = this.findPath(startX, startZ, targetX, targetZ, mover);
-        return repairedPath.length > 0;
-      });
-      if (!pathExistsIfRepaired) {
-        continue;
-      }
-      const repairControlEntityId = this.resolveScriptBridgeRepairControlEntityId(segmentId);
-      if (repairControlEntityId !== null) {
-        return repairControlEntityId;
-      }
-    }
-    return null;
-  }
-
-  private withTemporarilyPassableBridgeSegment<T>(segmentId: number, callback: () => T): T {
+  /* @internal */ withTemporarilyPassableBridgeSegment<T>(segmentId: number, callback: () => T): T {
     const grid = this.navigationGrid;
     const segment = this.bridgeSegments.get(segmentId);
     if (!grid || !segment || segment.passable) {
@@ -18537,401 +12550,6 @@ export class GameLogicSubsystem implements Subsystem {
         grid.bridgeTransitions[index] = value;
       }
     }
-  }
-
-  private resolveScriptBridgeRepairControlEntityId(segmentId: number): number | null {
-    let bridgeEntityId: number | null = null;
-    for (const [entityId, mappedSegmentId] of this.bridgeSegmentByControlEntity.entries()) {
-      if (mappedSegmentId !== segmentId) {
-        continue;
-      }
-      const controlEntity = this.spawnedEntities.get(entityId);
-      if (!controlEntity || controlEntity.destroyed) {
-        continue;
-      }
-      if (controlEntity.kindOf.has('BRIDGE_TOWER')) {
-        return entityId;
-      }
-      if (bridgeEntityId === null) {
-        bridgeEntityId = entityId;
-      }
-    }
-    return bridgeEntityId;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamMoveToSkirmishApproachPath.
-   * Moves each team member to the closest waypoint on the enemy-suffixed approach path.
-   */
-  private executeScriptTeamMoveToSkirmishApproachPath(
-    teamName: string,
-    waypointPathLabel: string,
-    explicitPlayerSide: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const side = this.resolveScriptCurrentPlayerSide(explicitPlayerSide);
-    if (!side) {
-      return false;
-    }
-
-    const allTeamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed);
-    if (allTeamMembers.length === 0) {
-      return false;
-    }
-
-    const teamMembers = allTeamMembers.filter((entity) => entity.canMove);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const center = this.resolveScriptTeamCenter(allTeamMembers);
-    if (!center) {
-      return false;
-    }
-
-    const route = this.resolveScriptSkirmishApproachRoute(
-      waypointPathLabel,
-      side,
-      center.x,
-      center.z,
-    );
-    if (!route || route.length === 0) {
-      return false;
-    }
-
-    const firstWaypoint = route[0]!;
-    let movedAny = false;
-    for (const entity of teamMembers) {
-      this.applyCommand({
-        type: 'moveTo',
-        entityId: entity.id,
-        targetX: firstWaypoint.x,
-        targetZ: firstWaypoint.z,
-        commandSource: 'SCRIPT',
-      });
-      if (entity.moving) {
-        movedAny = true;
-      }
-    }
-    return movedAny;
-  }
-
-  private resolveScriptTeamCenter(
-    teamMembers: readonly MapEntity[],
-  ): { x: number; z: number } | null {
-    if (teamMembers.length === 0) {
-      return null;
-    }
-    let sumX = 0;
-    let sumZ = 0;
-    for (const member of teamMembers) {
-      sumX += member.x;
-      sumZ += member.z;
-    }
-    return {
-      x: sumX / teamMembers.length,
-      z: sumZ / teamMembers.length,
-    };
-  }
-
-  /**
-   * Source parity: AIGroup::getCenter.
-   * Uses non-held members with AI first; if none exist, falls back to non-held members.
-   */
-  private resolveScriptAIGroupCenter(
-    teamMembers: readonly MapEntity[],
-  ): { x: number; z: number } | null {
-    if (teamMembers.length === 0) {
-      return null;
-    }
-
-    let sumX = 0;
-    let sumZ = 0;
-    let count = 0;
-    for (const member of teamMembers) {
-      if (member.objectStatusFlags.has('DISABLED_HELD')) {
-        continue;
-      }
-      if (!member.canMove) {
-        continue;
-      }
-      sumX += member.x;
-      sumZ += member.z;
-      count += 1;
-    }
-
-    if (count === 0) {
-      for (const member of teamMembers) {
-        if (member.objectStatusFlags.has('DISABLED_HELD')) {
-          continue;
-        }
-        sumX += member.x;
-        sumZ += member.z;
-        count += 1;
-      }
-    }
-
-    if (count <= 0) {
-      return null;
-    }
-    return {
-      x: sumX / count,
-      z: sumZ / count,
-    };
-  }
-
-  private resolveScriptSkirmishApproachRoute(
-    waypointPathLabel: string,
-    currentPlayerSide: string,
-    centerX: number,
-    centerZ: number,
-    exactRoute = false,
-  ): ScriptWaypointRouteNode[] | null {
-    const basePathLabel = waypointPathLabel.trim();
-    if (!basePathLabel) {
-      return null;
-    }
-
-    const enemySide = this.resolveScriptSkirmishEnemySide(currentPlayerSide);
-    if (!enemySide) {
-      return null;
-    }
-    const enemyStartPosition = this.getSkirmishPlayerStartPosition(enemySide);
-    if (enemyStartPosition === null) {
-      return null;
-    }
-
-    const fullPathLabel = `${basePathLabel}${enemyStartPosition}`.trim().toUpperCase();
-    if (!fullPathLabel) {
-      return null;
-    }
-    return this.resolveScriptWaypointRouteByNormalizedLabel(fullPathLabel, centerX, centerZ, exactRoute);
-  }
-
-  private resolveScriptWaypointRouteByPathLabel(
-    waypointPathLabel: string,
-    centerX: number,
-    centerZ: number,
-    exactRoute = false,
-  ): ScriptWaypointRouteNode[] | null {
-    const normalizedPathLabel = waypointPathLabel.trim().toUpperCase();
-    if (!normalizedPathLabel) {
-      return null;
-    }
-    return this.resolveScriptWaypointRouteByNormalizedLabel(normalizedPathLabel, centerX, centerZ, exactRoute);
-  }
-
-  private resolveScriptWaypointRouteByNormalizedLabel(
-    normalizedPathLabel: string,
-    centerX: number,
-    centerZ: number,
-    exactRoute = false,
-  ): ScriptWaypointRouteNode[] | null {
-    const waypointData = this.loadedMapData?.waypoints;
-    if (!waypointData) {
-      return null;
-    }
-
-    const routeNodes = waypointData.nodes.filter((node) => {
-      const labels = [node.pathLabel1, node.pathLabel2, node.pathLabel3];
-      for (const label of labels) {
-        if (label && label.trim().toUpperCase() === normalizedPathLabel) {
-          return true;
-        }
-      }
-      return false;
-    });
-    if (routeNodes.length === 0) {
-      return null;
-    }
-
-    let startNode = routeNodes[0]!;
-    let bestDistSqr = Infinity;
-    for (const node of routeNodes) {
-      const dx = node.position.x - centerX;
-      const dz = node.position.y - centerZ;
-      const distSqr = dx * dx + dz * dz;
-      if (distSqr < bestDistSqr) {
-        startNode = node;
-        bestDistSqr = distSqr;
-      }
-    }
-
-    const routeNodesById = new Map<number, (typeof routeNodes)[number]>();
-    for (const node of routeNodes) {
-      routeNodesById.set(node.id, node);
-    }
-
-    const outgoingById = new Map<number, number[]>();
-    for (const link of waypointData.links) {
-      if (!routeNodesById.has(link.waypoint1) || !routeNodesById.has(link.waypoint2)) {
-        continue;
-      }
-      let outgoing = outgoingById.get(link.waypoint1);
-      if (!outgoing) {
-        outgoing = [];
-        outgoingById.set(link.waypoint1, outgoing);
-      }
-      outgoing.push(link.waypoint2);
-    }
-
-    const route: ScriptWaypointRouteNode[] = [];
-    let currentNode: (typeof routeNodes)[number] | undefined = startNode;
-    if (exactRoute) {
-      // Source parity: AIUpdateInterface::setPathFromWaypoint() follows link(0)
-      // repeatedly with WAYPOINT_PATH_LIMIT safety cap.
-      let count = 0;
-      while (currentNode && count < SCRIPT_WAYPOINT_PATH_LIMIT) {
-        route.push({
-          x: currentNode.position.x,
-          z: currentNode.position.y,
-          pathLabels: [
-            currentNode.pathLabel1 ?? '',
-            currentNode.pathLabel2 ?? '',
-            currentNode.pathLabel3 ?? '',
-          ].filter((label) => label.trim().length > 0),
-        });
-        count += 1;
-
-        const outgoing = outgoingById.get(currentNode.id);
-        if (!outgoing || outgoing.length === 0) {
-          break;
-        }
-        const nextNode = routeNodesById.get(outgoing[0]!);
-        if (!nextNode) {
-          break;
-        }
-        currentNode = nextNode;
-      }
-    } else {
-      // Source parity bridge: AIFollowWaypointPathState::getNextWaypoint() in
-      // ALLOW_BACKTRACK mode picks a random outgoing link each step (including
-      // immediate backtracking). We precompute a capped route here.
-      let count = 0;
-      while (currentNode && count < SCRIPT_WAYPOINT_PATH_LIMIT) {
-        route.push({
-          x: currentNode.position.x,
-          z: currentNode.position.y,
-          pathLabels: [
-            currentNode.pathLabel1 ?? '',
-            currentNode.pathLabel2 ?? '',
-            currentNode.pathLabel3 ?? '',
-          ].filter((label) => label.trim().length > 0),
-        });
-        count += 1;
-
-        const outgoing = outgoingById.get(currentNode.id);
-        if (!outgoing || outgoing.length === 0) {
-          break;
-        }
-        const nextIndex = outgoing.length > 1
-          ? this.gameRandom.nextRange(0, outgoing.length - 1)
-          : 0;
-        const nextNode = routeNodesById.get(outgoing[nextIndex]!);
-        if (!nextNode) {
-          break;
-        }
-        currentNode = nextNode;
-      }
-    }
-
-    return route.length > 0 ? route : null;
-  }
-
-  private resolveScriptSkirmishEnemySide(currentPlayerSide: string): string | null {
-    const normalizedCurrentSide = this.normalizeSide(currentPlayerSide);
-    if (!normalizedCurrentSide) {
-      return null;
-    }
-
-    const enemySides: string[] = [];
-    for (const side of this.collectKnownSides()) {
-      if (side === normalizedCurrentSide) {
-        continue;
-      }
-      if (this.getTeamRelationshipBySides(normalizedCurrentSide, side) !== RELATIONSHIP_ENEMIES) {
-        continue;
-      }
-      enemySides.push(side);
-    }
-
-    if (enemySides.length === 0) {
-      return null;
-    }
-
-    const humanEnemy = enemySides.find((side) => this.getSidePlayerType(side) === 'HUMAN');
-    if (humanEnemy) {
-      return humanEnemy;
-    }
-
-    return enemySides[0] ?? null;
-  }
-
-  private enqueueScriptWaypointRoute(
-    entity: MapEntity,
-    route: readonly ScriptWaypointRouteNode[],
-    _completionPathName?: string,
-  ): boolean {
-    if (route.length === 0) {
-      return false;
-    }
-
-    const firstWaypoint = route[0]!;
-    this.applyCommand({
-      type: 'moveTo',
-      entityId: entity.id,
-      targetX: firstWaypoint.x,
-      targetZ: firstWaypoint.z,
-      commandSource: 'SCRIPT',
-    });
-    if (!entity.moving) {
-      this.scriptPendingWaypointPathByEntityId.delete(entity.id);
-      return false;
-    }
-
-    if (route.length > 1) {
-      for (let index = 1; index < route.length; index += 1) {
-        const waypoint = route[index]!;
-        entity.movePath.push({ x: waypoint.x, z: waypoint.z });
-      }
-    }
-
-    const completionPathNames = this.resolveScriptWaypointCompletionPathNames(route);
-    if (completionPathNames.length > 0) {
-      this.scriptPendingWaypointPathByEntityId.set(entity.id, {
-        pathNames: completionPathNames,
-        completionMode: 'ON_REACH_END',
-      });
-    } else {
-      this.scriptPendingWaypointPathByEntityId.delete(entity.id);
-    }
-    return true;
-  }
-
-  private resolveScriptWaypointCompletionPathNames(
-    route: readonly ScriptWaypointRouteNode[],
-    completionNode: 'START' | 'END' = 'END',
-  ): string[] {
-    const completionNames = new Set<string>();
-
-    const waypoint = completionNode === 'START'
-      ? route[0]
-      : route[route.length - 1];
-    if (waypoint) {
-      for (const pathLabel of waypoint.pathLabels) {
-        const normalizedLabel = this.normalizeScriptCompletionName(pathLabel);
-        if (normalizedLabel) {
-          completionNames.add(normalizedLabel);
-        }
-      }
-    }
-
-    return Array.from(completionNames);
   }
 
   private markScriptWaypointPathCompleted(entityId: number): void {
@@ -18976,256 +12594,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private getScriptActionHumanSides(): Set<string> {
-    const sides = new Set<string>();
-    for (const [side, playerType] of this.sidePlayerTypes.entries()) {
-      if (playerType === 'HUMAN') {
-        sides.add(side);
-      }
-    }
-    return sides;
-  }
-
-  /**
-   * Source parity: ScriptActions::doIdleAllPlayerUnits(AsciiString::TheEmptyString).
-   * Marks human-player sides as idled and stops currently active movable units.
-   */
-  private executeScriptIdleAllUnits(): boolean {
-    const humanSides = this.getScriptActionHumanSides();
-    if (humanSides.size === 0) {
-      return true;
-    }
-
-    for (const side of humanSides) {
-      this.sideUnitsShouldIdleOrResume.set(side, true);
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      const side = this.normalizeSide(entity.side);
-      if (!side || !humanSides.has(side)) {
-        continue;
-      }
-      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doResumeSupplyTruckingForIdleUnits(AsciiString::TheEmptyString).
-   * Clears the idle flag for human-player sides so supply-truck AI can resume.
-   */
-  private executeScriptResumeSupplyTrucking(): boolean {
-    const humanSides = this.getScriptActionHumanSides();
-    if (humanSides.size === 0) {
-      return true;
-    }
-
-    for (const side of humanSides) {
-      this.sideUnitsShouldIdleOrResume.set(side, false);
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || !entity.supplyTruckProfile) {
-        continue;
-      }
-      const side = this.normalizeSide(entity.side);
-      if (!side || !humanSides.has(side)) {
-        continue;
-      }
-      const state = this.supplyTruckStates.get(entity.id);
-      if (!state) {
-        continue;
-      }
-      state.aiState = SupplyTruckAIState.IDLE;
-      state.targetWarehouseId = null;
-      state.targetDepotId = null;
-      state.actionDelayFinishFrame = this.frameCounter;
-      state.forceBusy = false;
-    }
-    return true;
-  }
-
-  private executeScriptNamedStop(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.applyCommand({ type: 'stop', entityId, commandSource: 'SCRIPT' });
-    return true;
-  }
-
-  private executeScriptTeamStop(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'SCRIPT' });
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedGuard.
-   * Orders the unit to guard its current location using normal guard mode.
-   */
-  private executeScriptNamedGuard(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed || !entity.canMove) {
-      return false;
-    }
-    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
-    this.applyCommand({
-      type: 'guardPosition',
-      entityId: entity.id,
-      targetX: entity.x,
-      targetZ: entity.z,
-      guardMode: 0,
-      commandSource: 'SCRIPT',
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamGuard.
-   * Orders each team member to guard its own current position.
-   */
-  private executeScriptTeamGuard(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'guardPosition',
-        entityId: entity.id,
-        targetX: entity.x,
-        targetZ: entity.z,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
-      issuedAny = true;
-    }
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamGuardPosition.
-   * Uses a named waypoint and sets each team member to guard that location.
-   */
-  private executeScriptTeamGuardPosition(teamName: string, waypointName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!team || !waypoint) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'guardPosition',
-        entityId: entity.id,
-        targetX: waypoint.x,
-        targetZ: waypoint.z,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamGuardObject.
-   * Uses a named/target entity and sets each team member to guard that object.
-   */
-  private executeScriptTeamGuardObject(teamName: string, targetEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const target = this.spawnedEntities.get(targetEntityId);
-    if (!team || !target || target.destroyed) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'guardObject',
-        entityId: entity.id,
-        targetEntityId: target.id,
-        guardMode: 0,
-        commandSource: 'SCRIPT',
-      });
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doGuardSupplyCenter.
-   * Resolves the controlling side's best supply source by minimum cash and guards it.
-   */
-  private executeScriptTeamGuardSupplyCenter(teamName: string, minimumCash: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (!controllingSide) {
-      return false;
-    }
-    const supplySource = this.findScriptSupplySourceForSide(controllingSide, minimumCash);
-    if (!supplySource) {
-      return false;
-    }
-    return this.executeScriptTeamGuardObject(team.nameUpper, supplySource.id);
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamGuardInTunnelNetwork.
-   * Orders each team member into the nearest friendly tunnel-network node.
-   */
-  private executeScriptTeamGuardInTunnelNetwork(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || this.isEntityContained(entity)) {
-        continue;
-      }
-      const tunnel = this.findNearestFriendlyTunnelNetworkForEntity(entity);
-      if (!tunnel) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'enterTransport',
-        entityId: entity.id,
-        targetTransportId: tunnel.id,
-        commandSource: 'SCRIPT',
-      });
-      issuedAny = true;
-    }
-    return issuedAny;
-  }
-
-  private findNearestFriendlyTunnelNetworkForEntity(entity: MapEntity): MapEntity | null {
+  /* @internal */ findNearestFriendlyTunnelNetworkForEntity(entity: MapEntity): MapEntity | null {
     const normalizedSide = this.normalizeSide(entity.side);
     if (!normalizedSide) {
       return null;
@@ -19258,98 +12627,7 @@ export class GameLogicSubsystem implements Subsystem {
     return bestTunnel;
   }
 
-  /**
-   * Source parity: ScriptActions::doTeamGuardArea.
-   * Uses trigger-area center/radius from PolygonTrigger and orders team members to guard that area.
-   */
-  private executeScriptTeamGuardArea(teamName: string, triggerName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (!team || !area) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.initGuardArea(
-        entity.id,
-        area.triggerIndex,
-        area.centerX,
-        area.centerZ,
-        0,
-        area.radius,
-      );
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedFaceNamed.
-   */
-  private executeScriptNamedFaceNamed(entityId: number, targetEntityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    const target = this.spawnedEntities.get(targetEntityId);
-    if (!entity || !target || entity.destroyed || target.destroyed) {
-      return false;
-    }
-    this.faceEntityTowardPosition(entity, target.x, target.z);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedFaceWaypoint.
-   */
-  private executeScriptNamedFaceWaypoint(entityId: number, waypointName: string): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!entity || entity.destroyed || !waypoint) {
-      return false;
-    }
-    this.faceEntityTowardPosition(entity, waypoint.x, waypoint.z);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamFaceNamed.
-   */
-  private executeScriptTeamFaceNamed(teamName: string, targetEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const target = this.spawnedEntities.get(targetEntityId);
-    if (!team || !target || target.destroyed) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.faceEntityTowardPosition(entity, target.x, target.z);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamFaceWaypoint.
-   */
-  private executeScriptTeamFaceWaypoint(teamName: string, waypointName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!team || !waypoint) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.faceEntityTowardPosition(entity, waypoint.x, waypoint.z);
-    }
-    return true;
-  }
-
-  private faceEntityTowardPosition(entity: MapEntity, targetX: number, targetZ: number): void {
+  /* @internal */ faceEntityTowardPosition(entity: MapEntity, targetX: number, targetZ: number): void {
     const dx = targetX - entity.x;
     const dz = targetZ - entity.z;
     if (dx === 0 && dz === 0) {
@@ -19361,7 +12639,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: ScriptActions::doMoveUnitTowardsNearest / doMoveTeamTowardsNearest.
    */
-  private findNearestScriptMoveTargetByType(
+  /* @internal */ findNearestScriptMoveTargetByType(
     sourceX: number,
     sourceZ: number,
     mapStatusEntity: MapEntity,
@@ -19413,224 +12691,7 @@ export class GameLogicSubsystem implements Subsystem {
     return bestTarget;
   }
 
-  /**
-   * Source parity: ScriptActions::doMoveUnitTowardsNearest.
-   */
-  private executeScriptMoveUnitTowardsNearestObjectType(
-    entityId: number,
-    objectTypeName: string,
-    triggerName: string,
-  ): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed || !entity.canMove) {
-      return false;
-    }
-
-    const target = this.findNearestScriptMoveTargetByType(
-      entity.x,
-      entity.z,
-      entity,
-      objectTypeName,
-      triggerName,
-    );
-    if (!target) {
-      return false;
-    }
-
-    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
-    const interactionDistance = this.resolveEntityInteractionDistance(entity, target);
-    this.issueMoveTo(
-      entity.id,
-      target.x,
-      target.z,
-      interactionDistance,
-    );
-    if (entity.moveTarget === null) {
-      this.issueMoveTo(entity.id, target.x, target.z, interactionDistance, true);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doMoveTeamTowardsNearest.
-   */
-  private executeScriptMoveTeamTowardsNearestObjectType(
-    teamName: string,
-    objectTypeName: string,
-    triggerName: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team);
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    let movedAny = false;
-    // Source parity: Team::getEstimateTeamPosition returns the first team member position.
-    const estimatedAnchor = teamMembers[0] ?? null;
-    if (!estimatedAnchor) {
-      return movedAny;
-    }
-    // Source parity: doMoveTeamTowardsNearest selects map-status filter seed from the
-    // first team member with AIUpdateInterface.
-    let mapStatusEntity: MapEntity | null = null;
-    for (const member of teamMembers) {
-      if (member.destroyed || !member.canMove) {
-        continue;
-      }
-      mapStatusEntity = member;
-      break;
-    }
-    if (!mapStatusEntity) {
-      return movedAny;
-    }
-
-    const target = this.findNearestScriptMoveTargetByType(
-      estimatedAnchor.x,
-      estimatedAnchor.z,
-      mapStatusEntity,
-      objectTypeName,
-      triggerName,
-    );
-    if (!target) {
-      return movedAny;
-    }
-
-    for (const member of teamMembers) {
-      if (member.destroyed || !member.canMove) {
-        return movedAny;
-      }
-      this.setEntityLocomotorSet(member.id, LOCOMOTORSET_NORMAL);
-      const interactionDistance = this.resolveEntityInteractionDistance(member, target);
-      this.issueMoveTo(
-        member.id,
-        target.x,
-        target.z,
-        interactionDistance,
-      );
-      if (member.moveTarget === null) {
-        this.issueMoveTo(member.id, target.x, target.z, interactionDistance, true);
-      }
-      if (member.moving) {
-        movedAny = true;
-      }
-    }
-
-    return movedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doForceObjectSelection.
-   * Selects the first matching object type in the team using C++ ID ordering.
-   */
-  private executeScriptObjectForceSelect(
-    teamName: string,
-    objectTypeName: string,
-    centerInView: boolean,
-    audioToPlay: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    const objectTypeUpper = objectTypeName.trim().toUpperCase();
-    if (!objectTypeUpper) {
-      return false;
-    }
-
-    let bestGuess: MapEntity | null = null;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (entity.templateName.trim().toUpperCase() !== objectTypeUpper) {
-        continue;
-      }
-      if (!bestGuess || entity.id < bestGuess.id) {
-        bestGuess = entity;
-      }
-    }
-
-    if (!bestGuess) {
-      return false;
-    }
-
-    this.selectedEntityIds = [bestGuess.id];
-    this.selectedEntityId = bestGuess.id;
-    this.updateSelectionHighlight();
-
-    if (centerInView) {
-      this.requestScriptCameraModMoveToSelection();
-    }
-
-    const normalizedAudioName = audioToPlay.trim();
-    if (normalizedAudioName) {
-      this.requestScriptPlaySoundEffect(normalizedAudioName);
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doDestroyAllContained.
-   * kill() applies UNRESISTABLE max-health damage for each contained unit.
-   */
-  private executeScriptUnitDestroyAllContained(containerEntityId: number): boolean {
-    const container = this.spawnedEntities.get(containerEntityId);
-    if (!container || container.destroyed) {
-      return false;
-    }
-
-    const containedIds = this.collectContainedEntityIds(container.id);
-    for (const passengerId of containedIds) {
-      const passenger = this.spawnedEntities.get(passengerId);
-      if (!passenger || passenger.destroyed) {
-        continue;
-      }
-      this.applyWeaponDamageAmount(null, passenger, passenger.maxHealth, 'UNRESISTABLE');
-    }
-    return true;
-  }
-
-  private resolveScriptContainerCapacity(container: MapEntity): number {
-    const contain = container.containProfile;
-    if (!contain) {
-      return 0;
-    }
-    switch (contain.moduleType) {
-      case 'GARRISON':
-        return contain.garrisonCapacity;
-      case 'TUNNEL':
-        return this.config.maxTunnelCapacity;
-      default:
-        return contain.transportCapacity;
-    }
-  }
-
-  private resolveScriptContainedControllingPlayerToken(container: MapEntity): string | null {
-    for (const passengerId of this.collectContainedEntityIds(container.id)) {
-      const passenger = this.spawnedEntities.get(passengerId);
-      if (!passenger || passenger.destroyed) {
-        continue;
-      }
-      const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(passenger);
-      if (ownerToken) {
-        return ownerToken;
-      }
-    }
-    return null;
-  }
-
-  private isScriptInternetCenterBuilding(entity: MapEntity): boolean {
-    const kindOf = this.resolveEntityKindOfSet(entity);
-    return kindOf.has('FS_INTERNET_CENTER') || entity.containProfile?.moduleType === 'INTERNET_HACK';
-  }
-
-  private canScriptOwnerUseBuildingContainer(building: MapEntity, ownerToken: string | null): boolean {
+  /* @internal */ canScriptOwnerUseBuildingContainer(building: MapEntity, ownerToken: string | null): boolean {
     if (!this.resolveEntityKindOfSet(building).has('STRUCTURE')) {
       return false;
     }
@@ -19641,7 +12702,7 @@ export class GameLogicSubsystem implements Subsystem {
     return occupiedOwnerToken === null || (ownerToken !== null && occupiedOwnerToken === ownerToken);
   }
 
-  private issueScriptEnterContainer(entity: MapEntity, container: MapEntity): boolean {
+  /* @internal */ issueScriptEnterContainer(entity: MapEntity, container: MapEntity): boolean {
     const containProfile = container.containProfile;
     if (!containProfile) {
       return false;
@@ -19661,988 +12722,6 @@ export class GameLogicSubsystem implements Subsystem {
       commandSource: 'SCRIPT',
     });
     return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedEnterNamed.
-   */
-  private executeScriptNamedEnterNamed(entityId: number, targetContainerEntityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    const container = this.spawnedEntities.get(targetContainerEntityId);
-    if (!entity || !container || entity.destroyed || container.destroyed) {
-      return false;
-    }
-    // Source parity: ScriptActions::doNamedEnterNamed chooses LOCOMOTORSET_NORMAL
-    // before issuing aiEnter.
-    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
-    return this.issueScriptEnterContainer(entity, container);
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamEnterNamed.
-   */
-  private executeScriptTeamEnterNamed(teamName: string, targetContainerEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const container = this.spawnedEntities.get(targetContainerEntityId);
-    if (!team || !container || container.destroyed) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.issueScriptEnterContainer(entity, container)) {
-        issuedAny = true;
-      }
-    }
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedExitAll.
-   */
-  private executeScriptNamedExitAll(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed || !entity.containProfile) {
-      return false;
-    }
-    // Source parity: ScriptActions::doNamedExitAll chooses LOCOMOTORSET_NORMAL
-    // before issuing aiEvacuate.
-    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
-    this.applyCommand({
-      type: 'evacuate',
-      entityId: entity.id,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamExitAll (groupEvacuate).
-   */
-  private executeScriptTeamExitAll(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.containProfile) {
-        continue;
-      }
-      this.applyCommand({
-        type: 'evacuate',
-        entityId: entity.id,
-      });
-      issuedAny = true;
-    }
-    return issuedAny;
-  }
-
-  private findScriptNearestGarrisonBuilding(
-    source: MapEntity,
-    requireInternetCenter: boolean,
-  ): MapEntity | null {
-    const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(source);
-    if (!ownerToken) {
-      return null;
-    }
-    const sourceOffMap = this.isEntityOffMap(source);
-
-    let nearest: MapEntity | null = null;
-    let nearestDistSq = Number.POSITIVE_INFINITY;
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || candidate.id === source.id) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-        continue;
-      }
-      if (!this.canScriptOwnerUseBuildingContainer(candidate, ownerToken)) {
-        continue;
-      }
-      const isInternetCenter = this.isScriptInternetCenterBuilding(candidate);
-      if (requireInternetCenter) {
-        if (!isInternetCenter) {
-          continue;
-        }
-      } else if (isInternetCenter) {
-        continue;
-      }
-
-      const capacity = this.resolveScriptContainerCapacity(candidate);
-      if (capacity > 0 && this.collectContainedEntityIds(candidate.id).length >= capacity) {
-        continue;
-      }
-
-      const dx = candidate.x - source.x;
-      const dz = candidate.z - source.z;
-      const distSq = (dx * dx) + (dz * dz);
-      if (
-        distSq < nearestDistSq
-        || (distSq === nearestDistSq && nearest !== null && candidate.id < nearest.id)
-        || (distSq === nearestDistSq && nearest === null)
-      ) {
-        nearest = candidate;
-        nearestDistSq = distSq;
-      }
-    }
-
-    return nearest;
-  }
-
-  private executeScriptTeamGarrisonSpecificBuilding(teamName: string, buildingEntityId: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    const building = this.spawnedEntities.get(buildingEntityId);
-    if (!team || !building || building.destroyed) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team).filter((entity) => !entity.destroyed);
-    const sourceMember = teamMembers[0];
-    if (!sourceMember) {
-      return false;
-    }
-
-    let issuedAny = false;
-    const controllingOwnerToken = this.resolveScriptTeamControllingPlayerTokenForAffiliation(team, sourceMember);
-    if (!this.canScriptOwnerUseBuildingContainer(building, controllingOwnerToken)) {
-      return false;
-    }
-    for (const member of teamMembers) {
-      if (this.issueScriptEnterContainer(member, building)) {
-        issuedAny = true;
-      }
-    }
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamGarrisonNearestBuilding.
-   * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
-   */
-  private executeScriptTeamGarrisonNearestBuilding(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    return this.executeScriptSingleTeamGarrisonNearestBuilding(team);
-  }
-
-  private executeScriptSingleTeamGarrisonNearestBuilding(
-    team: ScriptTeamRecord,
-    handledEntityIds: Set<number> | null = null,
-  ): boolean {
-    const teamMembers = this.getScriptTeamMemberEntities(team)
-      .filter((entity) => !entity.destroyed && (handledEntityIds ? !handledEntityIds.has(entity.id) : true));
-    if (teamMembers.length === 0) {
-      return false;
-    }
-
-    const leader = teamMembers[0]!;
-    const controllingOwnerToken = this.resolveScriptTeamControllingPlayerTokenForAffiliation(team, leader);
-    if (!controllingOwnerToken) {
-      return false;
-    }
-    const requireInternetCenter = this.resolveEntityKindOfSet(leader).has('MONEY_HACKER');
-    const leaderOffMap = this.isEntityOffMap(leader);
-    const candidates = Array.from(this.spawnedEntities.values())
-      .filter((candidate) => {
-        if (candidate.destroyed) {
-          return false;
-        }
-        if (this.isEntityOffMap(candidate) !== leaderOffMap) {
-          return false;
-        }
-        if (!this.canScriptOwnerUseBuildingContainer(candidate, controllingOwnerToken)) {
-          return false;
-        }
-        const isInternetCenter = this.isScriptInternetCenterBuilding(candidate);
-        if (requireInternetCenter) {
-          if (!isInternetCenter) {
-            return false;
-          }
-        } else if (isInternetCenter) {
-          return false;
-        }
-        return true;
-      })
-      .sort((left, right) => {
-        const leftDx = left.x - leader.x;
-        const leftDz = left.z - leader.z;
-        const rightDx = right.x - leader.x;
-        const rightDz = right.z - leader.z;
-        const leftDistSq = (leftDx * leftDx) + (leftDz * leftDz);
-        const rightDistSq = (rightDx * rightDx) + (rightDz * rightDz);
-        if (leftDistSq !== rightDistSq) {
-          return leftDistSq - rightDistSq;
-        }
-        return left.id - right.id;
-      });
-
-    let memberIndex = 0;
-    let issuedAny = false;
-    for (const building of candidates) {
-      const capacity = this.resolveScriptContainerCapacity(building);
-      if (capacity <= 0) {
-        continue;
-      }
-      const occupants = this.collectContainedEntityIds(building.id).length;
-      let slotsAvailable = capacity - occupants;
-      while (slotsAvailable > 0 && memberIndex < teamMembers.length) {
-        const member = teamMembers[memberIndex]!;
-        memberIndex += 1;
-        const kindOf = this.resolveEntityKindOfSet(member);
-        if (!kindOf.has('INFANTRY') || kindOf.has('NO_GARRISON')) {
-          continue;
-        }
-        if (this.issueScriptEnterContainer(member, building)) {
-          handledEntityIds?.add(member.id);
-          issuedAny = true;
-          slotsAvailable -= 1;
-        }
-      }
-      if (memberIndex >= teamMembers.length) {
-        break;
-      }
-    }
-
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doUnitGarrisonSpecificBuilding.
-   */
-  private executeScriptNamedGarrisonSpecificBuilding(entityId: number, buildingEntityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    const building = this.spawnedEntities.get(buildingEntityId);
-    if (!entity || !building || entity.destroyed || building.destroyed) {
-      return false;
-    }
-    const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
-    if (!ownerToken) {
-      return false;
-    }
-    if (!this.canScriptOwnerUseBuildingContainer(building, ownerToken)) {
-      return false;
-    }
-    return this.issueScriptEnterContainer(entity, building);
-  }
-
-  /**
-   * Source parity: ScriptActions::doUnitGarrisonNearestBuilding.
-   * Zero Hour behavior preserves MoneyHacker internet-center target filtering.
-   */
-  private executeScriptNamedGarrisonNearestBuilding(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    const requireInternetCenter = this.resolveEntityKindOfSet(entity).has('MONEY_HACKER');
-    const nearest = this.findScriptNearestGarrisonBuilding(entity, requireInternetCenter);
-    if (!nearest) {
-      return false;
-    }
-    return this.issueScriptEnterContainer(entity, nearest);
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerGarrisonAllBuildings.
-   */
-  private executeScriptPlayerGarrisonAllBuildings(playerSide: string): boolean {
-    const normalizedSide = this.resolveScriptRevealMapTargetSide(playerSide);
-    if (!normalizedSide) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (this.isEntityContained(entity)) {
-        continue;
-      }
-      const kindOf = this.resolveEntityKindOfSet(entity);
-      if (!kindOf.has('INFANTRY') || kindOf.has('NO_GARRISON')) {
-        continue;
-      }
-
-      const requireInternetCenter = kindOf.has('MONEY_HACKER');
-      const nearest = this.findScriptNearestGarrisonBuilding(entity, requireInternetCenter);
-      if (!nearest) {
-        continue;
-      }
-      if (this.issueScriptEnterContainer(entity, nearest)) {
-        issuedAny = true;
-      }
-    }
-
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerExitAllBuildings.
-   */
-  private executeScriptPlayerExitAllBuildings(playerSide: string): boolean {
-    const normalizedSide = this.resolveScriptRevealMapTargetSide(playerSide);
-    if (!normalizedSide) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-        this.applyCommand({
-          type: 'evacuate',
-          entityId: entity.id,
-        });
-        issuedAny = true;
-        continue;
-      }
-      if (
-        entity.garrisonContainerId !== null
-        || entity.transportContainerId !== null
-        || entity.tunnelContainerId !== null
-      ) {
-        this.applyCommand({
-          type: 'exitContainer',
-          entityId: entity.id,
-        });
-        issuedAny = true;
-      }
-    }
-
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doExitSpecificBuilding.
-   * Orders the specified container/building to evacuate contained units.
-   */
-  private executeScriptExitSpecificBuilding(containerEntityId: number): boolean {
-    const container = this.spawnedEntities.get(containerEntityId);
-    if (!container || container.destroyed) {
-      return false;
-    }
-    if (!container.containProfile) {
-      return false;
-    }
-    this.applyCommand({
-      type: 'evacuate',
-      entityId: container.id,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedExitBuilding.
-   * Orders the specified unit to exit its current container/building.
-   */
-  private executeScriptNamedExitBuilding(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    if (
-      entity.garrisonContainerId === null
-      && entity.transportContainerId === null
-      && entity.tunnelContainerId === null
-    ) {
-      return false;
-    }
-    this.applyCommand({
-      type: 'exitContainer',
-      entityId: entity.id,
-    });
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamExitAll.
-   * Issues evacuation/exit commands for each team member depending on its containment state.
-   */
-  private executeScriptTeamExitAllBuildings(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let issuedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-        this.applyCommand({
-          type: 'evacuate',
-          entityId: entity.id,
-        });
-        issuedAny = true;
-        continue;
-      }
-      if (
-        entity.garrisonContainerId !== null
-        || entity.transportContainerId !== null
-        || entity.tunnelContainerId !== null
-      ) {
-        this.applyCommand({
-          type: 'exitContainer',
-          entityId: entity.id,
-        });
-        issuedAny = true;
-      }
-    }
-    return issuedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetGarrisonEvacDisposition.
-   * Only dispositions 1 (left) and 2 (right) are special; all other values revert to default.
-   */
-  private executeScriptNamedSetEvacLeftOrRight(entityId: number, disposition: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    if (!entity.containProfile) {
-      return false;
-    }
-    const normalizedDisposition = Math.trunc(disposition);
-    entity.scriptEvacDisposition = normalizedDisposition === 1 || normalizedDisposition === 2
-      ? normalizedDisposition
-      : 0;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetUnmanned / doTeamSetUnmanned shared object mutation.
-   */
-  private setScriptEntityUnmanned(entity: MapEntity): void {
-    entity.objectStatusFlags.add('DISABLED_UNMANNED');
-    entity.attackTargetEntityId = null;
-    entity.attackTargetPosition = null;
-    if (entity.moving) {
-      entity.moving = false;
-      entity.moveTarget = null;
-      entity.movePath = [];
-      entity.pathIndex = 0;
-      entity.pathfindGoalCell = null;
-    }
-    this.unregisterEntityEnergy(entity);
-    entity.selected = false;
-    entity.side = '';
-    entity.controllingPlayerToken = null;
-    for (const team of this.scriptTeamsByName.values()) {
-      team.memberEntityIds.delete(entity.id);
-    }
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetUnmanned.
-   * Marks the target as unmanned and transfers ownership to neutral.
-   */
-  private executeScriptNamedSetUnmannedStatus(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.setScriptEntityUnmanned(entity);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamSetUnmanned.
-   * Applies unmanned status to each team member.
-   */
-  private executeScriptTeamSetUnmannedStatus(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.setScriptEntityUnmanned(entity);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetBoobytrapped.
-   * Creates the boobytrap object and attaches its StickyBombUpdate target.
-   */
-  private applyScriptBoobytrapToEntity(boobytrapTemplateName: string, target: MapEntity): boolean {
-    const normalizedTemplateName = boobytrapTemplateName.trim();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    const spawnX = target.x;
-    const spawnZ = target.z;
-    const boobytrap = this.spawnEntityFromTemplate(
-      normalizedTemplateName,
-      spawnX,
-      spawnZ,
-      target.rotationY,
-      target.side,
-    );
-    if (!boobytrap) {
-      return false;
-    }
-    if (!boobytrap.stickyBombProfile) {
-      return true;
-    }
-
-    // Source parity: GeometryInfo::makeRandomOffsetOnPerimeter + object transform matrix.
-    const geometry = target.obstacleGeometry;
-    const majorRadius = Math.max(0, geometry?.majorRadius ?? target.geometryMajorRadius ?? 0);
-    const minorRadius = Math.max(0, geometry?.minorRadius ?? majorRadius);
-    const perimeterAngle = this.gameRandom.nextFloat() * (Math.PI * 2);
-    const localX = Math.cos(perimeterAngle) * majorRadius;
-    const localZ = Math.sin(perimeterAngle) * minorRadius;
-    const cosTheta = Math.cos(target.rotationY);
-    const sinTheta = Math.sin(target.rotationY);
-    boobytrap.x = target.x + (localX * cosTheta) - (localZ * sinTheta);
-    boobytrap.z = target.z + (localX * sinTheta) + (localZ * cosTheta);
-    if (this.mapHeightmap) {
-      boobytrap.y = this.mapHeightmap.getInterpolatedHeight(boobytrap.x, boobytrap.z) ?? boobytrap.y;
-    }
-
-    boobytrap.stickyBombTargetId = target.id;
-    target.objectStatusFlags.add('BOOBY_TRAPPED');
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetBoobytrapped.
-   */
-  private executeScriptNamedSetBoobytrapped(
-    boobytrapTemplateName: string,
-    entityId: number,
-  ): boolean {
-    const target = this.spawnedEntities.get(entityId);
-    if (!target || target.destroyed) {
-      return false;
-    }
-    return this.applyScriptBoobytrapToEntity(boobytrapTemplateName, target);
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamSetBoobytrapped.
-   */
-  private executeScriptTeamSetBoobytrapped(
-    boobytrapTemplateName: string,
-    teamName: string,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let attachedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.applyScriptBoobytrapToEntity(boobytrapTemplateName, entity)) {
-        attachedAny = true;
-      }
-    }
-    return attachedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedEnableStealth.
-   * C++ toggles OBJECT_STATUS_SCRIPT_UNSTEALTHED on the target object.
-   */
-  private executeScriptNamedSetStealthEnabled(entityId: number, enabled: boolean): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    if (enabled) {
-      entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
-    } else {
-      entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamEnableStealth.
-   * C++ toggles OBJECT_STATUS_SCRIPT_UNSTEALTHED for each team member.
-   */
-  private executeScriptTeamSetStealthEnabled(teamName: string, enabled: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (enabled) {
-        entity.objectStatusFlags.delete('SCRIPT_UNSTEALTHED');
-      } else {
-        entity.objectStatusFlags.add('SCRIPT_UNSTEALTHED');
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::changeObjectPanelFlagForSingleObject flag-name table.
-   */
-  private resolveScriptObjectPanelFlagName(flagName: string): ScriptObjectPanelFlagName | null {
-    const normalized = flagName.trim().toUpperCase();
-    switch (normalized) {
-      case 'ENABLED':
-        return 'ENABLED';
-      case 'POWERED':
-        return 'POWERED';
-      case 'INDESTRUCTIBLE':
-        return 'INDESTRUCTIBLE';
-      case 'UNSELLABLE':
-        return 'UNSELLABLE';
-      case 'SELECTABLE':
-        return 'SELECTABLE';
-      case 'AI RECRUITABLE':
-        return 'AI_RECRUITABLE';
-      case 'PLAYER TARGETABLE':
-        return 'PLAYER_TARGETABLE';
-      default:
-        return null;
-    }
-  }
-
-  /**
-   * Source parity: ScriptActions::changeObjectPanelFlagForSingleObject.
-   */
-  private applyScriptObjectPanelFlag(
-    entity: MapEntity,
-    flag: ScriptObjectPanelFlagName,
-    enabled: boolean,
-  ): void {
-    switch (flag) {
-      case 'ENABLED':
-        if (enabled) {
-          entity.objectStatusFlags.delete('SCRIPT_DISABLED');
-        } else {
-          entity.objectStatusFlags.add('SCRIPT_DISABLED');
-        }
-        return;
-      case 'POWERED':
-        if (enabled) {
-          entity.objectStatusFlags.delete('SCRIPT_UNPOWERED');
-        } else {
-          entity.objectStatusFlags.add('SCRIPT_UNPOWERED');
-        }
-        return;
-      case 'INDESTRUCTIBLE':
-        entity.isIndestructible = enabled;
-        return;
-      case 'UNSELLABLE':
-        if (enabled) {
-          entity.objectStatusFlags.add('SCRIPT_UNSELLABLE');
-        } else {
-          entity.objectStatusFlags.delete('SCRIPT_UNSELLABLE');
-        }
-        return;
-      case 'SELECTABLE':
-        if (enabled) {
-          entity.objectStatusFlags.delete('UNSELECTABLE');
-        } else {
-          entity.objectStatusFlags.add('UNSELECTABLE');
-        }
-        return;
-      case 'AI_RECRUITABLE':
-        // Source parity: ScriptActions::changeObjectPanelFlagForSingleObject routes
-        // this to AIUpdateInterface::setIsRecruitable.
-        entity.scriptAiRecruitable = enabled;
-        return;
-      case 'PLAYER_TARGETABLE':
-        if (enabled) {
-          entity.objectStatusFlags.add('SCRIPT_TARGETABLE');
-        } else {
-          entity.objectStatusFlags.delete('SCRIPT_TARGETABLE');
-        }
-        return;
-    }
-  }
-
-  /**
-   * Source parity: ScriptActions::doAffectObjectPanelFlagsUnit.
-   */
-  private executeScriptAffectObjectPanelFlagsUnit(
-    entityId: number,
-    flagName: string,
-    enabled: boolean,
-  ): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    const flag = this.resolveScriptObjectPanelFlagName(flagName);
-    if (!flag) {
-      return false;
-    }
-    this.applyScriptObjectPanelFlag(entity, flag, enabled);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doAffectObjectPanelFlagsTeam.
-   */
-  private executeScriptAffectObjectPanelFlagsTeam(
-    teamName: string,
-    flagName: string,
-    enabled: boolean,
-  ): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    const flag = this.resolveScriptObjectPanelFlagName(flagName);
-    if (!flag) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.applyScriptObjectPanelFlag(entity, flag, enabled);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetRepulsor.
-   */
-  private executeScriptNamedSetRepulsor(entityId: number, repulsor: boolean): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    if (repulsor) {
-      entity.objectStatusFlags.add('REPULSOR');
-    } else {
-      entity.objectStatusFlags.delete('REPULSOR');
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamSetRepulsor.
-   */
-  private executeScriptTeamSetRepulsor(teamName: string, repulsor: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (repulsor) {
-        entity.objectStatusFlags.add('REPULSOR');
-      } else {
-        entity.objectStatusFlags.delete('REPULSOR');
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doObjectTypeListMaintenance.
-   */
-  private executeScriptObjectTypeListMaintenance(
-    listName: string,
-    objectTypeName: string,
-    addObject: boolean,
-  ): boolean {
-    const normalizedListName = this.normalizeScriptObjectTypeName(listName);
-    const normalizedObjectType = this.normalizeScriptObjectTypeName(objectTypeName);
-    if (!normalizedListName || !normalizedObjectType) {
-      return false;
-    }
-
-    let list = this.scriptObjectTypeListsByName.get(normalizedListName);
-    if (!list) {
-      if (!addObject) {
-        return false;
-      }
-      list = [];
-      this.scriptObjectTypeListsByName.set(normalizedListName, list);
-    }
-
-    if (addObject) {
-      if (!list.includes(normalizedObjectType)) {
-        list.push(normalizedObjectType);
-      }
-    } else {
-      const index = list.indexOf(normalizedObjectType);
-      if (index === -1) {
-        return false;
-      }
-      list.splice(index, 1);
-      if (list.length === 0) {
-        this.scriptObjectTypeListsByName.delete(normalizedListName);
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamWander.
-   * Uses per-entity nearest waypoint resolution and SET_WANDER locomotor.
-   */
-  private executeScriptTeamWander(teamName: string, waypointPathLabel: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let movedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      const route = this.resolveScriptWaypointRouteByPathLabel(
-        waypointPathLabel,
-        entity.x,
-        entity.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-        movedAny = true;
-      }
-    }
-    return movedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamPanic.
-   * Uses per-entity nearest waypoint resolution and SET_PANIC locomotor.
-   */
-  private executeScriptTeamPanic(teamName: string, waypointPathLabel: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let movedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      const route = this.resolveScriptWaypointRouteByPathLabel(
-        waypointPathLabel,
-        entity.x,
-        entity.z,
-      );
-      if (!route || route.length === 0) {
-        return movedAny;
-      }
-      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
-      if (this.enqueueScriptWaypointRoute(entity, route, waypointPathLabel)) {
-        movedAny = true;
-      }
-    }
-    return movedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamWanderInPlace.
-   * Uses AI_WANDER_IN_PLACE semantics: choose SET_WANDER locomotor and keep
-   * re-targeting random points around the action-time origin until interrupted.
-   */
-  private executeScriptTeamWanderInPlace(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    let activatedAny = false;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-      entity.scriptWanderInPlaceActive = true;
-      entity.scriptWanderInPlaceOriginX = entity.x;
-      entity.scriptWanderInPlaceOriginZ = entity.z;
-      this.setScriptWanderInPlaceGoal(entity);
-      activatedAny = true;
-    }
-    return activatedAny;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamIncreasePriority.
-   * TeamPrototype::increaseAIPriorityForSuccess adds success increase to current priority.
-   */
-  private executeScriptTeamIncreasePriority(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    team.productionPriority += team.productionPrioritySuccessIncrease;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamDecreasePriority.
-   * TeamPrototype::decreaseAIPriorityForFailure subtracts failure decrease from current priority.
-   */
-  private executeScriptTeamDecreasePriority(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    team.productionPriority -= team.productionPriorityFailureDecrease;
-    return true;
-  }
-
-  private setScriptWanderInPlaceGoal(entity: MapEntity): void {
-    let delta = 3;
-    const locomotor = entity.locomotorSets.get(entity.activeLocomotorSet);
-    const radius = locomotor?.wanderAboutPointRadius ?? 0;
-    if (radius > 0) {
-      delta = Math.max(1, Math.floor((radius / PATHFIND_CELL_SIZE) + 0.5));
-    }
-
-    const offsetX = this.gameRandom.nextRange(-delta, delta) * PATHFIND_CELL_SIZE;
-    const offsetZ = this.gameRandom.nextRange(-delta, delta) * PATHFIND_CELL_SIZE;
-    const targetX = entity.scriptWanderInPlaceOriginX + offsetX;
-    const targetZ = entity.scriptWanderInPlaceOriginZ + offsetZ;
-    this.issueMoveTo(entity.id, targetX, targetZ);
   }
 
   private findClosestRepulsorEntity(source: MapEntity, range: number): MapEntity | null {
@@ -20682,563 +12761,6 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.canEntityAttackFromStatus(candidate);
-  }
-
-  private setScriptWanderAwayFromRepulsorGoal(entity: MapEntity, repulsor: MapEntity): void {
-    let awayX = entity.x - repulsor.x;
-    let awayZ = entity.z - repulsor.z;
-    if ((awayX * awayX) + (awayZ * awayZ) < 1e-6) {
-      const angle = this.gameRandom.nextFloat() * Math.PI * 2;
-      awayX = Math.cos(angle);
-      awayZ = Math.sin(angle);
-    }
-    const magnitude = Math.hypot(awayX, awayZ);
-    if (magnitude <= 0) {
-      return;
-    }
-    const fleeDistance = Math.max(PATHFIND_CELL_SIZE * 2, entity.visionRange);
-    const targetX = entity.x + (awayX / magnitude) * fleeDistance;
-    const targetZ = entity.z + (awayZ / magnitude) * fleeDistance;
-    const [clampedX, clampedZ] = this.clampWorldPositionToMapBounds(targetX, targetZ);
-    this.issueMoveTo(entity.id, clampedX, clampedZ);
-  }
-
-  private clearScriptWanderInPlace(entityId: number): void {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity) {
-      return;
-    }
-    entity.scriptWanderInPlaceActive = false;
-    entity.modelConditionFlags.delete('PANICKING');
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetHeld.
-   */
-  private executeScriptNamedSetHeld(entityId: number, held: boolean): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    if (held) {
-      entity.objectStatusFlags.add('DISABLED_HELD');
-    } else {
-      entity.objectStatusFlags.delete('DISABLED_HELD');
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedSetTrainHeld.
-   * Applies held state for entities that expose rail-transport behavior.
-   */
-  private executeScriptSetTrainHeld(entityId: number, held: boolean): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
-    if (!this.extractRailedTransportProfile(objectDef ?? undefined)) {
-      return false;
-    }
-
-    if (!this.executeScriptNamedSetHeld(entityId, held)) {
-      return false;
-    }
-    if (held) {
-      this.cancelEntityCommandPathActions(entityId);
-      this.stopEntity(entityId);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doEnableObjectSound.
-   * App runtime consumes this state via getScriptObjectAmbientSoundStates().
-   */
-  private executeScriptSetObjectAmbientSound(entityId: number, enabled: boolean): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    // Source parity: Drawable::enableAmbientSoundFromScript deliberately does not
-    // short-circuit repeated toggles so re-enable can retrigger one-shot ambients.
-    entity.scriptAmbientSoundRevision += 1;
-    entity.scriptAmbientSoundEnabled = enabled;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doModifyBuildableStatus + GameLogic::setBuildableStatusOverride.
-   */
-  private executeScriptModifyBuildableStatus(templateName: string, buildableStatus: BuildableStatus): boolean {
-    const objectDef = this.resolveObjectDefByTemplateName(templateName);
-    if (!objectDef) {
-      return false;
-    }
-
-    const normalizedTemplateName = objectDef.name.trim().toUpperCase();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    this.thingTemplateBuildableOverrides.set(normalizedTemplateName, buildableStatus);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doRemoveCommandBarButton.
-   */
-  private executeScriptCommandBarRemoveButtonObjectType(
-    buttonName: string,
-    objectType: string,
-  ): boolean {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const objectDef = this.resolveObjectDefByTemplateName(objectType);
-    if (!objectDef) {
-      return false;
-    }
-    const commandSetName = readStringField(objectDef.fields, ['CommandSet'])?.trim().toUpperCase() ?? '';
-    if (!commandSetName || commandSetName === 'NONE') {
-      return false;
-    }
-    const commandSetDef = findCommandSetDefByName(registry, commandSetName);
-    if (!commandSetDef) {
-      return false;
-    }
-    const normalizedButtonName = buttonName.trim().toUpperCase();
-    if (!normalizedButtonName) {
-      return false;
-    }
-
-    for (let buttonSlot = 1; buttonSlot <= 18; buttonSlot += 1) {
-      const slottedButtonName = this.resolveCommandSetSlotButtonName(commandSetDef, buttonSlot);
-      if (!slottedButtonName) {
-        continue;
-      }
-      if (slottedButtonName.trim().toUpperCase() !== normalizedButtonName) {
-        continue;
-      }
-      this.setScriptCommandSetButtonOverride(commandSetName, buttonSlot, null);
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Source parity: ScriptActions::doAddCommandBarButton.
-   */
-  private executeScriptCommandBarAddButtonObjectTypeSlot(
-    buttonName: string,
-    objectType: string,
-    slotNum: number,
-  ): boolean {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const objectDef = this.resolveObjectDefByTemplateName(objectType);
-    if (!objectDef) {
-      return false;
-    }
-    const commandSetName = readStringField(objectDef.fields, ['CommandSet'])?.trim().toUpperCase() ?? '';
-    if (!commandSetName || commandSetName === 'NONE') {
-      return false;
-    }
-    const commandButtonDef = findCommandButtonDefByName(registry, buttonName);
-    if (!commandButtonDef) {
-      return false;
-    }
-
-    const slot = Math.trunc(slotNum);
-    if (slot < 1 || slot > 18) {
-      return false;
-    }
-
-    this.setScriptCommandSetButtonOverride(commandSetName, slot, commandButtonDef.name);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doSetWarehouseValue + SupplyWarehouseDockUpdate::setCashValue.
-   */
-  private executeScriptWarehouseSetValue(warehouseEntityId: number, cashValue: number): boolean {
-    const warehouse = this.spawnedEntities.get(warehouseEntityId);
-    if (!warehouse || warehouse.destroyed || !warehouse.supplyWarehouseProfile) {
-      return false;
-    }
-
-    const warehouseState = this.supplyWarehouseStates.get(warehouse.id)
-      ?? initializeWarehouseStateImpl(warehouse.supplyWarehouseProfile);
-    warehouseState.currentBoxes = Math.ceil(cashValue / DEFAULT_SUPPLY_BOX_VALUE);
-    this.supplyWarehouseStates.set(warehouse.id, warehouseState);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doRadarCreateEvent.
-   * Accepts Script coord3 parameters and waypoint-name fallback for map-script JSON parity.
-   */
-  private executeScriptRadarCreateEvent(position: unknown, eventType: number): boolean {
-    const coord3 = this.coerceScriptConditionCoord3(position);
-    if (coord3) {
-      this.recordScriptRadarEvent(coord3.x, coord3.z, coord3.y, eventType, null, null);
-      return true;
-    }
-
-    const waypointName = this.coerceScriptConditionString(position);
-    if (!waypointName) {
-      return false;
-    }
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-    this.recordScriptRadarEvent(
-      waypoint.x,
-      this.resolveGroundHeight(waypoint.x, waypoint.z),
-      waypoint.z,
-      eventType,
-      null,
-      null,
-    );
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doObjectRadarCreateEvent.
-   */
-  private executeScriptObjectCreateRadarEvent(entityId: number, eventType: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-
-    this.recordScriptRadarEvent(entity.x, entity.y, entity.z, eventType, entity.id, null);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamRadarCreateEvent.
-   */
-  private executeScriptTeamCreateRadarEvent(teamName: string, eventType: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const teamMembers = this.getScriptTeamMemberEntities(team);
-    const hasUnits = teamMembers.some((entity) => this.isScriptTeamMemberAliveForUnits(entity));
-    if (!hasUnits) {
-      return false;
-    }
-
-    const estimatePositionEntity = teamMembers[0];
-    if (!estimatePositionEntity) {
-      return false;
-    }
-
-    this.recordScriptRadarEvent(
-      estimatePositionEntity.x,
-      estimatePositionEntity.y,
-      estimatePositionEntity.z,
-      eventType,
-      estimatePositionEntity.id,
-      team.nameUpper,
-    );
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamAvailableForRecruitment.
-   */
-  private executeScriptTeamAvailableForRecruitment(teamName: string, availability: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    team.recruitableOverride = availability;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doCollectNearbyForTeam.
-   * C++ is currently unimplemented (debug crash stub), so this is a deliberate no-op.
-   */
-  private executeScriptTeamCollectNearbyForTeam(_teamName: string): boolean {
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doMergeTeamIntoTeam.
-   */
-  private executeScriptTeamMergeIntoTeam(sourceTeamName: string, targetTeamName: string): boolean {
-    const sourceTeam = this.getScriptTeamRecord(sourceTeamName);
-    const targetTeam = this.getScriptTeamRecord(targetTeamName);
-    if (!sourceTeam || !targetTeam) {
-      return false;
-    }
-    if (sourceTeam.nameUpper === targetTeam.nameUpper) {
-      return true;
-    }
-
-    const mergedEntityIds = new Set<number>(targetTeam.memberEntityIds);
-    const targetSide = this.resolveScriptTeamControllingSide(targetTeam);
-    for (const entityId of sourceTeam.memberEntityIds) {
-      mergedEntityIds.add(entityId);
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed || !targetSide) {
-        continue;
-      }
-      this.transferScriptEntityToSide(entity, targetSide);
-    }
-    targetTeam.memberEntityIds = mergedEntityIds;
-    targetTeam.created = true;
-    if (targetTeam.recruitableOverride === null && sourceTeam.recruitableOverride !== null) {
-      targetTeam.recruitableOverride = sourceTeam.recruitableOverride;
-    }
-    sourceTeam.memberEntityIds = new Set<number>();
-    sourceTeam.created = false;
-    this.scriptTeamCreatedReadyFrameByName.delete(sourceTeam.nameUpper);
-
-    // Source parity bridge: Team::deleteTeam empties members but singleton teams persist.
-    // Non-prototype synthetic instances are removed after transfer.
-    if (sourceTeam.nameUpper !== sourceTeam.prototypeNameUpper) {
-      if (!this.clearScriptTeam(sourceTeam.nameUpper)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doDamageTeamMembers.
-   */
-  private executeScriptDamageMembersOfTeam(teamName: string, amount: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    if (!Number.isFinite(amount)) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (this.isScriptEntityEffectivelyDead(entity)) {
-        continue;
-      }
-      this.applyWeaponDamageAmount(null, entity, amount, 'UNRESISTABLE', 'NORMAL');
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doMoveToWaypoint.
-   */
-  private executeScriptMoveTeamToWaypoint(teamName: string, waypointName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed || !entity.canMove) {
-        continue;
-      }
-      this.cancelEntityCommandPathActions(entity.id);
-      this.clearAttackTarget(entity.id);
-      this.issueMoveTo(entity.id, waypoint.x, waypoint.z);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedMoveToWaypoint.
-   */
-  private executeScriptMoveNamedUnitToWaypoint(entityId: number, waypointName: string): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed || !entity.canMove) {
-      return false;
-    }
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-
-    this.cancelEntityCommandPathActions(entity.id);
-    this.clearAttackTarget(entity.id);
-    this.issueMoveTo(entity.id, waypoint.x, waypoint.z);
-    return true;
-  }
-
-  /**
-   * Source parity: AIAttackSquadState::chooseVictim difficulty policy.
-   * Script choose-victim override forces NORMAL behavior regardless of side setting.
-   */
-  private resolveScriptChooseVictimDifficultyForEntity(
-    entity: MapEntity,
-    commandSource: AttackCommandSource,
-  ): number {
-    let difficulty = SCRIPT_DIFFICULTY_NORMAL;
-
-    const entitySide = this.normalizeSide(entity.side);
-    if (entitySide) {
-      const sideIndex = this.mapScriptSideByIndex.findIndex((side) => side === entitySide);
-      if (sideIndex >= 0) {
-        difficulty = this.resolveMapScriptDifficultyForSide(sideIndex);
-      }
-    }
-
-    if (commandSource === 'PLAYER') {
-      difficulty = SCRIPT_DIFFICULTY_HARD;
-    }
-
-    if (this.scriptChooseVictimAlwaysUsesNormal) {
-      difficulty = SCRIPT_DIFFICULTY_NORMAL;
-    }
-
-    return difficulty;
-  }
-
-  /**
-   * Source parity: ScriptActions::doAttack(team, team).
-   */
-  private executeScriptTeamAttackTeam(attackerTeamName: string, victimTeamName: string): boolean {
-    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
-    const victimTeam = this.getScriptTeamRecord(victimTeamName);
-    if (!attackerTeam || !victimTeam) {
-      return false;
-    }
-
-    const victims: MapEntity[] = [];
-    for (const victim of this.getScriptTeamMemberEntities(victimTeam)) {
-      if (victim.destroyed || this.isScriptEntityEffectivelyDead(victim)) {
-        continue;
-      }
-      victims.push(victim);
-    }
-
-    if (victims.length === 0) {
-      return true;
-    }
-
-    const attackers: MapEntity[] = [];
-    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-        continue;
-      }
-      attackers.push(attacker);
-    }
-
-    for (const attacker of attackers) {
-      let bestVictim: MapEntity | null = null;
-      const difficulty = this.resolveScriptChooseVictimDifficultyForEntity(attacker, 'SCRIPT');
-      if (difficulty === SCRIPT_DIFFICULTY_EASY) {
-        const pick = this.gameRandom.nextRange(0, victims.length - 1);
-        bestVictim = victims[pick] ?? null;
-      } else if (difficulty === SCRIPT_DIFFICULTY_HARD) {
-        bestVictim = victims[0] ?? null;
-      } else {
-        let bestDistSq = Number.POSITIVE_INFINITY;
-        for (const victim of victims) {
-          const dx = victim.x - attacker.x;
-          const dz = victim.z - attacker.z;
-          const distSq = (dx * dx) + (dz * dz);
-          if (distSq < bestDistSq) {
-            bestVictim = victim;
-            bestDistSq = distSq;
-          }
-        }
-      }
-      if (!bestVictim) {
-        continue;
-      }
-      this.cancelEntityCommandPathActions(attacker.id);
-      this.issueAttackEntity(attacker.id, bestVictim.id, 'SCRIPT');
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedAttack.
-   */
-  private executeScriptNamedAttackNamed(attackerEntityId: number, victimEntityId: number): boolean {
-    const attacker = this.spawnedEntities.get(attackerEntityId);
-    const victim = this.spawnedEntities.get(victimEntityId);
-    if (!attacker || !victim || attacker.destroyed || victim.destroyed) {
-      return false;
-    }
-
-    this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
-    this.cancelEntityCommandPathActions(attacker.id);
-    this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
-    return true;
-  }
-
-  private findScriptClosestEnemyInTriggerArea(attacker: MapEntity, triggerIndex: number): MapEntity | null {
-    const trigger = this.mapTriggerRegions[triggerIndex];
-    if (!trigger) {
-      return null;
-    }
-
-    let bestVictim: MapEntity | null = null;
-    let bestDistanceSq = Number.POSITIVE_INFINITY;
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || candidate.id === attacker.id || !candidate.canTakeDamage) {
-        continue;
-      }
-      if (!this.isPointInsideTriggerRegion(trigger, candidate.x, candidate.z)) {
-        continue;
-      }
-      if (this.getTeamRelationship(attacker, candidate) !== RELATIONSHIP_ENEMIES) {
-        continue;
-      }
-      if (
-        candidate.objectStatusFlags.has('STEALTHED')
-        && !candidate.objectStatusFlags.has('DETECTED')
-      ) {
-        continue;
-      }
-      if (!this.canAttackerTargetEntity(attacker, candidate, 'SCRIPT')) {
-        continue;
-      }
-
-      const dx = candidate.x - attacker.x;
-      const dz = candidate.z - attacker.z;
-      const distanceSq = (dx * dx) + (dz * dz);
-      if (distanceSq >= bestDistanceSq) {
-        continue;
-      }
-
-      bestVictim = candidate;
-      bestDistanceSq = distanceSq;
-    }
-    return bestVictim;
-  }
-
-  /**
-   * Source parity: AIAttackAreaState::onEnter randomizes first scan to
-   * spread work, then scans every ENEMY_SCAN_RATE frames.
-   */
-  private setScriptAttackAreaState(entityId: number, triggerIndex: number): void {
-    const firstScanDelay = this.gameRandom.nextRange(0, LOGIC_FRAME_RATE);
-    this.scriptAttackAreaStateByEntityId.set(entityId, {
-      triggerIndex,
-      nextEnemyScanFrame: this.frameCounter + firstScanDelay,
-    });
   }
 
   private updateScriptAttackAreaEntity(
@@ -21304,235 +12826,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  /**
-   * Source parity: ScriptActions::doNamedAttackArea.
-   * Mirrors AIAttackAreaState by storing area intent and scanning for victims over time.
-   */
-  private executeScriptNamedAttackArea(attackerEntityId: number, triggerName: string): boolean {
-    const attacker = this.spawnedEntities.get(attackerEntityId);
-    const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (!attacker || attacker.destroyed || !area) {
-      return false;
-    }
-
-    this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
-    this.cancelEntityCommandPathActions(attacker.id);
-    this.clearAttackTarget(attacker.id);
-    this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
-    const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
-    if (attackAreaState) {
-      this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedAttackTeam.
-   */
-  private executeScriptNamedAttackTeam(attackerEntityId: number, victimTeamName: string): boolean {
-    const attacker = this.spawnedEntities.get(attackerEntityId);
-    const victimTeam = this.getScriptTeamRecord(victimTeamName);
-    if (!attacker || attacker.destroyed || !victimTeam) {
-      return false;
-    }
-
-    const victims: MapEntity[] = [];
-    for (const entity of this.getScriptTeamMemberEntities(victimTeam)) {
-      if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
-        continue;
-      }
-      victims.push(entity);
-    }
-
-    this.setEntityLocomotorSet(attacker.id, LOCOMOTORSET_NORMAL);
-    this.cancelEntityCommandPathActions(attacker.id);
-    this.clearAttackTarget(attacker.id);
-    if (victims.length === 0) {
-      return true;
-    }
-
-    let bestVictim: MapEntity | null = null;
-    let bestDistanceSq = Number.POSITIVE_INFINITY;
-    for (const victim of victims) {
-      const dx = victim.x - attacker.x;
-      const dz = victim.z - attacker.z;
-      const distanceSq = (dx * dx) + (dz * dz);
-      if (distanceSq < bestDistanceSq) {
-        bestVictim = victim;
-        bestDistanceSq = distanceSq;
-      }
-    }
-
-    if (bestVictim) {
-      this.issueAttackEntity(attacker.id, bestVictim.id, 'SCRIPT');
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamAttackArea.
-   */
-  private executeScriptTeamAttackArea(attackerTeamName: string, triggerName: string): boolean {
-    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
-    const area = this.resolveScriptTriggerAreaByName(triggerName);
-    if (!attackerTeam || !area) {
-      return false;
-    }
-
-    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-        continue;
-      }
-      this.cancelEntityCommandPathActions(attacker.id);
-      this.clearAttackTarget(attacker.id);
-      this.setScriptAttackAreaState(attacker.id, area.triggerIndex);
-      const attackAreaState = this.scriptAttackAreaStateByEntityId.get(attacker.id);
-      if (attackAreaState) {
-        this.updateScriptAttackAreaEntity(attacker, attackAreaState, true);
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamAttackNamed.
-   */
-  private executeScriptTeamAttackNamed(attackerTeamName: string, victimEntityId: number): boolean {
-    const attackerTeam = this.getScriptTeamRecord(attackerTeamName);
-    const victim = this.spawnedEntities.get(victimEntityId);
-    if (!attackerTeam || !victim || victim.destroyed) {
-      return false;
-    }
-
-    for (const attacker of this.getScriptTeamMemberEntities(attackerTeam)) {
-      if (attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-        continue;
-      }
-      this.cancelEntityCommandPathActions(attacker.id);
-      this.clearAttackTarget(attacker.id);
-      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
-    }
-
-    return true;
-  }
-
-  private resolveScriptEntityTransportSlotCount(entity: MapEntity): number {
-    return this.resolveScriptEntityTransportSlotCountRecursive(entity, new Set<number>());
-  }
-
-  private resolveScriptEntityTransportSlotCountRecursive(entity: MapEntity, visitedEntityIds: Set<number>): number {
-    if (visitedEntityIds.has(entity.id)) {
-      return 0;
-    }
-    visitedEntityIds.add(entity.id);
-
-    // Source parity: Object::getTransportSlotCount — special zero-slot containers
-    // proxy slot count to their contained riders.
-    if (entity.containProfile?.moduleType === 'PARACHUTE') {
-      let totalSlots = 0;
-      for (const containedEntityId of this.collectContainedEntityIds(entity.id)) {
-        const containedEntity = this.spawnedEntities.get(containedEntityId);
-        if (!containedEntity || containedEntity.destroyed) {
-          continue;
-        }
-        totalSlots += this.resolveScriptEntityTransportSlotCountRecursive(containedEntity, visitedEntityIds);
-      }
-      return totalSlots;
-    }
-
-    return this.resolveScriptEntityRawTransportSlotCount(entity);
-  }
-
-  private resolveScriptEntityRawTransportSlotCount(entity: MapEntity): number {
-    const registry = this.iniDataRegistry;
-    if (registry) {
-      const objectDef = findObjectDefByName(registry, entity.templateName);
-      if (objectDef) {
-        const configuredSlotCount = readNumericField(objectDef.fields, ['TransportSlotCount']);
-        if (configuredSlotCount !== null && Number.isFinite(configuredSlotCount)) {
-          return Math.max(0, Math.trunc(configuredSlotCount));
-        }
-      }
-    }
-    // Source parity: ThingTemplate ctor defaults m_transportSlotCount = 0.
-    return 0;
-  }
-
-  private resolveScriptTransportValidationEntity(entity: MapEntity): MapEntity {
-    if (entity.containProfile?.moduleType !== 'PARACHUTE') {
-      return entity;
-    }
-    for (const containedEntityId of this.collectContainedEntityIds(entity.id)) {
-      const containedEntity = this.spawnedEntities.get(containedEntityId);
-      if (containedEntity && !containedEntity.destroyed) {
-        return containedEntity;
-      }
-    }
-    return entity;
-  }
-
-  private isScriptContainKindAllowed(container: MapEntity, rider: MapEntity): boolean {
-    const containProfile = container.containProfile;
-    if (!containProfile) {
-      return false;
-    }
-
-    const riderKinds = this.resolveEntityKindOfSet(rider);
-    const allowInsideKindOf = containProfile.allowInsideKindOf;
-    if (allowInsideKindOf && allowInsideKindOf.size > 0) {
-      let hasAllowedKind = false;
-      for (const kindOfName of allowInsideKindOf) {
-        if (riderKinds.has(kindOfName)) {
-          hasAllowedKind = true;
-          break;
-        }
-      }
-      if (!hasAllowedKind) {
-        return false;
-      }
-    }
-
-    for (const kindOfName of containProfile.forbidInsideKindOf) {
-      if (riderKinds.has(kindOfName)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  private isScriptContainRelationshipAllowed(container: MapEntity, rider: MapEntity): boolean {
-    const containProfile = container.containProfile;
-    if (!containProfile) {
-      return false;
-    }
-
-    const relationship = this.getTeamRelationship(rider, container);
-    switch (relationship) {
-      case RELATIONSHIP_ALLIES:
-        return containProfile.allowAlliesInside;
-      case RELATIONSHIP_ENEMIES:
-        return containProfile.allowEnemiesInside;
-      case RELATIONSHIP_NEUTRAL:
-        return containProfile.allowNeutralInside;
-      default:
-        return false;
-    }
-  }
-
-  private resolveScriptContainerUsedTransportSlots(container: MapEntity): number {
-    let usedSlots = 0;
-    for (const containedEntityId of this.collectContainedEntityIds(container.id)) {
-      const containedEntity = this.spawnedEntities.get(containedEntityId);
-      if (!containedEntity || containedEntity.destroyed) {
-        continue;
-      }
-      usedSlots += this.resolveScriptEntityTransportSlotCount(containedEntity);
-    }
-    return usedSlots;
-  }
-
   private canScriptContainerFitEntity(container: MapEntity, entity: MapEntity): boolean {
     const containProfile = container.containProfile;
     if (!containProfile) {
@@ -21594,102 +12887,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: ScriptActions::doLoadAllTransports.
-   * Uses PartitionSolver fast mode to assign team members to team transports.
-   */
-  private executeScriptTeamLoadTransports(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const entries: Array<{ entityId: number; size: number }> = [];
-    const spaces: Array<{ entityId: number; capacity: number }> = [];
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (entity.kindOf.has('TRANSPORT')) {
-        if (!entity.containProfile) {
-          continue;
-        }
-        spaces.push({
-          entityId: entity.id,
-          capacity: Math.max(0, this.resolveScriptContainerCapacity(entity)),
-        });
-      } else {
-        entries.push({
-          entityId: entity.id,
-          size: this.resolveScriptEntityTransportSlotCount(entity),
-        });
-      }
-    }
-
-    if (entries.length === 0 || spaces.length === 0) {
-      return true;
-    }
-
-    const assignments = this.solveScriptFastPartitionAssignments(entries, spaces);
-    for (const assignment of assignments) {
-      const unit = this.spawnedEntities.get(assignment.entryEntityId);
-      const transport = this.spawnedEntities.get(assignment.spaceEntityId);
-      if (!unit || !transport || unit.destroyed || transport.destroyed) {
-        continue;
-      }
-      // Source parity: ScriptActions::doLoadAllTransports chooses LOCOMOTORSET_NORMAL
-      // for each assigned unit before issuing aiEnter.
-      this.setEntityLocomotorSet(unit.id, LOCOMOTORSET_NORMAL);
-      this.applyCommand({
-        type: 'enterTransport',
-        entityId: unit.id,
-        targetTransportId: transport.id,
-        commandSource: 'SCRIPT',
-      });
-    }
-    return true;
-  }
-
-  private setScriptHuntState(entityId: number): void {
-    this.scriptHuntStateByEntityId.set(entityId, {
-      nextEnemyScanFrame: this.frameCounter,
-    });
-  }
-
-  private findScriptHuntTarget(entity: MapEntity): MapEntity | null {
-    let bestTarget: MapEntity | null = null;
-    let bestDistanceSqr = Number.POSITIVE_INFINITY;
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || candidate.id === entity.id || !candidate.canTakeDamage) {
-        continue;
-      }
-      if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
-        continue;
-      }
-      if (
-        candidate.objectStatusFlags.has('STEALTHED')
-        && !candidate.objectStatusFlags.has('DETECTED')
-      ) {
-        continue;
-      }
-      if (!this.canAttackerTargetEntity(entity, candidate, 'SCRIPT')) {
-        continue;
-      }
-
-      const dx = candidate.x - entity.x;
-      const dz = candidate.z - entity.z;
-      const distanceSqr = dx * dx + dz * dz;
-      if (distanceSqr >= bestDistanceSqr) {
-        continue;
-      }
-      bestDistanceSqr = distanceSqr;
-      bestTarget = candidate;
-    }
-
-    return bestTarget;
-  }
-
-  /**
    * Source parity: AIHuntState::update.
    * Hunt scans for enemies every ENEMY_SCAN_RATE and keeps chasing until no
    * victims remain (or indefinitely while PLAYER_HUNT is enabled for the side).
@@ -21744,177 +12941,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  /**
-   * Source parity: ScriptActions::doNamedHunt -> AIUpdateInterface::aiHunt.
-   */
-  private executeScriptNamedHunt(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
-      return false;
-    }
-    if (!entity.canMove || entity.kindOf.has('PROJECTILE')) {
-      return false;
-    }
-
-    this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_NORMAL);
-    this.clearCommandButtonHuntForEntity(entity);
-    this.applyCommand({ type: 'stop', entityId: entity.id, commandSource: 'AI' });
-    this.setScriptHuntState(entity.id);
-    entity.autoTargetScanNextFrame = this.frameCounter;
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamHunt -> AIGroup::groupHunt.
-   */
-  private executeScriptTeamHunt(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      this.executeScriptNamedHunt(entity.id);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerHunt -> Player::setUnitsShouldHunt(true).
-   */
-  private executeScriptPlayerHunt(side: string): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-
-    this.scriptSidesUnitsShouldHunt.add(normalizedSide);
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (this.isScriptEntityEffectivelyDead(entity) && !this.isBeaconEntity(entity)) {
-        continue;
-      }
-
-      const disqualifyingKindOf = this.resolveEntityKindOfSet(entity);
-      if (
-        disqualifyingKindOf.has('DOZER')
-        || disqualifyingKindOf.has('HARVESTER')
-        || disqualifyingKindOf.has('IGNORES_SELECT_ALL')
-      ) {
-        continue;
-      }
-
-      this.executeScriptNamedHunt(entity.id);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerSellEverything.
-   */
-  private executeScriptPlayerSellEverything(side: string): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      const kindOf = this.resolveEntityKindOfSet(entity);
-      if (!kindOf.has('STRUCTURE') && !kindOf.has('COMMANDCENTER') && !kindOf.has('FS_POWER')) {
-        continue;
-      }
-      this.applyCommand({ type: 'sell', entityId: entity.id });
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerDisableBaseConstruction / doPlayerEnableBaseConstruction.
-   */
-  private executeScriptPlayerSetBaseConstructionEnabled(side: string, enabled: boolean): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-    this.sideCanBuildBaseByScript.set(normalizedSide, enabled);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerDisableUnitConstruction / doPlayerEnableUnitConstruction.
-   */
-  private executeScriptPlayerSetUnitConstructionEnabled(side: string, enabled: boolean): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-    this.sideCanBuildUnitsByScript.set(normalizedSide, enabled);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerDisableFactories / doPlayerEnableFactories.
-   */
-  private executeScriptPlayerSetObjectTemplateEnabled(
-    side: string,
-    templateName: string,
-    enabled: boolean,
-  ): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-    const normalizedTemplateName = templateName.trim().toUpperCase();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (entity.templateName.trim().toUpperCase() !== normalizedTemplateName) {
-        continue;
-      }
-      if (enabled) {
-        entity.objectStatusFlags.delete('SCRIPT_DISABLED');
-      } else {
-        entity.objectStatusFlags.add('SCRIPT_DISABLED');
-      }
-    }
-
-    return true;
-  }
-
-  private normalizeScriptAttackPrioritySetName(attackPrioritySetName: string): string {
-    return attackPrioritySetName.trim().toUpperCase();
-  }
-
-  private getOrCreateScriptAttackPrioritySetRecord(
+  /* @internal */ getOrCreateScriptAttackPrioritySetRecord(
     attackPrioritySetName: string,
   ): ScriptAttackPrioritySetRecord | null {
     const normalizedSetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
@@ -21936,328 +12963,12 @@ export class GameLogicSubsystem implements Subsystem {
     return created;
   }
 
-  private resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName: string): string {
-    const normalizedSetName = this.normalizeScriptAttackPrioritySetName(attackPrioritySetName);
-    if (!normalizedSetName) {
-      return '';
-    }
-    return this.scriptAttackPrioritySetsByName.has(normalizedSetName)
-      ? normalizedSetName
-      : '';
-  }
-
-  /**
-   * Source parity: ScriptEngine::setPriorityThing.
-   */
-  private executeScriptSetAttackPriorityThing(
-    attackPrioritySetName: string,
-    objectTypeName: string,
-    priority: number,
-  ): boolean {
-    const info = this.getOrCreateScriptAttackPrioritySetRecord(attackPrioritySetName);
-    if (!info) {
-      return false;
-    }
-
-    const objectTypes = this.resolveScriptObjectTypeCandidatesForAction(objectTypeName);
-    if (!objectTypes || objectTypes.length === 0) {
-      return false;
-    }
-
-    const nextPriority = Math.trunc(priority);
-    for (const objectType of objectTypes) {
-      const normalizedObjectType = this.normalizeScriptObjectTypeName(objectType);
-      if (!normalizedObjectType || !this.resolveObjectDefByTemplateName(normalizedObjectType)) {
-        return false;
-      }
-      info.templatePriorityByName.set(normalizedObjectType, nextPriority);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptEngine::setPriorityKind.
-   */
-  private executeScriptSetAttackPriorityKindOf(
-    attackPrioritySetName: string,
-    kindOfBit: number,
-    priority: number,
-  ): boolean {
-    const info = this.getOrCreateScriptAttackPrioritySetRecord(attackPrioritySetName);
-    if (!info) {
-      return false;
-    }
-
-    const kindOfName = this.resolveScriptKindOfNameFromSourceBit(kindOfBit);
-    if (!kindOfName) {
-      return true;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-
-    const nextPriority = Math.trunc(priority);
-    for (const objectDef of registry.objects.values()) {
-      if (!this.normalizeKindOf(objectDef.kindOf).has(kindOfName)) {
-        continue;
-      }
-      const normalizedTemplateName = this.normalizeScriptObjectTypeName(objectDef.name);
-      if (!normalizedTemplateName) {
-        continue;
-      }
-      info.templatePriorityByName.set(normalizedTemplateName, nextPriority);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptEngine::setPriorityDefault.
-   */
-  private executeScriptSetDefaultAttackPriority(
-    attackPrioritySetName: string,
-    defaultPriority: number,
-  ): boolean {
-    const info = this.getOrCreateScriptAttackPrioritySetRecord(attackPrioritySetName);
-    if (!info) {
-      return false;
-    }
-    info.defaultPriority = Math.trunc(defaultPriority);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::updateNamedAttackPrioritySet.
-   */
-  private executeScriptNamedApplyAttackPrioritySet(entityId: number, attackPrioritySetName: string): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    entity.scriptAttackPrioritySetName = this.resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::updateTeamAttackPrioritySet.
-   */
-  private executeScriptTeamApplyAttackPrioritySet(teamName: string, attackPrioritySetName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const normalizedSetName = this.resolveScriptAttackPrioritySetNameForApply(attackPrioritySetName);
-    if (normalizedSetName) {
-      team.attackPrioritySetName = normalizedSetName;
-    }
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      entity.scriptAttackPrioritySetName = normalizedSetName;
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::updateBaseConstructionSpeed.
-   */
-  private executeScriptSetBaseConstructionSpeed(side: string, delayInSeconds: number): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-    this.sideTeamBuildDelaySecondsByScript.set(normalizedSide, Math.trunc(delayInSeconds));
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::updateNamedSetAttitude.
-   */
-  private executeScriptNamedSetAttitude(entityId: number, attitude: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    entity.scriptAttitude = Math.trunc(attitude);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::updateTeamSetAttitude.
-   */
-  private executeScriptTeamSetAttitude(teamName: string, attitude: number): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    const nextAttitude = Math.trunc(attitude);
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      entity.scriptAttitude = nextAttitude;
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doCreateObject.
-   */
-  private executeScriptCreateObjectAtPosition(
-    templateName: string,
-    teamName: string,
-    position: unknown,
-    angleRadians: number,
-  ): boolean {
-    const coord3 = this.coerceScriptConditionCoord3(position);
-    if (!coord3) {
-      return false;
-    }
-    return this.executeScriptCreateObject(
-      '',
-      templateName,
-      teamName,
-      coord3.x,
-      coord3.y,
-      angleRadians,
-      coord3.z,
-    );
-  }
-
-  /**
-   * Source parity: ScriptActions::UNIT_SPAWN_NAMED_LOCATION_ORIENTATION.
-   */
-  private executeScriptCreateNamedObjectAtPosition(
-    objectName: string,
-    templateName: string,
-    teamName: string,
-    position: unknown,
-    angleRadians: number,
-  ): boolean {
-    const coord3 = this.coerceScriptConditionCoord3(position);
-    if (!coord3) {
-      return false;
-    }
-    return this.executeScriptCreateObject(
-      objectName,
-      templateName,
-      teamName,
-      coord3.x,
-      coord3.y,
-      angleRadians,
-      coord3.z,
-    );
-  }
-
-  /**
-   * Source parity: ScriptActions::createUnitOnTeamAt.
-   */
-  private executeScriptCreateUnitOnTeamAtWaypoint(
-    objectName: string,
-    templateName: string,
-    teamName: string,
-    waypointName: string,
-  ): boolean {
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-    return this.executeScriptCreateObject(
-      objectName,
-      templateName,
-      teamName,
-      waypoint.x,
-      waypoint.z,
-      0,
-    );
-  }
-
-  /**
-   * Source parity shared by ScriptActions::doCreateObject and createUnitOnTeamAt.
-   */
-  private executeScriptCreateObject(
-    objectName: string,
-    templateName: string,
-    teamName: string,
-    worldX: number,
-    worldZ: number,
-    angleRadians: number,
-    worldY?: number,
-  ): boolean {
-    const normalizedTemplateName = templateName.trim();
-    if (!normalizedTemplateName) {
-      return false;
-    }
-    if (!Number.isFinite(worldX) || !Number.isFinite(worldZ) || !Number.isFinite(angleRadians)) {
-      return false;
-    }
-
-    const team = this.getScriptTeamRecord(teamName) ?? this.getOrCreateScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const normalizedObjectName = this.normalizeScriptObjectName(objectName);
-    const hasObjectName = normalizedObjectName.length > 0;
-    if (hasObjectName) {
-      const existingNamedEntity = this.resolveScriptNamedEntityByName(normalizedObjectName);
-      if (existingNamedEntity && !this.isScriptEntityEffectivelyDead(existingNamedEntity)) {
-        return false;
-      }
-    }
-
-    const teamSide = this.resolveScriptTeamControllingSide(team);
-    const created = this.spawnEntityFromTemplate(
-      normalizedTemplateName,
-      worldX,
-      worldZ,
-      angleRadians,
-      teamSide || undefined,
-    );
-    if (!created) {
-      return false;
-    }
-
-    if (hasObjectName) {
-      this.transferScriptObjectName(normalizedObjectName, created);
-    }
-    if (worldY !== undefined && Number.isFinite(worldY)) {
-      created.y = worldY + created.baseHeight;
-    }
-    if (created.kindOf.has('BLAST_CRATER')) {
-      this.createCraterInTerrain(created);
-      // Source parity (GeneralsMD): ScriptActions::doCreateObject adds blast
-      // crater footprint to pathfind map immediately after terrain deformation.
-      this.refreshNavigationGridFromCurrentMap();
-    }
-
-    team.memberEntityIds.add(created.id);
-    team.created = true;
-    if (!team.controllingSide) {
-      const createdSide = this.normalizeSide(created.side);
-      if (createdSide) {
-        team.controllingSide = createdSide;
-        if (!team.controllingPlayerToken) {
-          team.controllingPlayerToken = this.normalizeControllingPlayerToken(createdSide);
-        }
-      }
-    }
-    return true;
-  }
-
   /**
    * Source parity: TerrainLogic::createCraterInTerrain (GeneralsMD).
    * Digs a circular crater beneath BLAST_CRATER objects by lowering raw map
    * height samples and clamping to at least 1.
    */
-  private createCraterInTerrain(entity: MapEntity): void {
+  /* @internal */ createCraterInTerrain(entity: MapEntity): void {
     const heightmap = this.mapHeightmap;
     if (!heightmap) {
       return;
@@ -22300,444 +13011,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private resolveScriptNamedEntityByName(objectName: string): MapEntity | null {
-    const normalizedObjectName = this.normalizeScriptObjectName(objectName);
-    if (!normalizedObjectName) {
-      return null;
-    }
-    const mappedId = this.scriptNamedEntitiesByName.get(normalizedObjectName);
-    if (mappedId === undefined) {
-      return null;
-    }
-    const entity = this.spawnedEntities.get(mappedId);
-    if (!entity || entity.scriptName !== normalizedObjectName) {
-      return null;
-    }
-    return entity;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamStop(team, TRUE) in ScriptActions.cpp.
-   * Stops all current members, marks them recruitable, and merges them into
-   * the controlling player's default team when available.
-   */
-  private executeScriptTeamStopAndDisband(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-    return this.executeScriptSingleTeamStopAndDisband(team);
-  }
-
-  private executeScriptSingleTeamStopAndDisband(team: ScriptTeamRecord): boolean {
-    const stopped = this.executeScriptTeamStop(team.nameUpper);
-    if (!stopped) {
-      return false;
-    }
-
-    // Source parity: ScriptActions::doTeamStop(team, TRUE) marks each member
-    // recruitable before merging into the controlling player's default team.
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (entity.destroyed) {
-        continue;
-      }
-      entity.scriptAiRecruitable = true;
-    }
-
-    // Source parity bridge: doTeamStop(team, TRUE) marks members recruitable before merge.
-    team.recruitableOverride = true;
-
-    const controllingSide = this.resolveScriptTeamControllingSide(team);
-    if (controllingSide) {
-      const defaultTeamNameUpper = this.scriptDefaultTeamNameBySide.get(controllingSide) ?? null;
-      // Source parity bridge: when disband is requested on the controlling side's
-      // default team, keep default-team bookkeeping intact.
-      if (defaultTeamNameUpper && defaultTeamNameUpper === team.nameUpper) {
-        return true;
-      }
-      if (defaultTeamNameUpper && defaultTeamNameUpper !== team.nameUpper) {
-        if (this.executeScriptTeamMergeIntoTeam(team.nameUpper, defaultTeamNameUpper)) {
-          return true;
-        }
-      }
-    }
-
-    return this.clearScriptTeam(team.nameUpper);
-  }
-
-  /**
-   * Source parity: ScriptActions::doBuildTeam.
-   * Materializes TeamPrototype instances for non-singleton teams.
-   */
-  private executeScriptBuildTeam(teamName: string): boolean {
-    const prototype = this.getScriptTeamPrototypeRecord(teamName);
-    if (!prototype) {
-      return false;
-    }
-    const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
-    if (team) {
-      this.scheduleScriptTeamCreatedByConfiguredDelay(team);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doRecruitTeam.
-   * Materializes TeamPrototype instances for non-singleton teams.
-   */
-  private executeScriptRecruitTeam(teamName: string, _recruitRadius: number): boolean {
-    const prototype = this.getScriptTeamPrototypeRecord(teamName);
-    if (!prototype) {
-      return false;
-    }
-
-    // Source parity: singleton teams with live members cannot be recruited again.
-    // Keep existing created-pulse behavior for templates that don't define recruit entries.
-    const hasRecruitEntries = prototype.reinforcementUnitEntries.length > 0;
-    if (hasRecruitEntries && this.isScriptTeamPrototypeSingleton(prototype)) {
-      const singletonTeam = this.getScriptTeamRecord(prototype.nameUpper);
-      if (singletonTeam && this.getScriptTeamMemberEntities(singletonTeam)
-        .some((entity) => this.isScriptTeamMemberAliveForObjects(entity))) {
-        return true;
-      }
-    }
-
-    const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
-    if (team) {
-      this.executeScriptRecruitUnitsIntoTeam(team, prototype, _recruitRadius);
-      this.scheduleScriptTeamCreatedByConfiguredDelay(team);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: AISkirmishPlayer::recruitSpecificAITeam + Team::tryToRecruit.
-   * Recruits nearest eligible units of requested template(s) into the target team.
-   */
-  private executeScriptRecruitUnitsIntoTeam(
-    targetTeam: ScriptTeamRecord,
-    prototype: ScriptTeamRecord,
-    recruitRadius: number,
-  ): number {
-    const controllingSide = this.resolveScriptTeamControllingSide(targetTeam)
-      ?? this.resolveScriptTeamControllingSide(prototype);
-    if (!controllingSide) {
-      return 0;
-    }
-    const home = this.resolveScriptTeamRecruitHomePosition(prototype);
-    const maxDistance = recruitRadius < 1 ? 99999 : recruitRadius;
-
-    let recruited = 0;
-    for (const unitEntry of prototype.reinforcementUnitEntries) {
-      let remaining = unitEntry.maxUnits;
-      while (remaining > 0) {
-        const candidate = this.findScriptTeamRecruitCandidate(
-          targetTeam,
-          unitEntry.templateName,
-          controllingSide,
-          home.x,
-          home.z,
-          maxDistance,
-        );
-        if (!candidate) {
-          break;
-        }
-        if (candidate.sourceTeam.nameUpper !== targetTeam.nameUpper) {
-          candidate.sourceTeam.memberEntityIds.delete(candidate.entity.id);
-        }
-        targetTeam.memberEntityIds.add(candidate.entity.id);
-        if (candidate.entity.canMove && !this.entityHasObjectStatus(candidate.entity, 'DISABLED_HELD')) {
-          this.issueMoveTo(candidate.entity.id, home.x, home.z);
-        }
-        recruited += 1;
-        remaining -= 1;
-      }
-    }
-
-    return recruited;
-  }
-
-  private resolveScriptTeamRecruitHomePosition(team: ScriptTeamRecord): { x: number; z: number } {
-    const waypointName = team.homeWaypointName.trim();
-    if (!waypointName) {
-      return { x: 0, z: 0 };
-    }
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return { x: 0, z: 0 };
-    }
-    return waypoint;
-  }
-
-  private isScriptTeamRecruitSourceActive(team: ScriptTeamRecord): boolean {
-    return team.created || team.memberEntityIds.size > 0;
-  }
-
-  private isScriptTeamRecruitSourceEligible(
-    sourceTeam: ScriptTeamRecord,
-    targetTeam: ScriptTeamRecord,
-    controllingSide: string,
-  ): boolean {
-    if (!this.isScriptTeamRecruitSourceActive(sourceTeam)) {
-      return false;
-    }
-    const sourceControllingSide = this.resolveScriptTeamControllingSide(sourceTeam);
-    if (!sourceControllingSide || sourceControllingSide !== controllingSide) {
-      return false;
-    }
-    if (sourceTeam.productionPriority >= targetTeam.productionPriority) {
-      return false;
-    }
-
-    const defaultTeamNameUpper = this.scriptDefaultTeamNameBySide.get(controllingSide) ?? '';
-    let teamIsRecruitable = sourceTeam.nameUpper === defaultTeamNameUpper;
-    if (sourceTeam.isAIRecruitable) {
-      teamIsRecruitable = true;
-    }
-    if (sourceTeam.recruitableOverride !== null) {
-      teamIsRecruitable = sourceTeam.recruitableOverride;
-    }
-    return teamIsRecruitable;
-  }
-
-  private findScriptTeamRecruitCandidate(
-    targetTeam: ScriptTeamRecord,
-    templateName: string,
-    controllingSide: string,
-    homeX: number,
-    homeZ: number,
-    maxDistance: number,
-  ): { entity: MapEntity; sourceTeam: ScriptTeamRecord } | null {
-    const maxDistanceSqr = maxDistance * maxDistance;
-    let bestEntity: MapEntity | null = null;
-    let bestSourceTeam: ScriptTeamRecord | null = null;
-    let bestDistSqr = maxDistanceSqr;
-
-    for (const sourceTeam of this.scriptTeamsByName.values()) {
-      if (!this.isScriptTeamRecruitSourceEligible(sourceTeam, targetTeam, controllingSide)) {
-        continue;
-      }
-      const isDefaultTeam = sourceTeam.nameUpper === (this.scriptDefaultTeamNameBySide.get(controllingSide) ?? '');
-
-      for (const entity of this.getScriptTeamMemberEntities(sourceTeam)) {
-        if (entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
-          continue;
-        }
-        if (this.normalizeSide(entity.side) !== controllingSide) {
-          continue;
-        }
-        if (!this.areEquivalentTemplateNames(entity.templateName, templateName)) {
-          continue;
-        }
-        if (!entity.scriptAiRecruitable) {
-          continue;
-        }
-        if (entity.objectStatusFlags.has('DISABLED_HELD')) {
-          continue;
-        }
-
-        const dx = homeX - entity.x;
-        const dz = homeZ - entity.z;
-        const distSqr = dx * dx + dz * dz;
-        if (distSqr > maxDistanceSqr) {
-          continue;
-        }
-
-        if (!bestEntity && isDefaultTeam) {
-          bestEntity = entity;
-          bestSourceTeam = sourceTeam;
-          bestDistSqr = distSqr;
-          continue;
-        }
-
-        if (distSqr <= bestDistSqr) {
-          bestEntity = entity;
-          bestSourceTeam = sourceTeam;
-          bestDistSqr = distSqr;
-        }
-      }
-    }
-
-    if (!bestEntity || !bestSourceTeam) {
-      return null;
-    }
-    return { entity: bestEntity, sourceTeam: bestSourceTeam };
-  }
-
-  /**
-   * Source parity: ScriptActions::doCreateReinforcements.
-   * Materializes TeamTemplate reinforcement members (unit entries + optional transport),
-   * including teamStartsFull loading and arrival evacuation behavior.
-   * Source parity: DeliverPayloadAIUpdate PutInContainer + staged drop/exit behavior
-   * is wired through pendingScriptReinforcementTransportArrivalByEntityId.
-   */
-  private executeScriptCreateReinforcementTeam(teamName: string, waypointName: string): boolean {
-    const prototype = this.getScriptTeamPrototypeRecord(teamName);
-    if (!prototype) {
-      return false;
-    }
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-
-    const team = this.resolveScriptTeamBuildOrRecruitTarget(prototype);
-    if (!team) {
-      // Source parity: respect instance-cap behavior without failing script execution.
-      return true;
-    }
-
-    this.scheduleScriptTeamCreatedByConfiguredDelay(team);
-    this.materializeScriptReinforcementMembers(prototype, team, waypoint);
-    return true;
-  }
-
-  private materializeScriptReinforcementMembers(
-    prototype: ScriptTeamRecord,
-    team: ScriptTeamRecord,
-    destination: { x: number; z: number },
-  ): void {
-    const controllingSide = this.resolveScriptTeamControllingSide(team) ?? prototype.controllingSide ?? undefined;
-    let originX = destination.x;
-    let originZ = destination.z;
-    let needToMoveToDestination = false;
-
-    const reinforceOriginName = prototype.reinforcementStartWaypointName.trim();
-    if (reinforceOriginName) {
-      const reinforceOrigin = this.resolveScriptWaypointPosition(reinforceOriginName);
-      if (reinforceOrigin) {
-        originX = reinforceOrigin.x;
-        originZ = reinforceOrigin.z;
-        if (originX !== destination.x || originZ !== destination.z) {
-          needToMoveToDestination = true;
-        }
-      }
-    }
-
-    const transportTemplateName = prototype.reinforcementTransportTemplateName.trim();
-    const transportTemplateUpper = transportTemplateName.toUpperCase();
-    let primaryTransport: MapEntity | null = null;
-
-    if (transportTemplateName) {
-      const spawnedTransport = this.spawnEntityFromTemplate(
-        transportTemplateName,
-        originX,
-        originZ,
-        0,
-        controllingSide,
-      );
-      if (spawnedTransport) {
-        this.positionEntityAtWorldXZ(spawnedTransport, originX, originZ);
-        team.memberEntityIds.add(spawnedTransport.id);
-        primaryTransport = spawnedTransport;
-      }
-    }
-
-    for (const unitEntry of prototype.reinforcementUnitEntries) {
-      let lastSpawnedUnit: MapEntity | null = null;
-      for (let unitIndex = 0; unitIndex < unitEntry.maxUnits; unitIndex += 1) {
-        const spawnedUnit = this.spawnEntityFromTemplate(
-          unitEntry.templateName,
-          originX,
-          originZ,
-          0,
-          controllingSide,
-        );
-        if (!spawnedUnit) {
-          continue;
-        }
-        const xOffset = 2.25 * unitIndex * Math.max(spawnedUnit.geometryMajorRadius, MAP_XY_FACTOR * 0.5);
-        this.positionEntityAtWorldXZ(spawnedUnit, originX + xOffset, originZ);
-        team.memberEntityIds.add(spawnedUnit.id);
-        lastSpawnedUnit = spawnedUnit;
-      }
-
-      if (lastSpawnedUnit) {
-        // Source parity: C++ increments origin.y by 2 * majorRadius between unit type rows.
-        // In this port Y is vertical, so we advance on world Z (engine horizontal Y).
-        originZ += 2 * Math.max(lastSpawnedUnit.geometryMajorRadius, MAP_XY_FACTOR * 0.5);
-      }
-    }
-
-    if (!team.controllingSide && controllingSide) {
-      team.controllingSide = controllingSide;
-      if (!team.controllingPlayerToken) {
-        team.controllingPlayerToken = this.normalizeControllingPlayerToken(controllingSide);
-      }
-    }
-
-    if (primaryTransport && prototype.reinforcementTeamStartsFull) {
-      this.loadScriptReinforcementTeamIntoExistingTransports(team, primaryTransport.id);
-    }
-
-    if (primaryTransport) {
-      this.loadScriptReinforcementMembersIntoTransportTemplate(
-        team,
-        primaryTransport,
-        transportTemplateUpper,
-        controllingSide,
-        originX,
-        originZ,
-      );
-    }
-
-    if (primaryTransport) {
-      const transportObjectDef = this.resolveObjectDefByTemplateName(primaryTransport.templateName);
-      const transportDeliverPayloadProfile = this.resolveScriptReinforcementDeliverPayloadProfile(transportObjectDef);
-      const transportUsesDeliverPayload = transportDeliverPayloadProfile !== null;
-      for (const member of this.getScriptTeamMemberEntities(team)) {
-        if (member.destroyed) {
-          continue;
-        }
-        if (member.templateName.trim().toUpperCase() === transportTemplateUpper) {
-          this.issueMoveTo(member.id, destination.x, destination.z, NO_ATTACK_DISTANCE, true);
-          this.pendingScriptReinforcementTransportArrivalByEntityId.set(member.id, {
-            targetX: destination.x,
-            targetZ: destination.z,
-            originX: member.x,
-            originZ: member.z,
-            deliveryDistance: transportDeliverPayloadProfile?.deliveryDistance ?? 0,
-            deliverPayloadMode: transportUsesDeliverPayload,
-            deliverPayloadDoorDelayFrames: transportDeliverPayloadProfile?.doorDelayFrames ?? 0,
-            deliverPayloadDropDelayFrames: transportDeliverPayloadProfile?.dropDelayFrames ?? 0,
-            deliverPayloadNextDropFrame: -1,
-            deliverPayloadDropOffsetX: transportDeliverPayloadProfile?.dropOffsetX ?? 0,
-            deliverPayloadDropOffsetZ: transportDeliverPayloadProfile?.dropOffsetZ ?? 0,
-            deliverPayloadDropVarianceX: transportDeliverPayloadProfile?.dropVarianceX ?? 0,
-            deliverPayloadDropVarianceZ: transportDeliverPayloadProfile?.dropVarianceZ ?? 0,
-            exitTargetX: Number.NaN,
-            exitTargetZ: Number.NaN,
-            // Source parity: ScriptActions::doCreateReinforcements always routes
-            // DeliverPayloadAIUpdate transports through deliverPayloadViaModuleData(),
-            // which exits/deletes regardless of TeamTemplate::m_transportsExit.
-            transportsExit: transportUsesDeliverPayload || prototype.reinforcementTransportsExit,
-            evacuationIssued: false,
-            exitMoveIssued: false,
-          });
-          continue;
-        }
-        if (this.isEntityContained(member)) {
-          continue;
-        }
-        if (!member.objectStatusFlags.has('DISABLED_HELD') && member.canMove) {
-          this.issueMoveTo(member.id, destination.x, destination.z, NO_ATTACK_DISTANCE, true);
-        }
-      }
-      return;
-    }
-
-    if (!needToMoveToDestination) {
-      return;
-    }
-
-    for (const member of this.getScriptTeamMemberEntities(team)) {
-      if (member.destroyed || this.isEntityContained(member) || !member.canMove) {
-        continue;
-      }
-      this.issueMoveTo(member.id, destination.x, destination.z, NO_ATTACK_DISTANCE, true);
-    }
-  }
-
   private positionEntityAtWorldXZ(entity: MapEntity, worldX: number, worldZ: number): void {
     entity.x = worldX;
     entity.z = worldZ;
@@ -22745,7 +13018,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.updatePathfindPosCell(entity);
   }
 
-  private loadScriptReinforcementTeamIntoExistingTransports(
+  /* @internal */ loadScriptReinforcementTeamIntoExistingTransports(
     team: ScriptTeamRecord,
     primaryTransportId: number,
   ): void {
@@ -22787,7 +13060,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private loadScriptReinforcementMembersIntoTransportTemplate(
+  /* @internal */ loadScriptReinforcementMembersIntoTransportTemplate(
     team: ScriptTeamRecord,
     primaryTransport: MapEntity,
     transportTemplateUpper: string,
@@ -22861,84 +13134,6 @@ export class GameLogicSubsystem implements Subsystem {
 
       this.enterTransport(memberToLoad, activeTransport);
     }
-  }
-
-  private isScriptReinforcementTransportValidForUnit(transport: MapEntity, unit: MapEntity): boolean {
-    const containProfile = transport.containProfile;
-    if (!containProfile) {
-      return false;
-    }
-    const validationUnit = this.resolveScriptTransportValidationEntity(unit);
-    const transportSide = this.normalizeSide(transport.side);
-    const unitSide = this.normalizeSide(validationUnit.side);
-    if (transportSide && unitSide && transportSide !== unitSide) {
-      return false;
-    }
-    if (!this.isScriptContainRelationshipAllowed(transport, validationUnit)) {
-      return false;
-    }
-    if (!this.isScriptContainKindAllowed(transport, validationUnit)) {
-      return false;
-    }
-
-    const unitKindOf = this.resolveEntityKindOfSet(validationUnit);
-    switch (containProfile.moduleType) {
-      case 'TRANSPORT':
-        return (unitKindOf.has('INFANTRY') || unitKindOf.has('VEHICLE'))
-          && this.resolveScriptEntityTransportSlotCount(unit) > 0;
-      case 'OVERLORD':
-      case 'HELIX':
-        return (unitKindOf.has('INFANTRY') || unitKindOf.has('PORTABLE_STRUCTURE'))
-          && this.resolveScriptEntityTransportSlotCount(unit) > 0;
-      case 'OPEN':
-      case 'HEAL':
-      case 'INTERNET_HACK':
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  private resolveScriptReinforcementDeliverPayloadProfile(objectDef: ObjectDef | null):
-  {
-    putInContainerTemplateName: string | null;
-    deliveryDistance: number;
-    doorDelayFrames: number;
-    dropDelayFrames: number;
-    dropOffsetX: number;
-    dropOffsetZ: number;
-    dropVarianceX: number;
-    dropVarianceZ: number;
-  } | null {
-    if (!objectDef) {
-      return null;
-    }
-    for (const block of objectDef.blocks) {
-      if (block.type.toUpperCase() !== 'BEHAVIOR') {
-        continue;
-      }
-      const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-      if (moduleType !== 'DELIVERPAYLOADAIUPDATE') {
-        continue;
-      }
-      const putInContainerTemplateName = readStringField(block.fields, ['PutInContainer'])?.trim() ?? '';
-      const deliveryDistance = Math.max(0, readNumericField(block.fields, ['DeliveryDistance']) ?? 0);
-      const doorDelayMs = Math.max(0, readNumericField(block.fields, ['DoorDelay']) ?? 0);
-      const dropDelayMs = Math.max(0, readNumericField(block.fields, ['DropDelay']) ?? 0);
-      const dropOffset = readCoord3DField(block.fields, ['DropOffset']) ?? { x: 0, y: 0, z: 0 };
-      const dropVariance = readCoord3DField(block.fields, ['DropVariance']) ?? { x: 0, y: 0, z: 0 };
-      return {
-        putInContainerTemplateName: putInContainerTemplateName || null,
-        deliveryDistance,
-        doorDelayFrames: this.msToLogicFrames(doorDelayMs),
-        dropDelayFrames: this.msToLogicFrames(dropDelayMs),
-        dropOffsetX: dropOffset.x,
-        dropOffsetZ: dropOffset.y,
-        dropVarianceX: Math.max(0, dropVariance.x),
-        dropVarianceZ: Math.max(0, dropVariance.y),
-      };
-    }
-    return null;
   }
 
   private dropScriptReinforcementDeliverPayloadPassenger(
@@ -23123,63 +13318,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private isScriptTeamPrototypeSingleton(team: ScriptTeamRecord): boolean {
-    if (team.maxInstances < 2) {
-      return true;
-    }
-    return team.isSingleton;
-  }
-
-  private createScriptTeamInstanceFromPrototype(prototype: ScriptTeamRecord): ScriptTeamRecord {
-    let suffix = 1;
-    let instanceNameUpper = `${prototype.nameUpper}#${suffix}`;
-    while (this.scriptTeamsByName.has(instanceNameUpper)) {
-      suffix += 1;
-      instanceNameUpper = `${prototype.nameUpper}#${suffix}`;
-    }
-
-    const instance: ScriptTeamRecord = {
-      nameUpper: instanceNameUpper,
-      prototypeNameUpper: prototype.nameUpper,
-      memberEntityIds: new Set<number>(),
-      created: false,
-      stateName: '',
-      attackPrioritySetName: '',
-      recruitableOverride: prototype.recruitableOverride,
-      isAIRecruitable: prototype.isAIRecruitable,
-      homeWaypointName: prototype.homeWaypointName,
-      controllingSide: prototype.controllingSide,
-      controllingPlayerToken: prototype.controllingPlayerToken,
-      isSingleton: false,
-      maxInstances: prototype.maxInstances,
-      productionPriority: prototype.productionPriority,
-      productionPrioritySuccessIncrease: prototype.productionPrioritySuccessIncrease,
-      productionPriorityFailureDecrease: prototype.productionPriorityFailureDecrease,
-      reinforcementUnitEntries: prototype.reinforcementUnitEntries.map((entry) => ({ ...entry })),
-      reinforcementTransportTemplateName: prototype.reinforcementTransportTemplateName,
-      reinforcementStartWaypointName: prototype.reinforcementStartWaypointName,
-      reinforcementTeamStartsFull: prototype.reinforcementTeamStartsFull,
-      reinforcementTransportsExit: prototype.reinforcementTransportsExit,
-    };
-    this.scriptTeamsByName.set(instanceNameUpper, instance);
-    this.registerScriptTeamPrototypeInstance(instance);
-    return instance;
-  }
-
-  private resolveScriptTeamBuildOrRecruitTarget(prototype: ScriptTeamRecord): ScriptTeamRecord | null {
-    if (this.isScriptTeamPrototypeSingleton(prototype)) {
-      return prototype;
-    }
-
-    const allMaterializedInstances = this.getScriptTeamInstancesByPrototypeName(prototype.nameUpper, true);
-    if (prototype.maxInstances > 0 && allMaterializedInstances.length >= prototype.maxInstances) {
-      // Source parity: team-instance cap blocks additional materialization.
-      return null;
-    }
-    return this.createScriptTeamInstanceFromPrototype(prototype);
-  }
-
-  private scheduleScriptTeamCreatedByConfiguredDelay(team: ScriptTeamRecord): void {
+  /* @internal */ scheduleScriptTeamCreatedByConfiguredDelay(team: ScriptTeamRecord): void {
     const controllingSide = this.resolveScriptTeamControllingSide(team);
     const delaySeconds = controllingSide
       ? Math.max(0, Math.trunc(this.sideTeamBuildDelaySecondsByScript.get(controllingSide) ?? 0))
@@ -23198,192 +13337,10 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: ScriptActions::doNamedDamage.
-   * Applies UNRESISTABLE damage with source INVALID_ID.
-   */
-  private executeScriptNamedDamage(entityId: number, damageAmount: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.applyWeaponDamageAmount(null, entity, damageAmount, 'UNRESISTABLE', 'NORMAL');
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedDelete.
-   * Uses destroyObject semantics (silent immediate removal, no death pipeline).
-   */
-  private executeScriptNamedDelete(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.silentDestroyEntity(entity.id);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamDelete.
-   * Uses destroyObject semantics on team members and optionally skips effectively-dead ones.
-   */
-  private executeScriptTeamDelete(teamName: string, ignoreDead: boolean): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const entities = this.getScriptTeamMemberEntities(team);
-    for (const entity of entities) {
-      if (ignoreDead && this.isScriptEntityEffectivelyDead(entity)) {
-        continue;
-      }
-      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-        this.evacuateContainedEntities(entity, entity.x, entity.z, null);
-      }
-      this.silentDestroyEntity(entity.id);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedKill.
-   */
-  private executeScriptNamedKill(entityId: number): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity || entity.destroyed) {
-      return false;
-    }
-    this.markEntityDestroyed(entity.id, -1);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamKill.
-   */
-  private executeScriptTeamKill(teamName: string): boolean {
-    const team = this.getScriptTeamRecord(teamName);
-    if (!team) {
-      return false;
-    }
-
-    const entities = this.getScriptTeamMemberEntities(team);
-    for (const entity of entities) {
-      if (entity.containProfile && this.collectContainedEntityIds(entity.id).length > 0) {
-        this.evacuateContainedEntities(entity, entity.x, entity.z, null);
-      }
-    }
-
-    for (const entity of entities) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.isScriptEntityEffectivelyDead(entity) && !this.isBeaconEntity(entity)) {
-        continue;
-      }
-      this.markEntityDestroyed(entity.id, -1);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerKill.
-   */
-  private executeScriptPlayerKill(side: string): boolean {
-    const normalizedSide = this.normalizeSide(side);
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedSide)) {
-      return false;
-    }
-    this.killRemainingEntitiesForSide(normalizedSide);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doPlayerTransferAssetsToPlayer.
-   * Transfers all non-beacon objects and all credits from source side to target side.
-   */
-  private executeScriptPlayerTransferOwnershipPlayer(sourceSide: string, targetSide: string): boolean {
-    const sourceSelector = this.resolveScriptPlayerConditionSelector(sourceSide);
-    const targetSelector = this.resolveScriptPlayerConditionSelector(targetSide);
-    const normalizedSourceSide = sourceSelector.normalizedSide;
-    const normalizedTargetSide = targetSelector.normalizedSide;
-    if (!normalizedSourceSide || !normalizedTargetSide) {
-      return false;
-    }
-    const knownSides = this.collectScriptKnownSides();
-    if (!knownSides.has(normalizedSourceSide) || !knownSides.has(normalizedTargetSide)) {
-      return false;
-    }
-
-    const entityIdsToTransfer: number[] = [];
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSourceSide) {
-        continue;
-      }
-      if (
-        sourceSelector.explicitNamedPlayer
-        && sourceSelector.controllingPlayerToken
-        && this.resolveEntityControllingPlayerTokenForAffiliation(entity) !== sourceSelector.controllingPlayerToken
-      ) {
-        continue;
-      }
-      if (this.isBeaconEntity(entity)) {
-        continue;
-      }
-      entityIdsToTransfer.push(entity.id);
-    }
-
-    for (const entityId of entityIdsToTransfer) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed) {
-        continue;
-      }
-      this.transferScriptEntityToSide(
-        entity,
-        normalizedTargetSide,
-        targetSelector.controllingPlayerToken,
-      );
-    }
-
-    const transferredCredits = this.getSideCredits(normalizedSourceSide);
-    this.setSideCredits(normalizedSourceSide, 0);
-    this.depositSideCredits(normalizedTargetSide, transferredCredits);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doNamedTransferAssetsToPlayer.
-   * Transfers one named object to the target side.
-   */
-  private executeScriptNamedTransferOwnershipPlayer(entityId: number, targetSide: string): boolean {
-    const entity = this.spawnedEntities.get(entityId);
-    const targetSelector = this.resolveScriptPlayerConditionSelector(targetSide);
-    const normalizedTargetSide = targetSelector.normalizedSide;
-    if (!entity || entity.destroyed || !normalizedTargetSide) {
-      return false;
-    }
-    if (!this.collectScriptKnownSides().has(normalizedTargetSide)) {
-      return false;
-    }
-    this.transferScriptEntityToSide(
-      entity,
-      normalizedTargetSide,
-      targetSelector.controllingPlayerToken,
-    );
-    return true;
-  }
-
-  /**
    * Source parity: ownership transfer used by ScriptActions asset-transfer actions.
    * Mirrors setTeam + updateTeamAndPlayerStuff without capture-bonus side effects.
    */
-  private transferScriptEntityToSide(
+  /* @internal */ transferScriptEntityToSide(
     entity: MapEntity,
     targetSide: string,
     targetControllingPlayerToken?: string | null,
@@ -23419,97 +13376,6 @@ export class GameLogicSubsystem implements Subsystem {
       this.transferRadarUpgradesBetweenSides(entity, normalizedSourceSide, normalizedTargetSide);
       this.executePendingUpgradeModules(entity.id, entity);
     }
-  }
-
-  /**
-   * Source parity: ScriptActions::doTeamDelete(ignoreDead=true).
-   * TEAM_DELETE_LIVING destroys current non-destroyed team members.
-   */
-  private executeScriptTeamDeleteLiving(teamName: string): boolean {
-    return this.executeScriptTeamDelete(teamName, true);
-  }
-
-  /**
-   * Source parity: ScriptActions::doOversizeTheTerrain.
-   * App runtime bridge forwards this to TerrainVisual::setScriptTerrainOversizeAmount.
-   */
-  private executeScriptOversizeTerrain(amount: number): boolean {
-    if (!Number.isFinite(amount)) {
-      return false;
-    }
-    this.setScriptTerrainOversizeAmount(amount);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doResizeViewGuardband.
-   * App runtime bridge forwards this to ObjectVisualManager::setViewGuardBandBias.
-   */
-  private executeScriptResizeViewGuardband(guardbandX: number, guardbandY: number): boolean {
-    if (!Number.isFinite(guardbandX) || !Number.isFinite(guardbandY)) {
-      return false;
-    }
-    this.setScriptViewGuardbandBias(guardbandX, guardbandY);
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::deleteAllUnmanned.
-   */
-  private executeScriptDeleteAllUnmanned(): boolean {
-    const unmannedEntityIds: number[] = [];
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (!entity.objectStatusFlags.has('DISABLED_UNMANNED')) {
-        continue;
-      }
-      unmannedEntityIds.push(entity.id);
-    }
-
-    for (const entityId of unmannedEntityIds) {
-      this.markEntityDestroyed(entityId, -1);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doChooseVictimAlwaysUsesNormal.
-   */
-  private executeScriptChooseVictimAlwaysUsesNormal(enabled: boolean): boolean {
-    this.setScriptChooseVictimAlwaysUsesNormal(enabled);
-    return true;
-  }
-
-  private clearScriptTeamByNameUpper(teamNameUpper: string): boolean {
-    const team = this.scriptTeamsByName.get(teamNameUpper) ?? null;
-    if (!team) {
-      return false;
-    }
-
-    this.unregisterScriptTeamPrototypeInstance(team);
-    const removed = this.scriptTeamsByName.delete(team.nameUpper);
-    if (removed) {
-      this.removeAllSequentialScriptsForTeam(team.nameUpper);
-      this.scriptTeamCreatedReadyFrameByName.delete(team.nameUpper);
-      this.scriptTeamCreatedAutoClearFrameByName.delete(team.nameUpper);
-      for (const [side, defaultTeamNameUpper] of this.scriptDefaultTeamNameBySide) {
-        if (defaultTeamNameUpper === team.nameUpper) {
-          this.scriptDefaultTeamNameBySide.delete(side);
-        }
-      }
-      if (this.scriptCallingTeamNameUpper === team.nameUpper) {
-        this.scriptCallingTeamNameUpper = null;
-      }
-      if (this.scriptConditionTeamNameUpper === team.nameUpper) {
-        this.scriptConditionTeamNameUpper = null;
-      }
-      if (this.scriptLocalPlayerTeamNameUpper === team.nameUpper) {
-        this.scriptLocalPlayerTeamNameUpper = null;
-      }
-    }
-    return removed;
   }
 
   clearScriptTeam(teamName: string): boolean {
@@ -24323,14 +14189,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
-  }
-
-  private resolveScriptTeamTriggerIndex(triggerName: string): number {
-    const triggerNameUpper = triggerName.trim().toUpperCase();
-    if (!triggerNameUpper) {
-      return -1;
-    }
-    return this.mapTriggerRegions.findIndex((region) => region.nameUpper === triggerNameUpper);
   }
 
   private evaluateScriptSingleTeamInsideAreaEntirely(
@@ -26392,7 +16250,7 @@ export class GameLogicSubsystem implements Subsystem {
     if (statusTokens.length === 0) {
       return false;
     }
-    return statusTokens.some((token) => this.entityHasObjectStatus(entity, token));
+    return statusTokens.some((token: string) => this.entityHasObjectStatus(entity, token));
   }
 
   /**
@@ -26480,49 +16338,6 @@ export class GameLogicSubsystem implements Subsystem {
       powerState.energyProduction + powerState.powerBonus - powerState.energyConsumption;
     const desiredExcessKilowatts = Number.isFinite(filter.kilowatts) ? Math.trunc(filter.kilowatts) : 0;
     return this.compareScriptNumeric(filter.comparison, actualExcessKilowatts, desiredExcessKilowatts);
-  }
-
-  private getScriptPlayerPowerState(sideInput: string): SidePowerState | null {
-    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
-    const normalizedSide = selector.normalizedSide;
-    if (!normalizedSide) {
-      return null;
-    }
-    const targetToken = selector.explicitNamedPlayer ? selector.controllingPlayerToken : null;
-    if (!targetToken) {
-      return this.getSidePowerState(normalizedSide);
-    }
-
-    let energyProduction = 0;
-    let energyConsumption = 0;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
-      if (!ownerToken || ownerToken !== targetToken) {
-        continue;
-      }
-      if (entity.energyBonus > 0) {
-        energyProduction += entity.energyBonus;
-      } else if (entity.energyBonus < 0) {
-        energyConsumption += -entity.energyBonus;
-      }
-    }
-
-    const sideState = this.getSidePowerState(normalizedSide);
-    const totalProduction = energyProduction;
-    const brownedOut = energyConsumption > 0 && totalProduction < energyConsumption;
-    return {
-      powerBonus: 0,
-      energyProduction,
-      energyConsumption,
-      brownedOut,
-      powerSabotagedUntilFrame: sideState.powerSabotagedUntilFrame,
-    };
   }
 
   /**
@@ -26961,82 +16776,6 @@ export class GameLogicSubsystem implements Subsystem {
     return this.addScienceToSide(normalizedSide, normalizedScience);
   }
 
-  private getScriptScienceSetForPlayerToken(
-    controllingPlayerToken: string,
-    normalizedSide: string,
-  ): Set<string> {
-    const existing = this.controllingPlayerScriptSciences.get(controllingPlayerToken);
-    if (existing) {
-      return existing;
-    }
-    const created = new Set<string>(this.getSideScienceSet(normalizedSide));
-    this.controllingPlayerScriptSciences.set(controllingPlayerToken, created);
-    return created;
-  }
-
-  private getScriptScienceAcquiredEventSetForPlayerToken(controllingPlayerToken: string): Set<string> {
-    const existing = this.controllingPlayerScriptAcquiredSciences.get(controllingPlayerToken);
-    if (existing) {
-      return existing;
-    }
-    const created = new Set<string>();
-    this.controllingPlayerScriptAcquiredSciences.set(controllingPlayerToken, created);
-    return created;
-  }
-
-  private getScriptSciencePurchasePointsForPlayerInput(sideInput: string): number {
-    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
-    const normalizedSide = selector.normalizedSide;
-    if (!normalizedSide) {
-      return 0;
-    }
-    if (selector.explicitNamedPlayer && selector.controllingPlayerToken) {
-      const overridePoints = this.controllingPlayerScriptSciencePurchasePoints.get(selector.controllingPlayerToken);
-      if (overridePoints !== undefined) {
-        return overridePoints;
-      }
-    }
-    return this.getSideRankStateMap(normalizedSide).sciencePurchasePoints;
-  }
-
-  private grantScriptScienceForPlayerInput(sideInput: string, scienceName: string): boolean {
-    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
-    const normalizedSide = selector.normalizedSide;
-    if (!normalizedSide) {
-      return false;
-    }
-    if (!selector.explicitNamedPlayer || !selector.controllingPlayerToken) {
-      return this.grantSideScience(normalizedSide, scienceName);
-    }
-    if (this.countScriptPlayersForSide(normalizedSide) <= 1) {
-      return this.grantSideScience(normalizedSide, scienceName);
-    }
-
-    const normalizedScience = this.resolveScienceInternalName(scienceName);
-    if (!normalizedScience) {
-      return false;
-    }
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const scienceDef = findScienceDefByName(registry, normalizedScience);
-    if (!scienceDef) {
-      return false;
-    }
-    if (readBooleanField(scienceDef.fields, ['IsGrantable']) === false) {
-      return false;
-    }
-
-    const scienceSet = this.getScriptScienceSetForPlayerToken(selector.controllingPlayerToken, normalizedSide);
-    if (scienceSet.has(normalizedScience)) {
-      return false;
-    }
-    scienceSet.add(normalizedScience);
-    this.getScriptScienceAcquiredEventSetForPlayerToken(selector.controllingPlayerToken).add(normalizedScience);
-    return true;
-  }
-
   private canScriptPlayerPurchaseScience(sideInput: string, normalizedScience: string): boolean {
     const selector = this.resolveScriptPlayerConditionSelector(sideInput);
     const normalizedSide = selector.normalizedSide;
@@ -27085,56 +16824,6 @@ export class GameLogicSubsystem implements Subsystem {
     return scienceCost > 0 && scienceCost <= points;
   }
 
-  private purchaseScriptScienceForPlayerInput(sideInput: string, scienceName: string): boolean {
-    const selector = this.resolveScriptPlayerConditionSelector(sideInput);
-    const normalizedSide = selector.normalizedSide;
-    if (!normalizedSide) {
-      return false;
-    }
-    const normalizedScience = this.resolveScienceInternalName(scienceName);
-    if (!normalizedScience) {
-      return false;
-    }
-    if (!this.canScriptPlayerPurchaseScience(sideInput, normalizedScience)) {
-      return false;
-    }
-
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return false;
-    }
-    const scienceDef = findScienceDefByName(registry, normalizedScience);
-    if (!scienceDef) {
-      return false;
-    }
-    const scienceCost = this.getSciencePurchaseCost(scienceDef);
-    if (scienceCost <= 0) {
-      return false;
-    }
-
-    if (!selector.explicitNamedPlayer || !selector.controllingPlayerToken || this.countScriptPlayersForSide(normalizedSide) <= 1) {
-      if (!this.addScienceToSide(normalizedSide, normalizedScience)) {
-        return false;
-      }
-      const rankState = this.getSideRankStateMap(normalizedSide);
-      rankState.sciencePurchasePoints = Math.max(0, rankState.sciencePurchasePoints - scienceCost);
-      return true;
-    }
-
-    const scienceSet = this.getScriptScienceSetForPlayerToken(selector.controllingPlayerToken, normalizedSide);
-    if (scienceSet.has(normalizedScience)) {
-      return false;
-    }
-    scienceSet.add(normalizedScience);
-    this.getScriptScienceAcquiredEventSetForPlayerToken(selector.controllingPlayerToken).add(normalizedScience);
-    const currentPoints = this.getScriptSciencePurchasePointsForPlayerInput(sideInput);
-    this.controllingPlayerScriptSciencePurchasePoints.set(
-      selector.controllingPlayerToken,
-      Math.max(0, currentPoints - scienceCost),
-    );
-    return true;
-  }
-
   private resolveScienceInternalName(scienceName: string): string | null {
     const normalizedScienceName = scienceName.trim().toUpperCase();
     if (!normalizedScienceName || normalizedScienceName === 'NONE') {
@@ -27166,71 +16855,6 @@ export class GameLogicSubsystem implements Subsystem {
     sideSciences.add(normalizedScience);
     this.getScriptScienceAcquiredSet(normalizedSide).add(normalizedScience);
     return true;
-  }
-
-  private recordScriptTriggeredSpecialPowerEvent(
-    normalizedSide: string,
-    specialPowerName: string,
-    sourceEntityId: number,
-  ): void {
-    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
-    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
-      return;
-    }
-
-    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
-    if (normalizedSourceEntityId <= 0) {
-      return;
-    }
-
-    this.getScriptTriggeredSpecialPowerEvents(normalizedSide).push({
-      name: normalizedSpecialPowerName,
-      sourceEntityId: normalizedSourceEntityId,
-    });
-  }
-
-  private recordScriptCompletedSpecialPowerEvent(
-    normalizedSide: string,
-    specialPowerName: string,
-    sourceEntityId: number,
-  ): void {
-    const normalizedSpecialPowerName = this.normalizeShortcutSpecialPowerName(specialPowerName);
-    if (!normalizedSpecialPowerName || !Number.isFinite(sourceEntityId)) {
-      return;
-    }
-
-    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
-    if (normalizedSourceEntityId <= 0) {
-      return;
-    }
-
-    this.getScriptCompletedSpecialPowerEvents(normalizedSide).push({
-      name: normalizedSpecialPowerName,
-      sourceEntityId: normalizedSourceEntityId,
-    });
-  }
-
-  private recordScriptCompletedUpgradeEvent(
-    normalizedSide: string,
-    upgradeName: string,
-    sourceEntityId: number,
-  ): void {
-    const normalizedUpgradeName = upgradeName.trim().toUpperCase();
-    if (!normalizedUpgradeName || normalizedUpgradeName === 'NONE') {
-      return;
-    }
-    if (!Number.isFinite(sourceEntityId)) {
-      return;
-    }
-    const normalizedSourceEntityId = Math.trunc(sourceEntityId);
-    if (normalizedSourceEntityId <= 0) {
-      return;
-    }
-
-    this.getScriptCompletedUpgradeEvents(normalizedSide).push({
-      name: normalizedUpgradeName,
-      sourceEntityId: normalizedSourceEntityId,
-    });
   }
 
   private getSciencePurchaseCost(scienceDef: ScienceDef): number {
@@ -27276,7 +16900,7 @@ export class GameLogicSubsystem implements Subsystem {
     return null;
   }
 
-  private setSideScienceAvailability(side: string, scienceName: string, availability: string): boolean {
+  /* @internal */ setSideScienceAvailability(side: string, scienceName: string, availability: string): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return false;
@@ -27407,46 +17031,6 @@ export class GameLogicSubsystem implements Subsystem {
     return created;
   }
 
-  private getScriptScienceAcquiredSet(normalizedSide: string): Set<string> {
-    const existing = this.sideScriptAcquiredSciences.get(normalizedSide);
-    if (existing) {
-      return existing;
-    }
-    const created = new Set<string>();
-    this.sideScriptAcquiredSciences.set(normalizedSide, created);
-    return created;
-  }
-
-  private getScriptTriggeredSpecialPowerEvents(normalizedSide: string): ScriptNamedEvent[] {
-    const existing = this.sideScriptTriggeredSpecialPowerEvents.get(normalizedSide);
-    if (existing) {
-      return existing;
-    }
-    const created: ScriptNamedEvent[] = [];
-    this.sideScriptTriggeredSpecialPowerEvents.set(normalizedSide, created);
-    return created;
-  }
-
-  private getScriptCompletedSpecialPowerEvents(normalizedSide: string): ScriptNamedEvent[] {
-    const existing = this.sideScriptCompletedSpecialPowerEvents.get(normalizedSide);
-    if (existing) {
-      return existing;
-    }
-    const created: ScriptNamedEvent[] = [];
-    this.sideScriptCompletedSpecialPowerEvents.set(normalizedSide, created);
-    return created;
-  }
-
-  private getScriptCompletedUpgradeEvents(normalizedSide: string): ScriptNamedEvent[] {
-    const existing = this.sideScriptCompletedUpgradeEvents.get(normalizedSide);
-    if (existing) {
-      return existing;
-    }
-    const created: ScriptNamedEvent[] = [];
-    this.sideScriptCompletedUpgradeEvents.set(normalizedSide, created);
-    return created;
-  }
-
   private getSideKindOfProductionCostModifiers(normalizedSide: string): KindOfProductionCostModifier[] {
     const existing = this.sideKindOfProductionCostModifiers.get(normalizedSide);
     if (existing) {
@@ -27507,7 +17091,7 @@ export class GameLogicSubsystem implements Subsystem {
     return Math.max(1, Math.min(RANK_TABLE.length, normalizedLimit));
   }
 
-  private setSideRankLevel(side: string, newLevel: number): boolean {
+  /* @internal */ setSideRankLevel(side: string, newLevel: number): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide) {
       return false;
@@ -27586,7 +17170,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: Player::setSkillPointsModifier and getSkillPointsModifier.
    */
-  private setSideSkillPointsModifier(side: string, modifier: number): boolean {
+  /* @internal */ setSideSkillPointsModifier(side: string, modifier: number): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide || !Number.isFinite(modifier)) {
       return false;
@@ -27602,7 +17186,7 @@ export class GameLogicSubsystem implements Subsystem {
   /**
    * Source parity: ScriptActions::doAffectPlayerSkillset decrements incoming 1-based skillset.
    */
-  private setSideScriptSkillset(side: string, skillset: number): boolean {
+  /* @internal */ setSideScriptSkillset(side: string, skillset: number): boolean {
     const normalizedSide = this.normalizeSide(side);
     if (!normalizedSide || !Number.isFinite(skillset)) {
       return false;
@@ -30824,60 +20408,6 @@ export class GameLogicSubsystem implements Subsystem {
       return withoutPrefix.length > 0 ? withoutPrefix : null;
     }
     return normalized;
-  }
-
-  private resolveScriptObjectStatusMaskFromInput(value: unknown): number | null {
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) {
-        return null;
-      }
-      return Math.trunc(value);
-    }
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        return null;
-      }
-      const numeric = Number(trimmed);
-      if (Number.isFinite(numeric)) {
-        return Math.trunc(numeric);
-      }
-
-      let mask = 0;
-      let found = false;
-      for (const token of trimmed.split(/\s+/)) {
-        const normalized = this.normalizeObjectStatusName(token);
-        if (!normalized) {
-          continue;
-        }
-        const bitIndex = SCRIPT_OBJECT_STATUS_BIT_INDEX_BY_NAME.get(normalized);
-        if (bitIndex === undefined) {
-          continue;
-        }
-        mask |= 1 << bitIndex;
-        found = true;
-      }
-      return found ? mask : null;
-    }
-    return null;
-  }
-
-  private resolveScriptObjectStatusTokens(value: unknown): string[] {
-    if (typeof value !== 'string') {
-      return [];
-    }
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return [];
-    }
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      return [];
-    }
-    return trimmed
-      .split(/\s+/)
-      .map((token) => this.normalizeObjectStatusName(token))
-      .filter((token): token is string => Boolean(token));
   }
 
   private entityHasAnyStatusMask(entity: MapEntity, statusMask: number): boolean {
@@ -37245,45 +26775,6 @@ export class GameLogicSubsystem implements Subsystem {
     return hasSquish(objectDef.blocks);
   }
 
-  private normalizeScriptVariableName(name: string): string {
-    return name.trim();
-  }
-
-  private normalizeScriptObjectName(name: string): string {
-    return name.trim();
-  }
-
-  private normalizeScriptObjectTypeName(name: string): string {
-    return name.trim().toUpperCase();
-  }
-
-  private resolveScriptObjectTypeEntriesForCondition(objectTypeName: string): string[] {
-    const normalizedName = this.normalizeScriptObjectTypeName(objectTypeName);
-    if (!normalizedName) {
-      return [];
-    }
-    const list = this.scriptObjectTypeListsByName.get(normalizedName);
-    if (list && list.length > 0) {
-      return [...list];
-    }
-    return [normalizedName];
-  }
-
-  private resolveScriptObjectTypeCandidatesForAction(objectTypeName: string): string[] | null {
-    const normalizedName = this.normalizeScriptObjectTypeName(objectTypeName);
-    if (!normalizedName) {
-      return null;
-    }
-    if (this.resolveObjectDefByTemplateName(normalizedName)) {
-      return [normalizedName];
-    }
-    const list = this.scriptObjectTypeListsByName.get(normalizedName);
-    if (list && list.length > 0) {
-      return [...list];
-    }
-    return null;
-  }
-
   private matchesScriptObjectTypeList(templateName: string, objectTypes: string[]): boolean {
     for (const objectType of objectTypes) {
       if (this.areEquivalentTemplateNames(templateName, objectType)) {
@@ -37291,127 +26782,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
-  }
-
-  private resolveScriptEntityIdFromValue(value: unknown, allowDead: boolean): number | null {
-    let entityId: number | null = null;
-    let normalizedName: string | null = null;
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      entityId = Math.trunc(value);
-    } else if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        return null;
-      }
-      if (trimmed === SCRIPT_THIS_OBJECT) {
-        const contextId = this.resolveScriptContextEntityId();
-        if (contextId === null) {
-          return null;
-        }
-        entityId = contextId;
-      } else {
-        const parsed = Number(trimmed);
-        if (Number.isFinite(parsed)) {
-          entityId = Math.trunc(parsed);
-        } else {
-          normalizedName = this.normalizeScriptObjectName(trimmed);
-          if (!normalizedName) {
-            return null;
-          }
-          const mappedId = this.scriptNamedEntitiesByName.get(normalizedName);
-          if (mappedId === undefined) {
-            return null;
-          }
-          entityId = mappedId;
-        }
-      }
-    }
-    if (!entityId || entityId <= 0) {
-      return null;
-    }
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity) {
-      return null;
-    }
-    if (normalizedName && entity.scriptName !== normalizedName) {
-      return null;
-    }
-    if (!allowDead && entity.destroyed) {
-      return null;
-    }
-    return entityId;
-  }
-
-  private resolveScriptEntityId(value: unknown): number | null {
-    return this.resolveScriptEntityIdFromValue(value, false);
-  }
-
-  private resolveScriptEntityIdForCondition(value: unknown): number | null {
-    return this.resolveScriptEntityIdFromValue(value, true);
-  }
-
-  private resolveScriptEntityConditionRef(value: unknown): { entityId: number | null; didExist: boolean } {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      const entityId = Math.trunc(value);
-      if (entityId <= 0) {
-        return { entityId: null, didExist: false };
-      }
-      const entity = this.spawnedEntities.get(entityId);
-      const didExist = this.scriptExistedEntityIds.has(entityId) || entity !== undefined;
-      return { entityId: entity ? entityId : null, didExist };
-    }
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        return { entityId: null, didExist: false };
-      }
-      if (trimmed === SCRIPT_THIS_OBJECT) {
-        const contextId = this.resolveScriptContextEntityId();
-        if (contextId === null) {
-          return { entityId: null, didExist: false };
-        }
-        return this.resolveScriptEntityConditionRef(contextId);
-      }
-      const parsed = Number(trimmed);
-      if (Number.isFinite(parsed)) {
-        return this.resolveScriptEntityConditionRef(parsed);
-      }
-      const normalizedName = this.normalizeScriptObjectName(trimmed);
-      if (!normalizedName) {
-        return { entityId: null, didExist: false };
-      }
-      const mappedId = this.scriptNamedEntitiesByName.get(normalizedName);
-      if (mappedId === undefined) {
-        return { entityId: null, didExist: false };
-      }
-      const entity = this.spawnedEntities.get(mappedId);
-      if (!entity || entity.scriptName !== normalizedName) {
-        return { entityId: null, didExist: true };
-      }
-      return { entityId: mappedId, didExist: true };
-    }
-    return { entityId: null, didExist: false };
-  }
-
-  private registerScriptNamedEntity(entity: MapEntity): void {
-    if (!entity.scriptName) {
-      return;
-    }
-    const normalizedName = this.normalizeScriptObjectName(entity.scriptName);
-    if (!normalizedName) {
-      entity.scriptName = null;
-      return;
-    }
-    entity.scriptName = normalizedName;
-    const existingId = this.scriptNamedEntitiesByName.get(normalizedName);
-    if (existingId !== undefined && existingId !== entity.id) {
-      const existingEntity = this.spawnedEntities.get(existingId);
-      if (!existingEntity || existingEntity.destroyed || existingEntity.scriptName !== normalizedName) {
-        this.scriptNamedEntitiesByName.set(normalizedName, entity.id);
-      }
-      return;
-    }
-    this.scriptNamedEntitiesByName.set(normalizedName, entity.id);
   }
 
   private transferScriptObjectName(unitName: string, newEntity: MapEntity): void {
@@ -37523,385 +26893,6 @@ export class GameLogicSubsystem implements Subsystem {
     return created;
   }
 
-  private resolveScriptActionTypeName(rawType: unknown): string | null {
-    if (typeof rawType === 'number') {
-      if (!Number.isFinite(rawType)) {
-        return null;
-      }
-      return SCRIPT_ACTION_TYPE_NUMERIC_TO_NAME.get(Math.trunc(rawType)) ?? null;
-    }
-
-    if (typeof rawType !== 'string') {
-      return null;
-    }
-
-    const normalized = rawType.trim().toUpperCase();
-    if (!normalized) {
-      return null;
-    }
-
-    const canonical = SCRIPT_ACTION_TYPE_ALIASES.get(normalized) ?? normalized;
-    if (!SCRIPT_ACTION_TYPE_NAME_SET.has(canonical) && !SCRIPT_ACTION_TYPE_EXTRA_NAMES.has(canonical)) {
-      return null;
-    }
-    return canonical;
-  }
-
-  private resolveScriptRandomInt(minValue: number, maxValue: number): number {
-    const min = Number.isFinite(minValue) ? Math.trunc(minValue) : 0;
-    const max = Number.isFinite(maxValue) ? Math.trunc(maxValue) : 0;
-    if (max <= min) {
-      return max;
-    }
-    return this.gameRandom.nextRange(min, max);
-  }
-
-  private resolveScriptRandomReal(minValue: number, maxValue: number): number {
-    const min = Number.isFinite(minValue) ? minValue : 0;
-    const max = Number.isFinite(maxValue) ? maxValue : 0;
-    if (max <= min) {
-      return max;
-    }
-    return min + this.gameRandom.nextFloat() * (max - min);
-  }
-
-  private secondsToScriptTimerFrames(seconds: number): number {
-    if (!Number.isFinite(seconds)) {
-      return 0;
-    }
-    return Math.ceil((seconds * 1000) / LOGIC_FRAME_MS);
-  }
-
-  private resolveScriptConditionTypeName(rawType: unknown): string | null {
-    if (typeof rawType === 'number') {
-      if (!Number.isFinite(rawType)) {
-        return null;
-      }
-      const index = Math.trunc(rawType);
-      if (index < 0 || index >= SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX.length - 1) {
-        return null;
-      }
-      return SCRIPT_CONDITION_TYPE_NAMES_BY_INDEX[index] ?? null;
-    }
-
-    if (typeof rawType !== 'string') {
-      return null;
-    }
-
-    const normalized = rawType.trim().toUpperCase();
-    if (!normalized) {
-      return null;
-    }
-
-    const canonical = SCRIPT_CONDITION_TYPE_ALIASES.get(normalized) ?? normalized;
-    if (canonical === 'NUM_ITEMS' || !SCRIPT_CONDITION_TYPE_NAME_SET.has(canonical)) {
-      return null;
-    }
-    return canonical;
-  }
-
-  private resolveScriptConditionParams(condition: Record<string, unknown>): {
-    paramsObject: Record<string, unknown> | null;
-    paramsArray: readonly unknown[];
-  } {
-    const tryParse = (raw: unknown): { obj: Record<string, unknown> | null; arr: readonly unknown[] } | null => {
-      if (Array.isArray(raw)) {
-        return { obj: null, arr: raw };
-      }
-      if (raw && typeof raw === 'object') {
-        return { obj: raw as Record<string, unknown>, arr: [] };
-      }
-      return null;
-    };
-
-    const primary = tryParse(condition.params);
-    if (primary) {
-      return { paramsObject: primary.obj, paramsArray: primary.arr };
-    }
-
-    const secondary = tryParse(condition.parameters);
-    if (secondary) {
-      return { paramsObject: secondary.obj, paramsArray: secondary.arr };
-    }
-
-    return { paramsObject: null, paramsArray: [] };
-  }
-
-  private resolveScriptConditionParamValue(
-    condition: Record<string, unknown>,
-    paramsObject: Record<string, unknown> | null,
-    paramsArray: readonly unknown[],
-    index: number,
-    keyNames: readonly string[],
-  ): unknown {
-    for (const keyName of keyNames) {
-      if (!keyName) {
-        continue;
-      }
-      if (paramsObject && Object.prototype.hasOwnProperty.call(paramsObject, keyName)) {
-        return paramsObject[keyName];
-      }
-      if (Object.prototype.hasOwnProperty.call(condition, keyName)) {
-        return condition[keyName];
-      }
-    }
-
-    if (index >= 0 && index < paramsArray.length) {
-      return paramsArray[index];
-    }
-
-    return undefined;
-  }
-
-  private coerceScriptConditionString(value: unknown): string {
-    if (typeof value === 'string') {
-      return value;
-    }
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return String(value);
-    }
-    if (typeof value === 'boolean') {
-      return value ? 'TRUE' : 'FALSE';
-    }
-    return '';
-  }
-
-  private coerceScriptConditionNumber(value: unknown): number | null {
-    if (typeof value === 'number') {
-      return Number.isFinite(value) ? value : null;
-    }
-    if (typeof value === 'string') {
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-  }
-
-  private coerceScriptConditionBoolean(value: unknown, defaultValue: boolean): boolean {
-    if (typeof value === 'boolean') {
-      return value;
-    }
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) {
-        return defaultValue;
-      }
-      return value !== 0;
-    }
-    if (typeof value === 'string') {
-      const normalized = value.trim().toUpperCase();
-      if (!normalized) {
-        return defaultValue;
-      }
-      if (
-        normalized === 'TRUE'
-        || normalized === 'YES'
-        || normalized === 'ON'
-        || normalized === '1'
-      ) {
-        return true;
-      }
-      if (
-        normalized === 'FALSE'
-        || normalized === 'NO'
-        || normalized === 'OFF'
-        || normalized === '0'
-      ) {
-        return false;
-      }
-    }
-    return defaultValue;
-  }
-
-  private coerceScriptConditionCoord3(value: unknown): { x: number; y: number; z: number } | null {
-    const readNumber = (raw: unknown): number | null => {
-      if (typeof raw === 'number') {
-        return Number.isFinite(raw) ? raw : null;
-      }
-      if (typeof raw === 'string') {
-        const parsed = Number(raw);
-        return Number.isFinite(parsed) ? parsed : null;
-      }
-      return null;
-    };
-
-    if (Array.isArray(value)) {
-      const x = readNumber(value[0]) ?? 0;
-      const y = readNumber(value[1]) ?? 0;
-      const z = readNumber(value[2]) ?? 0;
-      return { x, y, z };
-    }
-    if (value && typeof value === 'object') {
-      const record = value as Record<string, unknown>;
-      const x = readNumber(record.x ?? record.X) ?? 0;
-      const y = readNumber(record.y ?? record.Y) ?? 0;
-      const z = readNumber(record.z ?? record.Z) ?? 0;
-      return { x, y, z };
-    }
-    return null;
-  }
-
-  private coerceScriptBuildableStatus(value: unknown): BuildableStatus {
-    const numericStatus = this.coerceScriptConditionNumber(value);
-    if (numericStatus !== null) {
-      const normalizedStatus = Math.trunc(numericStatus);
-      if (normalizedStatus === 1) {
-        return 'IGNORE_PREREQUISITES';
-      }
-      if (normalizedStatus === 2) {
-        return 'NO';
-      }
-      if (normalizedStatus === 3) {
-        return 'ONLY_BY_AI';
-      }
-      return 'YES';
-    }
-
-    const token = this.coerceScriptConditionString(value).trim().toUpperCase();
-    if (token === 'IGNORE_PREREQUISITES') {
-      return 'IGNORE_PREREQUISITES';
-    }
-    if (token === 'NO') {
-      return 'NO';
-    }
-    if (token === 'ONLY_BY_AI') {
-      return 'ONLY_BY_AI';
-    }
-    return 'YES';
-  }
-
-  private resolveScriptConditionCacheId(
-    condition: Record<string, unknown>,
-    paramsObject: Record<string, unknown> | null,
-  ): string | undefined {
-    const rawCacheId = this.resolveScriptConditionParamValue(
-      condition,
-      paramsObject,
-      [],
-      -1,
-      ['conditionCacheId', 'cacheId'],
-    );
-    if (typeof rawCacheId === 'string') {
-      const normalized = rawCacheId.trim();
-      if (normalized) {
-        return normalized;
-      }
-    }
-
-    const rawConditionId = condition.id ?? condition.conditionId;
-    if (typeof rawConditionId === 'string') {
-      const normalized = rawConditionId.trim();
-      if (normalized) {
-        return `SCRIPT_CONDITION:${normalized}`;
-      }
-    } else if (typeof rawConditionId === 'number' && Number.isFinite(rawConditionId)) {
-      return `SCRIPT_CONDITION:${Math.trunc(rawConditionId)}`;
-    }
-
-    return undefined;
-  }
-
-  private countScriptObjectsByTemplateForSide(
-    normalizedSide: string,
-    normalizedTemplateName: string,
-    controllingPlayerToken?: string | null,
-  ): number {
-    const normalizedOwnerToken = this.normalizeControllingPlayerToken(controllingPlayerToken ?? undefined);
-    let count = 0;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
-        continue;
-      }
-      if (normalizedOwnerToken !== null) {
-        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
-        if (!ownerToken || ownerToken !== normalizedOwnerToken) {
-          continue;
-        }
-      }
-      if (!this.areEquivalentTemplateNames(entity.templateName, normalizedTemplateName)) {
-        continue;
-      }
-      count += 1;
-    }
-    return count;
-  }
-
-  private countScriptObjectsByTemplateListForSide(
-    normalizedSide: string,
-    templateNames: string[],
-    controllingPlayerToken?: string | null,
-  ): number {
-    const normalizedTemplates = Array.from(new Set(
-      templateNames
-        .map((name) => this.normalizeScriptObjectTypeName(name))
-        .filter(Boolean),
-    ));
-    if (normalizedTemplates.length === 0) {
-      return 0;
-    }
-    const normalizedOwnerToken = this.normalizeControllingPlayerToken(controllingPlayerToken ?? undefined);
-
-    let count = 0;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (entity.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
-        continue;
-      }
-      if (normalizedOwnerToken !== null) {
-        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
-        if (!ownerToken || ownerToken !== normalizedOwnerToken) {
-          continue;
-        }
-      }
-      if (!this.matchesScriptObjectTypeList(entity.templateName, normalizedTemplates)) {
-        continue;
-      }
-      count += 1;
-    }
-    return count;
-  }
-
-  private countScriptStructuresForSide(
-    normalizedSide: string,
-    requireVictoryFlag: boolean,
-    controllingPlayerToken?: string | null,
-  ): number {
-    const normalizedOwnerToken = this.normalizeControllingPlayerToken(controllingPlayerToken ?? undefined);
-    let count = 0;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-      if (this.normalizeSide(entity.side) !== normalizedSide) {
-        continue;
-      }
-      if (normalizedOwnerToken !== null) {
-        const ownerToken = this.resolveEntityControllingPlayerTokenForAffiliation(entity);
-        if (!ownerToken || ownerToken !== normalizedOwnerToken) {
-          continue;
-        }
-      }
-      if (!entity.kindOf.has('STRUCTURE')) {
-        continue;
-      }
-      if (requireVictoryFlag && !entity.kindOf.has('MP_COUNT_FOR_VICTORY')) {
-        continue;
-      }
-      count += 1;
-    }
-    return count;
-  }
-
   private resolveEntityBuildCostRaw(entity: MapEntity): number {
     const objectDef = this.resolveObjectDefByTemplateName(entity.templateName);
     if (!objectDef) {
@@ -37912,33 +26903,6 @@ export class GameLogicSubsystem implements Subsystem {
       return 0;
     }
     return Math.max(0, Math.trunc(buildCostRaw));
-  }
-
-  private resolveScriptComparisonCode(comparison: ScriptComparisonInput): number | null {
-    if (typeof comparison === 'number') {
-      if (!Number.isFinite(comparison)) {
-        return null;
-      }
-      const code = Math.trunc(comparison);
-      return code >= 0 && code <= 5 ? code : null;
-    }
-
-    switch (comparison.trim().toUpperCase()) {
-      case 'LESS_THAN':
-        return 0;
-      case 'LESS_EQUAL':
-        return 1;
-      case 'EQUAL':
-        return 2;
-      case 'GREATER_EQUAL':
-        return 3;
-      case 'GREATER':
-        return 4;
-      case 'NOT_EQUAL':
-        return 5;
-      default:
-        return null;
-    }
   }
 
   private compareScriptNumeric(comparison: ScriptComparisonInput, left: number, right: number): boolean {
@@ -37975,10 +26939,6 @@ export class GameLogicSubsystem implements Subsystem {
     return this.compareScriptNumeric(comparison, normalizedCurrentCount, normalizedTargetCount);
   }
 
-  private normalizeScriptCompletionName(name: string): string {
-    return name.trim();
-  }
-
   private consumeScriptCompletedName(list: string[], name: string): boolean {
     for (let index = 0; index < list.length; index += 1) {
       if (list[index] !== name) {
@@ -37988,37 +26948,6 @@ export class GameLogicSubsystem implements Subsystem {
       return true;
     }
     return false;
-  }
-
-  private clearScriptCompletedName(list: string[], name: string): void {
-    for (let index = list.length - 1; index >= 0; index -= 1) {
-      if (list[index] === name) {
-        list.splice(index, 1);
-      }
-    }
-  }
-
-  private clearScriptAudioCompletionState(audioName: string): void {
-    const normalizedName = this.normalizeScriptCompletionName(audioName);
-    if (!normalizedName) {
-      return;
-    }
-    this.clearScriptCompletedName(this.scriptCompletedSpeech, normalizedName);
-    this.clearScriptCompletedName(this.scriptCompletedAudio, normalizedName);
-    this.scriptTestingSpeechCompletionFrameByName.delete(normalizedName);
-    this.scriptTestingAudioCompletionFrameByName.delete(normalizedName);
-  }
-
-  private clearScriptMusicCompletionState(trackName: string): void {
-    const normalizedName = this.normalizeScriptCompletionName(trackName);
-    if (!normalizedName) {
-      return;
-    }
-    for (let index = this.scriptCompletedMusic.length - 1; index >= 0; index -= 1) {
-      if (this.scriptCompletedMusic[index]!.name === normalizedName) {
-        this.scriptCompletedMusic.splice(index, 1);
-      }
-    }
   }
 
   /**
@@ -38054,266 +26983,7 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  private normalizeScriptTeamName(teamName: string): string {
-    return teamName.trim().toUpperCase();
-  }
-
-  private normalizeScriptTeamContextName(teamName: string): string | null {
-    const trimmed = teamName.trim();
-    if (!trimmed) {
-      return null;
-    }
-    if (trimmed === SCRIPT_THIS_TEAM || trimmed === SCRIPT_TEAM_THE_PLAYER) {
-      return null;
-    }
-    return this.normalizeScriptTeamName(trimmed);
-  }
-
-  private resolveScriptContextTeamRecord(): ScriptTeamRecord | null {
-    if (this.scriptCallingTeamNameUpper) {
-      const calling = this.scriptTeamsByName.get(this.scriptCallingTeamNameUpper) ?? null;
-      if (calling) {
-        return calling;
-      }
-    }
-    if (this.scriptConditionTeamNameUpper) {
-      return this.scriptTeamsByName.get(this.scriptConditionTeamNameUpper) ?? null;
-    }
-    return null;
-  }
-
-  private resolveScriptContextTeamName(): string | null {
-    return this.resolveScriptContextTeamRecord()?.nameUpper ?? null;
-  }
-
-  private resolveScriptTeamName(teamName: string): string | null {
-    const trimmed = teamName.trim();
-    if (!trimmed) {
-      return null;
-    }
-    if (trimmed === SCRIPT_THIS_TEAM) {
-      return this.resolveScriptContextTeamName();
-    }
-    if (trimmed === SCRIPT_TEAM_THE_PLAYER) {
-      if (this.scriptLocalPlayerTeamNameUpper) {
-        return this.scriptLocalPlayerTeamNameUpper;
-      }
-      const localSide = this.resolveLocalPlayerSide();
-      if (!localSide) {
-        return null;
-      }
-      return this.scriptDefaultTeamNameBySide.get(localSide) ?? null;
-    }
-    return this.normalizeScriptTeamName(trimmed);
-  }
-
-  private resolveScriptConditionTeams(teamName: string): ScriptTeamRecord[] {
-    const desiredTeamToken = teamName.trim();
-    if (!desiredTeamToken) {
-      return [];
-    }
-
-    // Source parity bridge: explicit THIS_TEAM / teamThePlayer tokens resolve
-    // through context-aware getTeamNamed() behavior.
-    if (desiredTeamToken === SCRIPT_THIS_TEAM || desiredTeamToken === SCRIPT_TEAM_THE_PLAYER) {
-      const resolved = this.getScriptTeamRecord(desiredTeamToken);
-      return resolved ? [resolved] : [];
-    }
-
-    const desiredTeamNameUpper = this.resolveScriptTeamName(desiredTeamToken);
-    if (!desiredTeamNameUpper) {
-      return [];
-    }
-
-    // Source parity bridge: when a condition is currently iterating team instances,
-    // use that contextual team if it matches by name or prototype.
-    const thisTeam = this.getScriptTeamRecord(SCRIPT_THIS_TEAM);
-    if (thisTeam && this.isScriptTeamNameMatch(thisTeam, desiredTeamNameUpper)) {
-      return [thisTeam];
-    }
-
-    // Source parity bridge: resolve TeamPrototype references across all active instances.
-    const prototypeInstances = this.getScriptTeamInstancesByPrototypeName(desiredTeamNameUpper);
-    if (prototypeInstances.length > 0) {
-      return prototypeInstances;
-    }
-
-    const direct = this.scriptTeamsByName.get(desiredTeamNameUpper);
-    return direct ? [direct] : [];
-  }
-
-  private registerScriptTeamPrototypeInstance(team: ScriptTeamRecord): void {
-    const prototypeNameUpper = team.prototypeNameUpper;
-    let instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(prototypeNameUpper);
-    if (!instanceNames) {
-      instanceNames = [];
-      this.scriptTeamInstanceNamesByPrototypeName.set(prototypeNameUpper, instanceNames);
-    }
-    if (!instanceNames.includes(team.nameUpper)) {
-      instanceNames.push(team.nameUpper);
-    }
-  }
-
-  private unregisterScriptTeamPrototypeInstance(team: ScriptTeamRecord): void {
-    const instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(team.prototypeNameUpper);
-    if (!instanceNames) {
-      return;
-    }
-    const index = instanceNames.indexOf(team.nameUpper);
-    if (index >= 0) {
-      instanceNames.splice(index, 1);
-    }
-    if (instanceNames.length === 0) {
-      this.scriptTeamInstanceNamesByPrototypeName.delete(team.prototypeNameUpper);
-    }
-  }
-
-  private getScriptTeamInstancesByPrototypeName(
-    prototypeNameUpper: string,
-    includeInactive = false,
-  ): ScriptTeamRecord[] {
-    const instanceNames = this.scriptTeamInstanceNamesByPrototypeName.get(prototypeNameUpper);
-    if (!instanceNames || instanceNames.length === 0) {
-      return [];
-    }
-    const teams: ScriptTeamRecord[] = [];
-    for (const instanceName of instanceNames) {
-      const team = this.scriptTeamsByName.get(instanceName);
-      if (!team) {
-        continue;
-      }
-
-      const isPrototypePlaceholder = team.nameUpper === prototypeNameUpper
-        && team.prototypeNameUpper === prototypeNameUpper
-        && !team.created
-        && team.memberEntityIds.size === 0;
-      if (isPrototypePlaceholder) {
-        continue;
-      }
-
-      // Source parity: TeamPrototype iteration only considers active instances.
-      if (!includeInactive && !team.created && team.memberEntityIds.size === 0) {
-        continue;
-      }
-      teams.push(team);
-    }
-    return teams;
-  }
-
-  private isScriptTeamNameMatch(team: ScriptTeamRecord, desiredNameUpper: string): boolean {
-    return team.nameUpper === desiredNameUpper || team.prototypeNameUpper === desiredNameUpper;
-  }
-
-  private resolveScriptContextEntityId(): number | null {
-    return this.scriptCallingEntityId ?? this.scriptConditionEntityId;
-  }
-
-  private resolveScriptCurrentPlayerSideFromContext(): string | null {
-    if (this.scriptCurrentPlayerSide) {
-      return this.scriptCurrentPlayerSide;
-    }
-
-    const teamName = this.resolveScriptContextTeamName();
-    if (teamName) {
-      const team = this.scriptTeamsByName.get(teamName);
-      const controllingSide = team ? this.resolveScriptTeamControllingSide(team) : null;
-      if (controllingSide) {
-        return controllingSide;
-      }
-    }
-
-    const entityId = this.resolveScriptContextEntityId();
-    if (entityId !== null) {
-      const entity = this.spawnedEntities.get(entityId);
-      const entitySide = entity ? this.normalizeSide(entity.side) : '';
-      if (entitySide) {
-        return entitySide;
-      }
-    }
-
-    return null;
-  }
-
-  private resolveScriptPlayerSideFromInput(playerName: string): string | null {
-    const trimmed = playerName.trim();
-    if (!trimmed) {
-      return null;
-    }
-    if (trimmed === SCRIPT_LOCAL_PLAYER || trimmed === SCRIPT_THE_PLAYER) {
-      return this.resolveLocalPlayerSide();
-    }
-    if (trimmed === SCRIPT_THIS_PLAYER) {
-      return this.resolveScriptCurrentPlayerSideFromContext();
-    }
-    if (trimmed === SCRIPT_THIS_PLAYER_ENEMY) {
-      const currentSide = this.resolveScriptCurrentPlayerSideFromContext();
-      if (!currentSide) {
-        return null;
-      }
-      return this.resolveScriptSkirmishEnemySide(currentSide);
-    }
-    const mappedSide = this.scriptPlayerSideByName.get(trimmed.toUpperCase());
-    if (mappedSide) {
-      return mappedSide;
-    }
-    const normalized = this.normalizeSide(trimmed);
-    return normalized || null;
-  }
-
-  private resolveScriptControllingPlayerTokenFromInput(
-    playerInput: string,
-    resolvedSide: string | null,
-  ): string | null {
-    const trimmed = playerInput.trim();
-    if (trimmed && this.scriptPlayerSideByName.has(trimmed.toUpperCase())) {
-      return this.normalizeControllingPlayerToken(trimmed);
-    }
-    if (resolvedSide) {
-      return this.normalizeControllingPlayerToken(resolvedSide);
-    }
-    return this.normalizeControllingPlayerToken(trimmed);
-  }
-
-  private resolveScriptPlayerConditionSelector(playerInput: string): {
-    normalizedSide: string | null;
-    controllingPlayerToken: string | null;
-    explicitNamedPlayer: boolean;
-  } {
-    const trimmed = playerInput.trim();
-    const explicitNamedPlayer = trimmed.length > 0 && this.scriptPlayerSideByName.has(trimmed.toUpperCase());
-    const normalizedSide = this.resolveScriptPlayerSideFromInput(playerInput);
-    const controllingPlayerToken = explicitNamedPlayer
-      ? this.normalizeControllingPlayerToken(trimmed)
-      : this.resolveScriptControllingPlayerTokenFromInput(playerInput, normalizedSide);
-    return {
-      normalizedSide,
-      controllingPlayerToken,
-      explicitNamedPlayer,
-    };
-  }
-
-  private resolveScriptWaypointPosition(waypointName: string): { x: number; z: number } | null {
-    const normalizedWaypointName = waypointName.trim().toUpperCase();
-    if (!normalizedWaypointName) {
-      return null;
-    }
-    const waypointNodes = this.loadedMapData?.waypoints?.nodes;
-    if (!waypointNodes) {
-      return null;
-    }
-    for (const waypointNode of waypointNodes) {
-      if (waypointNode.name.trim().toUpperCase() !== normalizedWaypointName) {
-        continue;
-      }
-      return {
-        x: waypointNode.position.x,
-        z: waypointNode.position.y,
-      };
-    }
-    return null;
-  }
-
-  private worldToPartitionCell(
+  /* @internal */ worldToPartitionCell(
     worldX: number,
     worldZ: number,
     cellSize: number,
@@ -38337,89 +27007,6 @@ export class GameLogicSubsystem implements Subsystem {
       return [null, null];
     }
     return [cellX, cellZ];
-  }
-
-  private resolveScriptTriggerAreaByName(triggerName: string): {
-    triggerIndex: number;
-    centerX: number;
-    centerZ: number;
-    radius: number;
-  } | null {
-    const normalizedTriggerName = triggerName.trim().toUpperCase();
-    if (!normalizedTriggerName) {
-      return null;
-    }
-    const triggerIndex = this.mapTriggerRegions.findIndex(
-      (region) => region.nameUpper === normalizedTriggerName,
-    );
-    if (triggerIndex < 0) {
-      return null;
-    }
-
-    const trigger = this.mapTriggerRegions[triggerIndex]!;
-    const centerX = (trigger.minX + trigger.maxX) / 2;
-    const centerZ = (trigger.minZ + trigger.maxZ) / 2;
-    const halfWidth = (trigger.maxX - trigger.minX) / 2;
-    // Source parity: PolygonTrigger::updateBounds currently uses (hi.y + lo.y) / 2.
-    const halfHeight = (trigger.maxZ + trigger.minZ) / 2;
-    const radius = Math.sqrt((halfWidth * halfWidth) + (halfHeight * halfHeight));
-    return {
-      triggerIndex,
-      centerX,
-      centerZ,
-      radius,
-    };
-  }
-
-  private getScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
-    const teamNameUpper = this.resolveScriptTeamName(teamName);
-    if (!teamNameUpper) {
-      return null;
-    }
-
-    // Source parity: ScriptEngine::getTeamNamed prefers the active calling/condition
-    // context team when its Team::getName() matches the requested token.
-    if (this.scriptCallingTeamNameUpper) {
-      const callingTeam = this.scriptTeamsByName.get(this.scriptCallingTeamNameUpper) ?? null;
-      if (callingTeam && this.isScriptTeamNameMatch(callingTeam, teamNameUpper)) {
-        return callingTeam;
-      }
-    }
-    if (this.scriptConditionTeamNameUpper) {
-      const conditionTeam = this.scriptTeamsByName.get(this.scriptConditionTeamNameUpper) ?? null;
-      if (conditionTeam && this.isScriptTeamNameMatch(conditionTeam, teamNameUpper)) {
-        return conditionTeam;
-      }
-    }
-
-    const prototypeInstances = this.getScriptTeamInstancesByPrototypeName(teamNameUpper);
-    if (prototypeInstances.length > 0) {
-      const prototypeRecord = this.scriptTeamsByName.get(teamNameUpper) ?? prototypeInstances[0]!;
-      let singleton = prototypeRecord.isSingleton;
-      if (prototypeRecord.maxInstances < 2) {
-        singleton = true;
-      }
-
-      // Source parity: singleton team names resolve to the first active instance.
-      if (singleton) {
-        for (const team of prototypeInstances) {
-          if (team.created || team.memberEntityIds.size > 0) {
-            return team;
-          }
-        }
-      }
-      return prototypeInstances[0] ?? null;
-    }
-
-    return this.scriptTeamsByName.get(teamNameUpper) ?? null;
-  }
-
-  private getScriptTeamPrototypeRecord(teamName: string): ScriptTeamRecord | null {
-    const teamNameUpper = this.resolveScriptTeamName(teamName);
-    if (!teamNameUpper) {
-      return null;
-    }
-    return this.scriptTeamsByName.get(teamNameUpper) ?? null;
   }
 
   private getOrCreateScriptTeamRecord(teamName: string): ScriptTeamRecord | null {
@@ -38471,38 +27058,6 @@ export class GameLogicSubsystem implements Subsystem {
     team.memberEntityIds.add(entity.id);
   }
 
-  private getScriptTeamMemberEntities(team: ScriptTeamRecord): MapEntity[] {
-    const entities: MapEntity[] = [];
-    for (const entityId of team.memberEntityIds) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity) {
-        continue;
-      }
-      entities.push(entity);
-    }
-    return entities;
-  }
-
-  private isScriptTeamMemberAliveForObjects(entity: MapEntity): boolean {
-    if (this.isScriptEntityEffectivelyDead(entity) || entity.destroyed) {
-      return false;
-    }
-    if (entity.kindOf.has('PROJECTILE') || entity.kindOf.has('INERT') || entity.kindOf.has('MINE')) {
-      return false;
-    }
-    return true;
-  }
-
-  private isScriptTeamMemberAliveForUnits(entity: MapEntity): boolean {
-    if (this.isScriptEntityEffectivelyDead(entity) || entity.destroyed) {
-      return false;
-    }
-    if (entity.kindOf.has('STRUCTURE') || entity.kindOf.has('PROJECTILE') || entity.kindOf.has('MINE')) {
-      return false;
-    }
-    return true;
-  }
-
   private doesScriptTeamHaveAnyUnits(team: ScriptTeamRecord): boolean {
     for (const entity of this.getScriptTeamMemberEntities(team)) {
       if (this.isScriptTeamMemberAliveForUnits(entity)) {
@@ -38510,29 +27065,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return false;
-  }
-
-  private resolveScriptTeamControllingSide(team: ScriptTeamRecord): string | null {
-    if (team.controllingSide) {
-      return team.controllingSide;
-    }
-
-    let resolvedSide: string | null = null;
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      const entitySide = this.normalizeSide(entity.side);
-      if (!entitySide) {
-        return null;
-      }
-      if (resolvedSide === null) {
-        resolvedSide = entitySide;
-        continue;
-      }
-      if (resolvedSide !== entitySide) {
-        return null;
-      }
-    }
-
-    return resolvedSide;
   }
 
   private didScriptTeamMemberEnterOrExitThisFrame(team: ScriptTeamRecord): boolean {
@@ -38584,53 +27116,12 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  private isScriptTeamMemberInsideTrigger(entityId: number, triggerIndex: number): boolean {
-    return this.scriptTriggerMembershipByEntityId.get(entityId)?.has(triggerIndex) ?? false;
-  }
-
   private didScriptTeamMemberEnterTrigger(entityId: number, triggerIndex: number): boolean {
     return this.scriptTriggerEnteredByEntityId.get(entityId)?.has(triggerIndex) ?? false;
   }
 
   private didScriptTeamMemberExitTrigger(entityId: number, triggerIndex: number): boolean {
     return this.scriptTriggerExitedByEntityId.get(entityId)?.has(triggerIndex) ?? false;
-  }
-
-  private resolveScriptRelationshipInput(input: ScriptRelationshipInput): RelationshipValue | null {
-    if (typeof input === 'number') {
-      const value = Math.trunc(input);
-      if (
-        value === RELATIONSHIP_ENEMIES
-        || value === RELATIONSHIP_NEUTRAL
-        || value === RELATIONSHIP_ALLIES
-      ) {
-        return value;
-      }
-      return null;
-    }
-
-    const normalized = input.trim().toUpperCase();
-    switch (normalized) {
-      case 'ENEMY':
-      case 'ENEMIES':
-      case 'REL_ENEMY':
-        return RELATIONSHIP_ENEMIES;
-      case 'NEUTRAL':
-      case 'REL_NEUTRAL':
-        return RELATIONSHIP_NEUTRAL;
-      case 'FRIEND':
-      case 'FRIENDS':
-      case 'ALLY':
-      case 'ALLIES':
-      case 'REL_FRIEND':
-        return RELATIONSHIP_ALLIES;
-      default:
-        return null;
-    }
-  }
-
-  private isScriptEntityEffectivelyDead(entity: MapEntity): boolean {
-    return entity.destroyed || entity.slowDeathState !== null || entity.structureCollapseState !== null;
   }
 
   private isEntityScriptSpecialPowerDisabled(entity: MapEntity): boolean {
@@ -42397,7 +30888,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: Object::doCommandButton{,AtObject,AtPosition,UsingWaypoints} early-outs
    * when source object is disabled.
    */
-  private isEntityDisabledForScriptCommandButton(entity: MapEntity): boolean {
+  /* @internal */ isEntityDisabledForScriptCommandButton(entity: MapEntity): boolean {
     return this.entityHasObjectStatus(entity, 'DISABLED')
       || this.entityHasObjectStatus(entity, 'SCRIPT_DISABLED')
       || this.entityHasObjectStatus(entity, 'SCRIPT_UNPOWERED')
@@ -43251,28 +31742,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private findScriptRepairDozerForBuilding(side: string, building: MapEntity): MapEntity | null {
-    let best: MapEntity | null = null;
-    let bestDistSqr = Infinity;
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (this.normalizeSide(entity.side) !== side) continue;
-      if (this.pendingConstructionActions.has(entity.id) || this.pendingRepairActions.has(entity.id)) continue;
-      if (!this.canDozerRepairTarget(entity, building, 'AI')) continue;
-
-      const dx = entity.x - building.x;
-      const dz = entity.z - building.z;
-      const distSqr = dx * dx + dz * dz;
-      if (distSqr < bestDistSqr) {
-        best = entity;
-        bestDistSqr = distSqr;
-      }
-    }
-
-    return best;
-  }
-
   /**
    * Source parity: DozerPrimaryIdleState::update — bored dozers auto-seek nearby repairs.
    */
@@ -43595,11 +32064,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.addStructureCompletionScore(structure, isRebuild);
     this.notifySkirmishAIStructureProduced(builder, structure);
     this.emitSuperweaponDetectedOnStructureComplete(structure);
-  }
-
-  private notifyScriptObjectCreationOrDestruction(): void {
-    this.scriptObjectTopologyVersion += 1;
-    this.scriptObjectCountChangedFrame = this.frameCounter;
   }
 
   private addEntityToWorld(entity: MapEntity): void {
@@ -44679,13 +33143,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptTriggerEnterExitFrameByEntityId.delete(entity.id);
   }
 
-  private clearScriptTriggerTrackingForEntity(entityId: number): void {
-    this.scriptTriggerMembershipByEntityId.delete(entityId);
-    this.scriptTriggerEnteredByEntityId.delete(entityId);
-    this.scriptTriggerExitedByEntityId.delete(entityId);
-    this.scriptTriggerEnterExitFrameByEntityId.delete(entityId);
-  }
-
   private computeCurrentScriptTriggerMembership(entity: Pick<MapEntity, 'x' | 'z'>): Set<number> {
     const membership = new Set<number>();
     for (let index = 0; index < this.mapTriggerRegions.length; index += 1) {
@@ -45082,31 +33539,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     this.scriptSequentialScripts[index] = seqScript.nextScript;
-  }
-
-  private isScriptSequentialEntityIdle(entity: MapEntity): boolean {
-    return !entity.moving
-      && entity.attackTargetEntityId === null
-      && entity.guardState === 'NONE'
-      && (!entity.specialAbilityState || entity.specialAbilityState.packingState === 'NONE')
-      && entity.transportContainerId === null;
-  }
-
-  private isScriptSequentialTeamIdle(team: ScriptTeamRecord): boolean {
-    const members = this.getScriptTeamMemberEntities(team).filter((entity) => !entity.destroyed);
-    if (members.length === 0) {
-      return true;
-    }
-    return members.every((entity) => this.isScriptSequentialEntityIdle(entity));
-  }
-
-  private isScriptSequentialTeamDead(team: ScriptTeamRecord): boolean {
-    for (const entity of this.getScriptTeamMemberEntities(team)) {
-      if (!entity.destroyed) {
-        return false;
-      }
-    }
-    return true;
   }
 
   private findMapTriggerRegionsByName(triggerName: string): Array<{
@@ -48091,167 +36523,7 @@ export class GameLogicSubsystem implements Subsystem {
     grid.revealMapForPlayer(playerIdx);
   }
 
-  /**
-   * Source parity: ScriptActions::doRevealMapEntire.
-   * - If playerName resolves to a known player side and is not empty: apply to that player.
-   * - Otherwise: apply to all human players.
-   */
-  private executeScriptRevealMapAtWaypoint(
-    waypointName: string,
-    radiusToReveal: number,
-    playerName: string,
-  ): boolean {
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-    const radius = Number.isFinite(radiusToReveal) ? Math.max(0, radiusToReveal) : 0;
-
-    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
-    if (targetSide) {
-      this.setMapRevealAtWaypointForSide(targetSide, waypoint.x, waypoint.z, radius);
-      return true;
-    }
-
-    for (const side of this.collectScriptHumanSides()) {
-      this.setMapRevealAtWaypointForSide(side, waypoint.x, waypoint.z, radius);
-    }
-    return true;
-  }
-
-  private executeScriptShroudMapAtWaypoint(
-    waypointName: string,
-    radiusToShroud: number,
-    playerName: string,
-  ): boolean {
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    if (!waypoint) {
-      return false;
-    }
-    const radius = Number.isFinite(radiusToShroud) ? Math.max(0, radiusToShroud) : 0;
-
-    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
-    if (targetSide) {
-      this.setMapShroudAtWaypointForSide(targetSide, waypoint.x, waypoint.z, radius);
-      return true;
-    }
-
-    for (const side of this.collectScriptHumanSides()) {
-      this.setMapShroudAtWaypointForSide(side, waypoint.x, waypoint.z, radius);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doRevealMapEntire.
-   * - If playerName resolves to a known player side and is not empty: apply to that player.
-   * - Otherwise: apply to all human players.
-   */
-  private executeScriptRevealMapEntire(playerName: string): boolean {
-    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
-    if (targetSide) {
-      this.setMapRevealEntireForSide(targetSide);
-      return true;
-    }
-
-    for (const side of this.collectScriptHumanSides()) {
-      this.setMapRevealEntireForSide(side);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doRevealMapEntirePermanently.
-   * - If playerName resolves to a known player side and is not empty: apply to that player.
-   * - Otherwise: apply to all human players.
-   */
-  private executeScriptRevealMapEntirePermanently(reveal: boolean, playerName: string): boolean {
-    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
-    if (targetSide) {
-      this.setMapRevealEntirePermanentlyForSide(targetSide, reveal);
-      return true;
-    }
-
-    for (const side of this.collectScriptHumanSides()) {
-      this.setMapRevealEntirePermanentlyForSide(side, reveal);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doShroudMapEntire.
-   */
-  private executeScriptShroudMapEntire(playerName: string): boolean {
-    const targetSide = this.resolveScriptRevealMapTargetSide(playerName);
-    if (targetSide) {
-      this.setMapShroudEntireForSide(targetSide);
-      return true;
-    }
-
-    for (const side of this.collectScriptHumanSides()) {
-      this.setMapShroudEntireForSide(side);
-    }
-    return true;
-  }
-
-  /**
-   * Source parity: ScriptActions::doRevealMapAtWaypointPermanent.
-   * Creates/replaces a named reveal and applies it immediately.
-   */
-  private executeScriptRevealMapAtWaypointPermanently(
-    waypointName: string,
-    radiusToReveal: number,
-    side: string,
-    lookName: string,
-  ): boolean {
-    const waypoint = this.resolveScriptWaypointPosition(waypointName);
-    const normalizedSide = this.normalizeSide(side);
-    const normalizedLookName = this.normalizeScriptVariableName(lookName);
-    if (!waypoint || !normalizedSide || !normalizedLookName) {
-      return false;
-    }
-
-    const grid = this.fogOfWarGrid;
-    if (!grid) {
-      return false;
-    }
-
-    const playerIndex = this.resolvePlayerIndexForSide(normalizedSide);
-    if (playerIndex < 0) {
-      return false;
-    }
-
-    const radius = Number.isFinite(radiusToReveal) ? Math.max(0, radiusToReveal) : 0;
-    const existing = this.scriptNamedMapRevealByName.get(normalizedLookName);
-    if (existing?.applied) {
-      grid.removeLooker(existing.playerIndex, existing.worldX, existing.worldZ, existing.radius);
-    }
-
-    this.scriptNamedMapRevealByName.set(normalizedLookName, {
-      playerIndex,
-      worldX: waypoint.x,
-      worldZ: waypoint.z,
-      radius,
-      applied: false,
-    });
-
-    return this.applyNamedScriptMapReveal(normalizedLookName);
-  }
-
-  /**
-   * Source parity: ScriptActions::doUndoRevealMapAtWaypointPermanent.
-   * Removes active reveal and deletes the named reveal definition.
-   */
-  private executeScriptUndoRevealMapAtWaypointPermanently(lookName: string): boolean {
-    const normalizedLookName = this.normalizeScriptVariableName(lookName);
-    if (!normalizedLookName || !this.scriptNamedMapRevealByName.has(normalizedLookName)) {
-      return false;
-    }
-    this.undoNamedScriptMapReveal(normalizedLookName);
-    return this.removeNamedScriptMapReveal(normalizedLookName);
-  }
-
-  private applyNamedScriptMapReveal(lookName: string): boolean {
+  /* @internal */ applyNamedScriptMapReveal(lookName: string): boolean {
     const normalizedLookName = this.normalizeScriptVariableName(lookName);
     if (!normalizedLookName) {
       return false;
@@ -48268,7 +36540,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private undoNamedScriptMapReveal(lookName: string): boolean {
+  /* @internal */ undoNamedScriptMapReveal(lookName: string): boolean {
     const normalizedLookName = this.normalizeScriptVariableName(lookName);
     if (!normalizedLookName) {
       return false;
@@ -48284,24 +36556,12 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private removeNamedScriptMapReveal(lookName: string): boolean {
+  /* @internal */ removeNamedScriptMapReveal(lookName: string): boolean {
     const normalizedLookName = this.normalizeScriptVariableName(lookName);
     if (!normalizedLookName) {
       return false;
     }
     return this.scriptNamedMapRevealByName.delete(normalizedLookName);
-  }
-
-  private clearScriptNamedMapReveals(): void {
-    const grid = this.fogOfWarGrid;
-    if (grid) {
-      for (const reveal of this.scriptNamedMapRevealByName.values()) {
-        if (reveal.applied) {
-          grid.removeLooker(reveal.playerIndex, reveal.worldX, reveal.worldZ, reveal.radius);
-        }
-      }
-    }
-    this.scriptNamedMapRevealByName.clear();
   }
 
   private setMapRevealEntirePermanentlyForSide(side: string, reveal: boolean): void {
@@ -48320,7 +36580,7 @@ export class GameLogicSubsystem implements Subsystem {
     grid.undoRevealMapForPlayerPermanently(playerIndex);
   }
 
-  private setMapRevealEntireForSide(side: string): void {
+  /* @internal */ setMapRevealEntireForSide(side: string): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
       return;
@@ -48332,7 +36592,7 @@ export class GameLogicSubsystem implements Subsystem {
     grid.revealMapForPlayer(playerIndex);
   }
 
-  private setMapRevealAtWaypointForSide(side: string, worldX: number, worldZ: number, radius: number): void {
+  /* @internal */ setMapRevealAtWaypointForSide(side: string, worldX: number, worldZ: number, radius: number): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
       return;
@@ -48346,7 +36606,7 @@ export class GameLogicSubsystem implements Subsystem {
     grid.removeLooker(playerIndex, worldX, worldZ, radius);
   }
 
-  private setMapShroudAtWaypointForSide(side: string, worldX: number, worldZ: number, radius: number): void {
+  /* @internal */ setMapShroudAtWaypointForSide(side: string, worldX: number, worldZ: number, radius: number): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
       return;
@@ -48358,7 +36618,7 @@ export class GameLogicSubsystem implements Subsystem {
     grid.shroudAt(playerIndex, worldX, worldZ, radius);
   }
 
-  private setMapShroudEntireForSide(side: string): void {
+  /* @internal */ setMapShroudEntireForSide(side: string): void {
     const grid = this.fogOfWarGrid;
     if (!grid) {
       return;
@@ -48368,78 +36628,6 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
     grid.shroudMapForPlayer(playerIndex);
-  }
-
-  private resolveScriptRevealMapTargetSide(playerName: string): string | null {
-    const resolvedSide = this.resolveScriptPlayerSideFromInput(playerName);
-    if (!resolvedSide) {
-      return null;
-    }
-
-    const knownSides = this.collectScriptKnownSides();
-    return knownSides.size === 0 || knownSides.has(resolvedSide)
-      ? resolvedSide
-      : null;
-  }
-
-  private collectScriptHumanSides(): string[] {
-    const sides: string[] = [];
-    for (const side of this.collectScriptKnownSides()) {
-      if (this.getSidePlayerType(side) === 'HUMAN') {
-        sides.push(side);
-      }
-    }
-    sides.sort();
-    return sides;
-  }
-
-  private collectScriptKnownSides(): Set<string> {
-    const configuredSides = new Set<string>();
-
-    for (const [, side] of this.playerSideByIndex) {
-      const normalized = this.normalizeSide(side);
-      if (normalized) {
-        configuredSides.add(normalized);
-      }
-    }
-    for (const side of this.sidePlayerTypes.keys()) {
-      const normalized = this.normalizeSide(side);
-      if (normalized) {
-        configuredSides.add(normalized);
-      }
-    }
-    if (configuredSides.size > 0) {
-      return configuredSides;
-    }
-
-    const sides = new Set<string>();
-
-    for (const side of this.sidePlayerIndex.keys()) {
-      const normalized = this.normalizeSide(side);
-      if (normalized) {
-        sides.add(normalized);
-      }
-    }
-    for (const side of this.sideCredits.keys()) {
-      const normalized = this.normalizeSide(side);
-      if (normalized) {
-        sides.add(normalized);
-      }
-    }
-    for (const side of this.sideRankState.keys()) {
-      const normalized = this.normalizeSide(side);
-      if (normalized) {
-        sides.add(normalized);
-      }
-    }
-    for (const entity of this.spawnedEntities.values()) {
-      const normalized = this.normalizeSide(entity.side);
-      if (normalized) {
-        sides.add(normalized);
-      }
-    }
-
-    return sides;
   }
 
   /**
@@ -51225,28 +39413,6 @@ export class GameLogicSubsystem implements Subsystem {
     return baseCommandSet;
   }
 
-  private setScriptCommandSetButtonOverride(
-    commandSetName: string,
-    slot: number,
-    commandButtonName: string | null,
-  ): void {
-    const normalizedCommandSetName = commandSetName.trim().toUpperCase();
-    if (!normalizedCommandSetName || slot < 1 || slot > 18) {
-      return;
-    }
-    let slotOverrides = this.commandSetButtonSlotOverrides.get(normalizedCommandSetName);
-    if (!slotOverrides) {
-      slotOverrides = new Map<number, string | null>();
-      this.commandSetButtonSlotOverrides.set(normalizedCommandSetName, slotOverrides);
-    }
-    if (commandButtonName === null) {
-      slotOverrides.set(slot, null);
-      return;
-    }
-    const normalizedCommandButtonName = commandButtonName.trim().toUpperCase();
-    slotOverrides.set(slot, normalizedCommandButtonName || null);
-  }
-
   private resolveCommandSetSlotButtonName(commandSetDef: CommandSetDef, slot: number): string {
     const normalizedCommandSetName = commandSetDef.name.trim().toUpperCase();
     const slotOverrides = this.commandSetButtonSlotOverrides.get(normalizedCommandSetName);
@@ -52965,7 +41131,7 @@ export class GameLogicSubsystem implements Subsystem {
     return bestHeight;
   }
 
-  private resolveWaterPolygonIndicesByName(waterName: string): number[] {
+  /* @internal */ resolveWaterPolygonIndicesByName(waterName: string): number[] {
     const normalizedName = waterName.trim().toUpperCase();
     if (!normalizedName) {
       return [];
@@ -53786,7 +41952,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Initialize guard-area mode for an entity.
    * Source parity: AIUpdateInterface::privateGuardArea stores area + center and enters AI_GUARD.
    */
-  private initGuardArea(
+  /* @internal */ initGuardArea(
     entityId: number,
     triggerIndex: number,
     centerX: number,
@@ -54929,34 +43095,6 @@ export class GameLogicSubsystem implements Subsystem {
     const source = this.spawnedEntities.get(attackerId);
     if (!source || source.destroyed) return;
     this.fireTemporaryWeaponAtPosition(source, weaponDef, targetX, targetZ);
-  }
-
-  /**
-   * Source parity: Weapon.cpp projectile fire path.
-   * If the source object has SpecialPowerCompletionDie and a valid creator id,
-   * notify the script completion list immediately when the projectile is fired.
-   */
-  private notifyScriptCompletedSpecialPowerOnProjectileFired(source: MapEntity): void {
-    const profile = source.specialPowerCompletionDieProfiles[0];
-    if (!profile) {
-      return;
-    }
-
-    const normalizedSide = this.normalizeSide(source.side);
-    if (!normalizedSide) {
-      return;
-    }
-
-    const creatorId = Math.trunc(source.specialPowerCompletionCreatorId);
-    if (creatorId <= 0) {
-      return;
-    }
-
-    this.recordScriptCompletedSpecialPowerEvent(
-      normalizedSide,
-      profile.specialPowerTemplateName,
-      creatorId,
-    );
   }
 
   private classifyWeaponVisualType(weapon: AttackWeaponProfile): import('./types.js').ProjectileVisualType {
@@ -56632,62 +44770,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: ActiveBody::attemptDamage m_lastDamageInfo source-selection.
-   * Within same/next-frame windows, prefer VEHICLE/INFANTRY/faction-structure sources.
-   */
-  private recordScriptLastDamageInfo(target: MapEntity, sourceEntityId: number | null): void {
-    const normalizedSourceId = sourceEntityId === null || sourceEntityId === 0
-      ? null
-      : Math.trunc(sourceEntityId);
-    const source = normalizedSourceId === null ? null : this.spawnedEntities.get(normalizedSourceId) ?? null;
-
-    const withinPriorityWindow =
-      target.lastDamageInfoFrame === this.frameCounter
-      || target.lastDamageInfoFrame === this.frameCounter - 1;
-    if (!withinPriorityWindow) {
-      this.applyScriptLastDamageSourceSnapshot(target, normalizedSourceId, source);
-      return;
-    }
-
-    // Source parity: within same/next-frame windows, null/unresolved sources do not
-    // overwrite existing last-damage source info.
-    if (!source) {
-      return;
-    }
-
-    const currentSource = target.scriptLastDamageSourceEntityId === null
-      ? null
-      : this.spawnedEntities.get(target.scriptLastDamageSourceEntityId) ?? null;
-    if (!currentSource || this.isPreferredRetaliationSource(source)) {
-      this.applyScriptLastDamageSourceSnapshot(target, normalizedSourceId, source);
-    }
-  }
-
-  /**
-   * Source parity: ActiveBody::m_lastDamageInfo snapshot fields + getClearableLastAttacker.
-   */
-  private applyScriptLastDamageSourceSnapshot(
-    target: MapEntity,
-    sourceEntityId: number | null,
-    source: MapEntity | null,
-  ): void {
-    if (sourceEntityId === null || !source) {
-      target.scriptLastDamageSourceEntityId = null;
-      target.scriptLastDamageSourceTemplateName = null;
-      target.scriptLastDamageSourceSide = null;
-      target.lastAttackerEntityId = null;
-      target.lastDamageInfoFrame = this.frameCounter;
-      return;
-    }
-
-    target.scriptLastDamageSourceEntityId = sourceEntityId;
-    target.scriptLastDamageSourceTemplateName = source.templateName.trim().toUpperCase();
-    target.scriptLastDamageSourceSide = this.normalizeSide(source.side);
-    target.lastAttackerEntityId = sourceEntityId;
-    target.lastDamageInfoFrame = this.frameCounter;
-  }
-
-  /**
    * Source parity bridge: track destroyed-structure counts by attacker/victim
    * for ScriptConditions::evaluatePlayerDestroyedNOrMoreBuildings.
    */
@@ -56783,7 +44865,7 @@ export class GameLogicSubsystem implements Subsystem {
     attackedBySides.add(sourceSide);
   }
 
-  private isPreferredRetaliationSource(source: MapEntity): boolean {
+  /* @internal */ isPreferredRetaliationSource(source: MapEntity): boolean {
     return source.kindOf.has('VEHICLE')
       || source.kindOf.has('INFANTRY')
       || this.isFactionStructureRetaliationSource(source);
@@ -59084,170 +47166,6 @@ export class GameLogicSubsystem implements Subsystem {
       centerZ,
       radius: Math.sqrt(maxRadSqr),
     };
-  }
-
-  /**
-   * Source parity: Player::isSupplySourceSafe / AIPlayer::isSupplySourceSafe.
-   * Human players have no AI module in C++, so they return true.
-   */
-  private isScriptSupplySourceSafe(
-    normalizedSide: string,
-    minSupplies: number,
-    ownerToken?: string | null,
-  ): boolean {
-    if (this.getSidePlayerType(normalizedSide) !== 'COMPUTER') {
-      return true;
-    }
-
-    const warehouse = this.findScriptSupplySourceForSide(normalizedSide, minSupplies, ownerToken);
-    if (!warehouse) {
-      return true;
-    }
-
-    const warehouseRadius = this.resolveEntityMajorRadius(warehouse);
-    return this.isScriptLocationSafeForSupplySource(normalizedSide, warehouse.x, warehouse.z, warehouseRadius);
-  }
-
-  /**
-   * Source parity: AIPlayer::findSupplyCenter(minimumCash).
-   */
-  private findScriptSupplySourceForSide(
-    normalizedSide: string,
-    minimumCash: number,
-    ownerToken?: string | null,
-  ): MapEntity | null {
-    const baseCenter = this.resolveAiBaseCenter(normalizedSide);
-    const enemyCenter = this.resolveScriptEnemyBaseCenter(normalizedSide);
-    const supplyCenterCloseDistance = 20 * PATHFIND_CELL_SIZE;
-
-    let requiredCash = Math.max(0, Math.trunc(minimumCash));
-    do {
-      let bestWarehouse: MapEntity | null = null;
-      let bestDistSqr = 0;
-
-      for (const entity of this.spawnedEntities.values()) {
-        if (entity.destroyed) continue;
-        if (!entity.kindOf.has('STRUCTURE') || !entity.kindOf.has('SUPPLY_SOURCE')) continue;
-        if (!entity.supplyWarehouseProfile) continue;
-
-        const warehouseState = this.supplyWarehouseStates.get(entity.id);
-        if (!warehouseState) continue;
-        const availableCash = warehouseState.currentBoxes * DEFAULT_SUPPLY_BOX_VALUE;
-        if (availableCash < requiredCash) continue;
-
-        const entitySide = this.normalizeSide(entity.side);
-        if (entitySide && this.getTeamRelationshipBySides(normalizedSide, entitySide) === RELATIONSHIP_ENEMIES) {
-          continue;
-        }
-
-        // Source parity: skip warehouses that already have an owned cash generator nearby.
-        const nearbyRadius = supplyCenterCloseDistance + this.resolveEntityMajorRadius(entity);
-        const nearbyRadiusSq = nearbyRadius * nearbyRadius;
-        let hasNearbySupplyCenter = false;
-        for (const nearby of this.spawnedEntities.values()) {
-          if (nearby.destroyed) continue;
-          if (!nearby.kindOf.has('CASH_GENERATOR')) continue;
-          if (this.normalizeSide(nearby.side) !== normalizedSide) continue;
-          if (ownerToken) {
-            const nearbyOwnerToken = this.resolveEntityControllingPlayerTokenForAffiliation(nearby);
-            if (!nearbyOwnerToken || nearbyOwnerToken !== ownerToken) {
-              continue;
-            }
-          }
-          const dx = nearby.x - entity.x;
-          const dz = nearby.z - entity.z;
-          if (dx * dx + dz * dz <= nearbyRadiusSq) {
-            hasNearbySupplyCenter = true;
-            break;
-          }
-        }
-        if (hasNearbySupplyCenter) continue;
-
-        const dxBase = baseCenter ? entity.x - baseCenter.x : 0;
-        const dzBase = baseCenter ? entity.z - baseCenter.z : 0;
-        const distSqr = dxBase * dxBase + dzBase * dzBase;
-
-        if (enemyCenter) {
-          const dxEnemy = entity.x - enemyCenter.x;
-          const dzEnemy = entity.z - enemyCenter.z;
-          const enemyDistSqr = dxEnemy * dxEnemy + dzEnemy * dzEnemy;
-          // Source parity: reject expansions that are too close to enemy compared to own base.
-          if (distSqr * 0.4 > enemyDistSqr * 0.6) {
-            continue;
-          }
-        }
-
-        if (!bestWarehouse || bestDistSqr > distSqr) {
-          bestWarehouse = entity;
-          bestDistSqr = distSqr;
-        }
-      }
-
-      if (bestWarehouse) {
-        return bestWarehouse;
-      }
-
-      requiredCash = Math.trunc(requiredCash / 2);
-    } while (requiredCash > 100);
-
-    return null;
-  }
-
-  private resolveScriptEnemyBaseCenter(normalizedSide: string): { x: number; z: number } | null {
-    let bestEnemySide: string | null = null;
-    let bestEnemyWeight = Number.NEGATIVE_INFINITY;
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      const entitySide = this.normalizeSide(entity.side);
-      if (!entitySide || entitySide === normalizedSide) continue;
-      if (this.getTeamRelationshipBySides(normalizedSide, entitySide) !== RELATIONSHIP_ENEMIES) continue;
-      let weight = 1;
-      if (entity.kindOf.has('STRUCTURE')) weight += 3;
-      if (entity.kindOf.has('MP_COUNT_FOR_VICTORY')) weight += 2;
-      if (weight > bestEnemyWeight) {
-        bestEnemyWeight = weight;
-        bestEnemySide = entitySide;
-      }
-    }
-    return this.resolveAiBaseCenter(bestEnemySide);
-  }
-
-  /**
-   * Source parity: AIPlayer::isLocationSafe.
-   */
-  private isScriptLocationSafeForSupplySource(
-    normalizedSide: string,
-    centerX: number,
-    centerZ: number,
-    sourceRadius: number,
-  ): boolean {
-    const supplyCenterSafeRadius = 250 + sourceRadius;
-    for (const enemy of this.spawnedEntities.values()) {
-      if (enemy.destroyed) continue;
-      const enemySide = this.normalizeSide(enemy.side);
-      if (!enemySide) continue;
-      if (this.getTeamRelationshipBySides(normalizedSide, enemySide) !== RELATIONSHIP_ENEMIES) {
-        continue;
-      }
-      if (enemy.kindOf.has('HARVESTER') || enemy.kindOf.has('DOZER')) {
-        continue;
-      }
-      if (
-        enemy.objectStatusFlags.has('STEALTHED')
-        && !enemy.objectStatusFlags.has('DETECTED')
-        && !enemy.objectStatusFlags.has('DISGUISED')
-      ) {
-        continue;
-      }
-
-      const dx = enemy.x - centerX;
-      const dz = enemy.z - centerZ;
-      const range = supplyCenterSafeRadius + this.resolveEntityMajorRadius(enemy);
-      if (dx * dx + dz * dz <= range * range) {
-        return false;
-      }
-    }
-    return true;
   }
 
   // ── Source parity: ToppleUpdate ──
