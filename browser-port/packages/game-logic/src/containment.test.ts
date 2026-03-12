@@ -985,6 +985,122 @@ describe('OverlordContain', () => {
     expect(towerState!.health).toBeGreaterThan(0);
     expect(towerState!.statusFlags ?? []).not.toContain('DISABLED_HELD');
   });
+
+  it('damage state propagates to single rider', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Overlord', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'OverlordContain ModuleTag_Contain', {
+            ContainMax: 1,
+            AllowInsideKindOf: 'PORTABLE_STRUCTURE',
+          }),
+        ]),
+        makeObjectDef('PropagandaTower', 'China', ['PORTABLE_STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { TransportSlotCount: 1 }),
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SmallGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('SmallGun', {
+          AttackRange: 120,
+          PrimaryDamage: 10,
+          DelayBetweenShots: 1,
+        }),
+      ],
+    });
+    const logic = createLogic();
+    const map = makeMap([
+      makeMapObject('Overlord', 20, 20),
+      makeMapObject('PropagandaTower', 22, 20),
+      makeMapObject('Attacker', 50, 20),
+    ]);
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Load rider into overlord.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    for (let i = 0; i < 5; i++) logic.update(1 / 30);
+
+    // Rider starts at full health.
+    expect(logic.getEntityState(2)!.health).toBe(200);
+
+    // Damage overlord below 50% (DAMAGED threshold). 10 dmg/frame × ~80 frames ≈ 600+ damage.
+    logic.submitCommand({ type: 'attackEntity', entityId: 3, targetEntityId: 1 });
+    for (let i = 0; i < 80; i++) logic.update(1 / 30);
+
+    // Overlord should be DAMAGED (health <= 500) but alive.
+    const overlordState = logic.getEntityState(1);
+    expect(overlordState).toBeDefined();
+    expect(overlordState!.health).toBeLessThanOrEqual(500);
+    expect(overlordState!.health).toBeGreaterThan(0);
+
+    // Rider should have DAMAGED model condition and reduced health.
+    const towerState = logic.getEntityState(2);
+    expect(towerState).toBeDefined();
+    expect(towerState!.modelConditionFlags ?? []).toContain('DAMAGED');
+    // setEntityBodyDamageState sets health to maxHealth * 0.5 - 1 = 99 for DAMAGED state.
+    expect(towerState!.health).toBeLessThan(200);
+  });
+
+  it('damage state does NOT propagate with 2+ riders', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Overlord', 'China', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
+          makeBlock('Behavior', 'OverlordContain ModuleTag_Contain', {
+            ContainMax: 2,
+            AllowInsideKindOf: 'PORTABLE_STRUCTURE',
+          }),
+        ]),
+        makeObjectDef('Tower', 'China', ['PORTABLE_STRUCTURE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        ], { TransportSlotCount: 1 }),
+        makeObjectDef('Attacker', 'America', ['VEHICLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+          makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'SmallGun'] }),
+        ]),
+      ],
+      weapons: [
+        makeWeaponDef('SmallGun', {
+          AttackRange: 120,
+          PrimaryDamage: 10,
+          DelayBetweenShots: 1,
+        }),
+      ],
+    });
+    const logic = createLogic();
+    const map = makeMap([
+      makeMapObject('Overlord', 20, 20),
+      makeMapObject('Tower', 22, 20),
+      makeMapObject('Tower', 24, 20),
+      makeMapObject('Attacker', 50, 20),
+    ]);
+    logic.loadMapObjects(map, makeRegistry(bundle), makeHeightmap());
+    logic.setTeamRelationship('China', 'America', 0);
+    logic.setTeamRelationship('America', 'China', 0);
+
+    // Load both riders.
+    logic.submitCommand({ type: 'enterTransport', entityId: 2, targetTransportId: 1 });
+    logic.submitCommand({ type: 'enterTransport', entityId: 3, targetTransportId: 1 });
+    for (let i = 0; i < 10; i++) logic.update(1 / 30);
+
+    // Damage overlord below 50%.
+    logic.submitCommand({ type: 'attackEntity', entityId: 4, targetEntityId: 1 });
+    for (let i = 0; i < 80; i++) logic.update(1 / 30);
+
+    // Overlord should be DAMAGED but alive.
+    expect(logic.getEntityState(1)!.health).toBeLessThanOrEqual(500);
+    expect(logic.getEntityState(1)!.health).toBeGreaterThan(0);
+
+    // Neither rider should have their health changed.
+    expect(logic.getEntityState(2)!.health).toBe(200);
+    expect(logic.getEntityState(3)!.health).toBe(200);
+  });
 });
 
 // ── HealContain tests ──

@@ -1,5 +1,11 @@
 # Session Summaries
 
+## 2026-03-12T17:55Z — Containment Round 2: HealContain Exit Fix + Overlord Damage Propagation
+- **HealContain bug fix**: Auto-ejected units now use `resolveContainerEvacuationPositions` for scatter exit instead of teleporting to container center
+- **Overlord damage state propagation** (C++ parity: OverlordContain.cpp:164-177): When Overlord/Helix takes damage that changes body state, propagate to single rider via `setEntityBodyDamageState`. Only when exactly 1 rider and not RUBBLE.
+- **2 new tests**: Single rider propagation + multi-rider no-propagation
+- All 3264 tests pass (39 containment tests)
+
 ## 2026-03-12T04:20Z — Containment System: Comprehensive Code & Test Pass
 Implemented full containment system overhaul per plan (scalable-hugging-aurora):
 - **Code cleanup (Step 4)**: Added DISABLED_HELD on transport enter/release, garrison status flags (UNSELECTABLE on enter), fixed render-state-bridge clearing GARRISONED from garrison buildings

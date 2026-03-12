@@ -901,12 +901,13 @@ export function updateHealContainHealing(self: GL): void {
       const passenger = self.spawnedEntities.get(passengerId);
       if (!passenger || passenger.destroyed) continue;
       releaseEntityFromContainer(self, passenger);
-      passenger.x = container.x;
-      passenger.z = container.z;
-      passenger.y = self.resolveGroundHeight(container.x, container.z) + passenger.baseHeight;
+      const evacuation = resolveContainerEvacuationPositions(self, container, container.x, container.z);
+      passenger.x = evacuation.spawnX;
+      passenger.z = evacuation.spawnZ;
+      passenger.y = self.resolveGroundHeight(passenger.x, passenger.z) + passenger.baseHeight;
       self.updatePathfindPosCell(passenger);
       if (passenger.canMove) {
-        self.issueMoveTo(passenger.id, container.x + MAP_XY_FACTOR, container.z);
+        self.issueMoveTo(passenger.id, evacuation.targetX, evacuation.targetZ);
       }
     }
   }

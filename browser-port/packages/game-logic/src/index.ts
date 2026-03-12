@@ -26595,7 +26595,9 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: track body damage state transitions for SupplyWarehouseCripplingBehavior + BoneFXUpdate + GarrisonContain.
     const isGarrisonContainer = target.containProfile?.moduleType === 'GARRISON';
-    const needsDamageStateTracking = target.supplyWarehouseCripplingProfile || target.boneFXState || isGarrisonContainer;
+    const isOverlordOrHelix = target.containProfile?.moduleType === 'OVERLORD'
+        || target.containProfile?.moduleType === 'HELIX';
+    const needsDamageStateTracking = target.supplyWarehouseCripplingProfile || target.boneFXState || isGarrisonContainer || isOverlordOrHelix;
     const oldDamageState = needsDamageStateTracking
       ? calcBodyDamageState(target.health, target.maxHealth)
       : 0 as BodyDamageState;
@@ -26621,6 +26623,17 @@ export class GameLogicSubsystem implements Subsystem {
             && oldDamageState < REALLYDAMAGED
             && !target.kindOf.has('GARRISONABLE_UNTIL_DESTROYED')) {
           this.evacuateContainedEntities(target, target.x, target.z, null);
+        }
+        // Source parity: OverlordContain::onBodyDamageStateChange — propagate damage state to single rider.
+        // C++ file: OverlordContain.cpp:164-177 — only when exactly 1 rider and not RUBBLE.
+        if (isOverlordOrHelix && newDamageState !== 3) {
+          const riderIds = this.collectContainedEntityIds(target.id);
+          if (riderIds.length === 1) {
+            const rider = this.spawnedEntities.get(riderIds[0]);
+            if (rider && !rider.destroyed) {
+              this.setEntityBodyDamageState(rider, newDamageState);
+            }
+          }
         }
       }
     }
