@@ -701,6 +701,31 @@ import {
   updateJetAI as updateJetAIImpl,
   updateChinookAI as updateChinookAIImpl,
 } from './aircraft-ai.js';
+import {
+  resetBridgeDamageStateChanges as resetBridgeDamageStateChangesImpl,
+  noteBridgeDamageStateChange as noteBridgeDamageStateChangeImpl,
+  extractBridgeBehaviorProfile as extractBridgeBehaviorProfileImpl,
+  extractBridgeTowerProfile as extractBridgeTowerProfileImpl,
+  resolveHighestBridgeLayerForDestination as resolveHighestBridgeLayerForDestinationImpl,
+  resolveBridgeLayerHeightAt as resolveBridgeLayerHeightAtImpl,
+  applyBridgeOverlay as applyBridgeOverlayImpl,
+  findBridgeControlEntityId as findBridgeControlEntityIdImpl,
+  resolveInitialBridgePassable as resolveInitialBridgePassableImpl,
+  markBridgeSegment as markBridgeSegmentImpl,
+  markBridgeCellRadius as markBridgeCellRadiusImpl,
+  markBridgeTransitionRadius as markBridgeTransitionRadiusImpl,
+  updateBridgeScaffolds as updateBridgeScaffoldsImpl,
+  advanceScaffoldMotion as advanceScaffoldMotionImpl,
+  setScaffoldMotion as setScaffoldMotionImpl,
+  bridgeBehaviorOnDamage as bridgeBehaviorOnDamageImpl,
+  bridgeBehaviorOnHealing as bridgeBehaviorOnHealingImpl,
+  bridgeBehaviorOnDie as bridgeBehaviorOnDieImpl,
+  handleObjectsOnBridgeDeath as handleObjectsOnBridgeDeathImpl,
+  bridgeTowerOnDamage as bridgeTowerOnDamageImpl,
+  bridgeTowerOnHealing as bridgeTowerOnHealingImpl,
+  bridgeTowerOnDie as bridgeTowerOnDieImpl,
+  bridgeRestorePassability as bridgeRestorePassabilityImpl,
+} from './bridge-mechanics.js';
 
 export * from './types.js';
 export * from './campaign-manager.js';
@@ -910,8 +935,8 @@ const NAV_OBSTACLE = 4;
 export const NAV_IMPASSABLE = 6;
 export const NAV_BRIDGE_IMPASSABLE = 7;
 
-const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
-const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
+export const OBJECT_FLAG_BRIDGE_POINT1 = 0x010;
+export const OBJECT_FLAG_BRIDGE_POINT2 = 0x020;
 const SOURCE_DISABLED_SHORTCUT_SPECIAL_POWER_READY_FRAME = 0xffffffff - 10;
 
 export const LOCOMOTORSET_NORMAL = 'SET_NORMAL';
@@ -4420,12 +4445,12 @@ interface BridgeTowerState {
  * Source parity: BridgeScaffoldBehavior runtime state — scaffold motion state machine.
  * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/BridgeScaffoldBehavior.cpp)
  */
-type ScaffoldTargetMotion = 0 | 1 | 2 | 3 | 4; // STM_STILL=0, STM_RISE=1, STM_BUILD_ACROSS=2, STM_TEAR_DOWN_ACROSS=3, STM_SINK=4
-const STM_STILL: ScaffoldTargetMotion = 0;
-const STM_RISE: ScaffoldTargetMotion = 1;
-const STM_BUILD_ACROSS: ScaffoldTargetMotion = 2;
-const STM_TEAR_DOWN_ACROSS: ScaffoldTargetMotion = 3;
-const STM_SINK: ScaffoldTargetMotion = 4;
+export type ScaffoldTargetMotion = 0 | 1 | 2 | 3 | 4; // STM_STILL=0, STM_RISE=1, STM_BUILD_ACROSS=2, STM_TEAR_DOWN_ACROSS=3, STM_SINK=4
+export const STM_STILL: ScaffoldTargetMotion = 0;
+export const STM_RISE: ScaffoldTargetMotion = 1;
+export const STM_BUILD_ACROSS: ScaffoldTargetMotion = 2;
+export const STM_TEAR_DOWN_ACROSS: ScaffoldTargetMotion = 3;
+export const STM_SINK: ScaffoldTargetMotion = 4;
 
 interface BridgeScaffoldState {
   /** Current motion phase. */
@@ -9840,6 +9865,32 @@ export class GameLogicSubsystem implements Subsystem {
   private updateJetAI(...args: any[]) { return (updateJetAIImpl as any)(this, ...args); }
   private updateChinookAI(...args: any[]) { return (updateChinookAIImpl as any)(this, ...args); }
 
+  // ---- Bridge mechanics facades (delegate to bridge-mechanics.ts) ----
+
+  private resetBridgeDamageStateChanges(...args: any[]) { return (resetBridgeDamageStateChangesImpl as any)(this, ...args); }
+  private noteBridgeDamageStateChange(...args: any[]) { return (noteBridgeDamageStateChangeImpl as any)(this, ...args); }
+  private extractBridgeBehaviorProfile(...args: any[]) { return (extractBridgeBehaviorProfileImpl as any)(this, ...args); }
+  private extractBridgeTowerProfile(...args: any[]) { return (extractBridgeTowerProfileImpl as any)(this, ...args); }
+  private resolveHighestBridgeLayerForDestination(...args: any[]) { return (resolveHighestBridgeLayerForDestinationImpl as any)(this, ...args); }
+  /* @internal */ resolveBridgeLayerHeightAt(...args: any[]) { return (resolveBridgeLayerHeightAtImpl as any)(this, ...args); }
+  private applyBridgeOverlay(...args: any[]) { return (applyBridgeOverlayImpl as any)(this, ...args); }
+  /* @internal */ findBridgeControlEntityId(...args: any[]) { return (findBridgeControlEntityIdImpl as any)(this, ...args); }
+  /* @internal */ resolveInitialBridgePassable(...args: any[]) { return (resolveInitialBridgePassableImpl as any)(this, ...args); }
+  /* @internal */ markBridgeSegment(...args: any[]) { return (markBridgeSegmentImpl as any)(this, ...args); }
+  /* @internal */ markBridgeCellRadius(...args: any[]) { return (markBridgeCellRadiusImpl as any)(this, ...args); }
+  /* @internal */ markBridgeTransitionRadius(...args: any[]) { return (markBridgeTransitionRadiusImpl as any)(this, ...args); }
+  private updateBridgeScaffolds(...args: any[]) { return (updateBridgeScaffoldsImpl as any)(this, ...args); }
+  /* @internal */ advanceScaffoldMotion(...args: any[]) { return (advanceScaffoldMotionImpl as any)(this, ...args); }
+  /* @internal */ setScaffoldMotion(...args: any[]) { return (setScaffoldMotionImpl as any)(this, ...args); }
+  private bridgeBehaviorOnDamage(...args: any[]) { return (bridgeBehaviorOnDamageImpl as any)(this, ...args); }
+  private bridgeBehaviorOnHealing(...args: any[]) { return (bridgeBehaviorOnHealingImpl as any)(this, ...args); }
+  /* @internal */ bridgeBehaviorOnDie(...args: any[]) { return (bridgeBehaviorOnDieImpl as any)(this, ...args); }
+  /* @internal */ handleObjectsOnBridgeDeath(...args: any[]) { return (handleObjectsOnBridgeDeathImpl as any)(this, ...args); }
+  private bridgeTowerOnDamage(...args: any[]) { return (bridgeTowerOnDamageImpl as any)(this, ...args); }
+  private bridgeTowerOnHealing(...args: any[]) { return (bridgeTowerOnHealingImpl as any)(this, ...args); }
+  /* @internal */ bridgeTowerOnDie(...args: any[]) { return (bridgeTowerOnDieImpl as any)(this, ...args); }
+  /* @internal */ bridgeRestorePassability(...args: any[]) { return (bridgeRestorePassabilityImpl as any)(this, ...args); }
+
   // ---- Command dispatch facades (delegate to command-dispatch.ts) ----
 
   private flushCommands(...args: any[]) { return (flushCommandsImpl as any)(this, ...args); }
@@ -15164,21 +15215,6 @@ export class GameLogicSubsystem implements Subsystem {
     return Array.from(this.bridgeSegments.entries())
       .map(([segmentId, segment]) => ({ segmentId, passable: segment.passable }))
       .sort((a, b) => a.segmentId - b.segmentId);
-  }
-
-  private resetBridgeDamageStateChanges(): void {
-    this.bridgeDamageStatesChangedFrame = -1;
-    this.bridgeDamageStateByControlEntity.clear();
-  }
-
-  private noteBridgeDamageStateChange(segmentId: number, passable: boolean): void {
-    this.bridgeDamageStatesChangedFrame = this.frameCounter;
-    for (const [entityId, mappedSegmentId] of this.bridgeSegmentByControlEntity.entries()) {
-      if (mappedSegmentId !== segmentId) {
-        continue;
-      }
-      this.bridgeDamageStateByControlEntity.set(entityId, passable);
-    }
   }
 
   onObjectRepaired(entityId: number): boolean {
@@ -21198,36 +21234,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: BridgeBehavior — parse bridge behavior module from INI.
-   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/BridgeBehavior.cpp)
-   */
-  private extractBridgeBehaviorProfile(objectDef: ObjectDef | undefined): BridgeBehaviorProfile | null {
-    if (!objectDef?.blocks) return null;
-    let profile: BridgeBehaviorProfile | null = null;
-    const visitBlock = (block: IniBlock): void => {
-      if (profile !== null) return;
-      if (block.type.toUpperCase() === 'BEHAVIOR') {
-        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (moduleType === 'BRIDGEBEHAVIOR') {
-          profile = {
-            scaffoldLateralSpeed: readNumericField(block.fields, ['LateralScaffoldSpeed']) ?? 1.0,
-            scaffoldVerticalSpeed: readNumericField(block.fields, ['VerticalScaffoldSpeed']) ?? 1.0,
-            scaffoldObjectName: (readStringField(block.fields, ['ScaffoldObjectName']) ?? '').toUpperCase(),
-          };
-        }
-      }
-      for (const child of block.blocks) {
-        visitBlock(child);
-      }
-    };
-
-    for (const block of objectDef.blocks) {
-      visitBlock(block);
-    }
-    return profile;
-  }
-
-  /**
    * Parse a single BoneFX field value string.
    * Format: Bone:{boneName} OnlyOnce:{Yes|No} {minDelayMs} {maxDelayMs} {FXList:|OCL:|PSys:}{effectName}
    */
@@ -21293,23 +21299,6 @@ export class GameLogicSubsystem implements Subsystem {
       delayMinFrames,
       delayMaxFrames,
     };
-  }
-
-  /**
-   * Source parity: BridgeTowerBehavior — parse bridge tower behavior module from INI.
-   * (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/BridgeTowerBehavior.cpp)
-   */
-  private extractBridgeTowerProfile(objectDef: ObjectDef | undefined): BridgeTowerProfile | null {
-    if (!objectDef?.blocks) return null;
-    for (const block of objectDef.blocks) {
-      if (block.type.toUpperCase() === 'BEHAVIOR') {
-        const moduleType = block.name.split(/\s+/)[0]?.toUpperCase() ?? '';
-        if (moduleType === 'BRIDGETOWERBEHAVIOR') {
-          return { _marker: true };
-        }
-      }
-    }
-    return null;
   }
 
   private extractSlowDeathProfiles(objectDef: ObjectDef | undefined): SlowDeathProfile[] {
@@ -30532,99 +30521,6 @@ export class GameLogicSubsystem implements Subsystem {
     return layer ? layer.layerHeight : null;
   }
 
-  /**
-   * Source parity: TerrainLogic::getHighestLayerForDestination bridge-layer
-   * selection (layer id + height), choosing the closest layer at-or-below destination Y.
-   */
-  private resolveHighestBridgeLayerForDestination(
-    worldX: number,
-    worldZ: number,
-    worldY: number,
-  ): { segmentId: number; layerHeight: number } | null {
-    const grid = this.navigationGrid;
-    if (!grid) {
-      return null;
-    }
-    const [cellX, cellZ] = this.worldToGrid(worldX, worldZ);
-    if (cellX === null || cellZ === null) {
-      return null;
-    }
-    const index = cellZ * grid.width + cellX;
-    if (index < 0 || index >= grid.bridgeSegmentByCell.length) {
-      return null;
-    }
-    const segmentIds = this.bridgeSegmentIdsByCell.get(index)
-      ?? (() => {
-        const segmentId = grid.bridgeSegmentByCell[index];
-        return (segmentId === undefined || segmentId < 0) ? [] : [segmentId];
-      })();
-    if (segmentIds.length === 0) {
-      return null;
-    }
-
-    let bestSegmentId = -1;
-    let bestLayerHeight: number | null = null;
-    let bestDelta = Number.POSITIVE_INFINITY;
-    for (const segmentId of segmentIds) {
-      const segment = this.bridgeSegments.get(segmentId);
-      if (!segment) {
-        continue;
-      }
-      const layerHeight = this.resolveBridgeLayerHeightAt(segment, worldX, worldZ);
-      if (!Number.isFinite(layerHeight)) {
-        continue;
-      }
-      const delta = worldY - layerHeight;
-      // Source parity: TerrainLogic::getHighestLayerForDestination only considers
-      // layers that are at-or-below the destination height and picks the closest.
-      if (delta < 0) {
-        continue;
-      }
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        bestSegmentId = segmentId;
-        bestLayerHeight = layerHeight;
-      }
-    }
-
-    if (bestSegmentId < 0 || bestLayerHeight === null) {
-      return null;
-    }
-
-    return {
-      segmentId: bestSegmentId,
-      layerHeight: bestLayerHeight,
-    };
-  }
-
-  /**
-   * Source parity bridge: approximate TerrainLogic::getLayerHeight for a bridge segment.
-   * Uses endpoint heights from map bridge markers and linear interpolation along the segment.
-   */
-  private resolveBridgeLayerHeightAt(segment: BridgeSegmentState, worldX: number, worldZ: number): number {
-    const startX = segment.startWorldX;
-    const startZ = segment.startWorldZ;
-    const endX = segment.endWorldX;
-    const endZ = segment.endWorldZ;
-    const startY = segment.startSurfaceY;
-    const endY = segment.endSurfaceY;
-    if (
-      startX === undefined || startZ === undefined || endX === undefined || endZ === undefined
-      || startY === undefined || endY === undefined
-    ) {
-      return this.resolveGroundHeight(worldX, worldZ);
-    }
-
-    const dx = endX - startX;
-    const dz = endZ - startZ;
-    const denom = dx * dx + dz * dz;
-    if (denom <= 1e-6) {
-      return Math.max(startY, endY);
-    }
-    const t = clamp((((worldX - startX) * dx) + ((worldZ - startZ) * dz)) / denom, 0, 1);
-    return startY + ((endY - startY) * t);
-  }
-
   private resolveEntityMajorRadius(entity: MapEntity): number {
     if (entity.geometryMajorRadius > 0) {
       return entity.geometryMajorRadius;
@@ -32296,270 +32192,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const bitMask = 1 << (cellX & 0x7);
     return (cliffBits.data[byteIndex]! & bitMask) !== 0;
-  }
-
-  private applyBridgeOverlay(mapData: MapDataJSON, grid: NavigationGrid): void {
-    const starts: Array<{
-      x: number;
-      z: number;
-      worldX: number;
-      worldZ: number;
-      worldY: number;
-      properties: Record<string, string>;
-      entityId: number | null;
-    }> = [];
-    const ends: Array<{
-      x: number;
-      z: number;
-      worldX: number;
-      worldZ: number;
-      worldY: number;
-      properties: Record<string, string>;
-      entityId: number | null;
-    }> = [];
-
-    for (const mapObject of mapData.objects) {
-      const flags = mapObject.flags;
-      if ((flags & (OBJECT_FLAG_BRIDGE_POINT1 | OBJECT_FLAG_BRIDGE_POINT2)) === 0) {
-        continue;
-      }
-
-      const cellX = Math.floor(mapObject.position.x / MAP_XY_FACTOR);
-      const cellZ = Math.floor(mapObject.position.y / MAP_XY_FACTOR);
-      if (!this.isCellInBounds(cellX, cellZ, grid)) {
-        continue;
-      }
-      const worldX = mapObject.position.x;
-      const worldZ = mapObject.position.y;
-      const worldY = this.resolveGroundHeight(worldX, worldZ) + mapObject.position.z;
-
-      if ((flags & OBJECT_FLAG_BRIDGE_POINT1) !== 0) {
-        starts.push({
-          x: cellX,
-          z: cellZ,
-          worldX,
-          worldZ,
-          worldY,
-          properties: mapObject.properties,
-          entityId: this.findBridgeControlEntityId(cellX, cellZ, OBJECT_FLAG_BRIDGE_POINT1),
-        });
-      }
-      if ((flags & OBJECT_FLAG_BRIDGE_POINT2) !== 0) {
-        ends.push({
-          x: cellX,
-          z: cellZ,
-          worldX,
-          worldZ,
-          worldY,
-          properties: mapObject.properties,
-          entityId: this.findBridgeControlEntityId(cellX, cellZ, OBJECT_FLAG_BRIDGE_POINT2),
-        });
-      }
-    }
-
-    if (starts.length === 0 || ends.length === 0) {
-      return;
-    }
-
-    const usedEnds = new Uint8Array(ends.length);
-    for (const start of starts) {
-      let bestIndex = -1;
-      let bestDistance = Number.POSITIVE_INFINITY;
-      for (let i = 0; i < ends.length; i++) {
-        if (usedEnds[i] === 1) {
-          continue;
-        }
-        const end = ends[i]!;
-        const dx = end.x - start.x;
-        const dz = end.z - start.z;
-        const dist2 = dx * dx + dz * dz;
-        if (dist2 < bestDistance) {
-          bestDistance = dist2;
-          bestIndex = i;
-        }
-      }
-
-      if (bestIndex < 0) {
-        continue;
-      }
-      const end = ends[bestIndex]!;
-      usedEnds[bestIndex] = 1;
-      const segmentId = this.bridgeSegments.size;
-      const passable = this.resolveInitialBridgePassable(start.properties, end.properties);
-      this.markBridgeSegment(start, end, segmentId, passable, grid);
-    }
-  }
-
-  private findBridgeControlEntityId(cellX: number, cellZ: number, requiredFlag: number): number | null {
-    for (const entity of this.spawnedEntities.values()) {
-      if (((entity.bridgeFlags ?? 0) & requiredFlag) === 0) {
-        continue;
-      }
-      if (entity.mapCellX === cellX && entity.mapCellZ === cellZ) {
-        return entity.id;
-      }
-    }
-    return null;
-  }
-
-  private resolveInitialBridgePassable(...propertySets: Array<Record<string, string>>): boolean {
-    for (const properties of propertySets) {
-      for (const [rawKey, rawValue] of Object.entries(properties)) {
-        const key = rawKey.trim().toLowerCase();
-        const value = rawValue.trim().toLowerCase();
-        if (key.length === 0 || value.length === 0) {
-          continue;
-        }
-        if (!/(bridge|destroy|broken|pass|state|repair|open|close|down|up)/.test(key)) {
-          continue;
-        }
-
-        if (
-          value.includes('down')
-          || value.includes('destroyed')
-          || value.includes('broken')
-          || value.includes('closed')
-          || value.includes('disabled')
-          || value === '0'
-          || value === 'false'
-          || value === 'no'
-        ) {
-          return false;
-        }
-      }
-    }
-
-    return true;
-  }
-
-  private markBridgeSegment(
-    start: {
-      x: number;
-      z: number;
-      worldX: number;
-      worldZ: number;
-      worldY: number;
-      properties: Record<string, string>;
-      entityId: number | null;
-    },
-    end: {
-      x: number;
-      z: number;
-      worldX: number;
-      worldZ: number;
-      worldY: number;
-      properties: Record<string, string>;
-      entityId: number | null;
-    },
-    segmentId: number,
-    passable: boolean,
-    grid: NavigationGrid,
-  ): void {
-    const cellIndices = new Set<number>();
-    const transitionIndices = new Set<number>();
-    let x = start.x;
-    let z = start.z;
-    const dx = Math.abs(end.x - start.x);
-    const dz = Math.abs(end.z - start.z);
-    const stepX = start.x < end.x ? 1 : -1;
-    const stepZ = start.z < end.z ? 1 : -1;
-    let err = dx - dz;
-
-    while (true) {
-      this.markBridgeCellRadius(x, z, 0, segmentId, passable, grid, cellIndices);
-      if (x === end.x && z === end.z) {
-        break;
-      }
-      const twoErr = 2 * err;
-      if (twoErr > -dz) {
-        err -= dz;
-        x += stepX;
-      }
-      if (twoErr < dx) {
-        err += dx;
-        z += stepZ;
-      }
-    }
-
-    this.markBridgeTransitionRadius(start.x, start.z, 0, segmentId, passable, grid, transitionIndices);
-    this.markBridgeTransitionRadius(end.x, end.z, 0, segmentId, passable, grid, transitionIndices);
-
-    this.bridgeSegments.set(segmentId, {
-      passable,
-      cellIndices: Array.from(cellIndices),
-      transitionIndices: Array.from(transitionIndices),
-      startWorldX: start.worldX,
-      startWorldZ: start.worldZ,
-      endWorldX: end.worldX,
-      endWorldZ: end.worldZ,
-      startSurfaceY: start.worldY,
-      endSurfaceY: end.worldY,
-    });
-    if (start.entityId !== null) {
-      this.bridgeSegmentByControlEntity.set(start.entityId, segmentId);
-    }
-    if (end.entityId !== null) {
-      this.bridgeSegmentByControlEntity.set(end.entityId, segmentId);
-    }
-  }
-
-  private markBridgeCellRadius(
-    cellX: number,
-    cellZ: number,
-    radius: number,
-    segmentId: number,
-    passable: boolean,
-    grid: NavigationGrid,
-    cellIndices: Set<number>,
-  ): void {
-    for (let x = cellX - radius; x <= cellX + radius; x++) {
-      for (let z = cellZ - radius; z <= cellZ + radius; z++) {
-        if (!this.isCellInBounds(x, z, grid)) {
-          continue;
-        }
-        const index = z * grid.width + x;
-        const currentSegmentId = grid.bridgeSegmentByCell[index];
-        if (currentSegmentId === undefined || currentSegmentId < 0) {
-          grid.bridgeSegmentByCell[index] = segmentId;
-        }
-        const segmentIdsAtCell = this.bridgeSegmentIdsByCell.get(index);
-        if (!segmentIdsAtCell) {
-          this.bridgeSegmentIdsByCell.set(index, [segmentId]);
-        } else if (!segmentIdsAtCell.includes(segmentId)) {
-          segmentIdsAtCell.push(segmentId);
-        }
-        grid.bridge[index] = 1;
-        if (passable) {
-          grid.bridgePassable[index] = 1;
-        }
-        cellIndices.add(index);
-      }
-    }
-  }
-
-  private markBridgeTransitionRadius(
-    cellX: number,
-    cellZ: number,
-    radius: number,
-    segmentId: number,
-    passable: boolean,
-    grid: NavigationGrid,
-    transitionIndices: Set<number>,
-  ): void {
-    for (let x = cellX - radius; x <= cellX + radius; x++) {
-      for (let z = cellZ - radius; z <= cellZ + radius; z++) {
-        if (!this.isCellInBounds(x, z, grid)) {
-          continue;
-        }
-        const index = z * grid.width + x;
-        if (grid.bridge[index] === 1 && grid.bridgeSegmentByCell[index] === segmentId) {
-          if (passable) {
-            grid.bridgeTransitions[index] = 1;
-          }
-          transitionIndices.add(index);
-        }
-      }
-    }
   }
 
   private buildWaterCellsFromTriggers(
@@ -37832,410 +37464,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   // ── Source parity: BridgeScaffoldBehavior — scaffold motion state machine ──────
 
-  /**
-   * Source parity: BridgeScaffoldBehavior::update() — move scaffold entities
-   * through their motion chain: RISE → BUILD_ACROSS → STILL or
-   * TEAR_DOWN_ACROSS → SINK → destroy.
-   * C++ file: BridgeScaffoldBehavior.cpp.
-   */
-  private updateBridgeScaffolds(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      const st = entity.bridgeScaffoldState;
-      if (!st) continue;
-
-      // Do nothing if we're not in motion.
-      if (st.targetMotion === STM_STILL) continue;
-
-      // Compute direction vector from our position to the target position.
-      const dirX = st.targetPos.x - entity.x;
-      const dirY = st.targetPos.y - entity.y;
-      const dirZ = st.targetPos.z - entity.z;
-
-      // Normalize direction vector.
-      const dirLen = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
-      if (dirLen < 0.0001) {
-        // Already at target — advance state machine.
-        this.advanceScaffoldMotion(entity, st);
-        continue;
-      }
-      const vx = dirX / dirLen;
-      const vy = dirY / dirLen;
-      const vz = dirZ / dirLen;
-
-      // Depending on motion type, compute top speed and start/end positions.
-      let topSpeed = 1.0;
-      let startX: number, startY: number, startZ: number;
-      let endX: number, endY: number, endZ: number;
-
-      switch (st.targetMotion) {
-        case STM_RISE:
-          topSpeed = st.verticalSpeed;
-          startX = st.createPos.x; startY = st.createPos.y; startZ = st.createPos.z;
-          endX = st.riseToPos.x; endY = st.riseToPos.y; endZ = st.riseToPos.z;
-          break;
-        case STM_SINK:
-          topSpeed = st.verticalSpeed;
-          startX = st.riseToPos.x; startY = st.riseToPos.y; startZ = st.riseToPos.z;
-          endX = st.createPos.x; endY = st.createPos.y; endZ = st.createPos.z;
-          break;
-        case STM_BUILD_ACROSS:
-          topSpeed = st.lateralSpeed;
-          startX = st.riseToPos.x; startY = st.riseToPos.y; startZ = st.riseToPos.z;
-          endX = st.buildPos.x; endY = st.buildPos.y; endZ = st.buildPos.z;
-          break;
-        case STM_TEAR_DOWN_ACROSS:
-          topSpeed = st.lateralSpeed;
-          startX = st.buildPos.x; startY = st.buildPos.y; startZ = st.buildPos.z;
-          endX = st.riseToPos.x; endY = st.riseToPos.y; endZ = st.riseToPos.z;
-          break;
-        default:
-          continue;
-      }
-
-      // Adjust speed so it's slower at the end of motion.
-      // Source parity: totalDistance = length(end - start) * 0.25
-      const svx = endX - startX;
-      const svy = endY - startY;
-      const svz = endZ - startZ;
-      const totalDistance = Math.sqrt(svx * svx + svy * svy + svz * svz) * 0.25;
-
-      const odx = endX - entity.x;
-      const ody = endY - entity.y;
-      const odz = endZ - entity.z;
-      const ourDistance = Math.sqrt(odx * odx + ody * ody + odz * odz);
-
-      let speed = (ourDistance / (totalDistance || 1)) * topSpeed;
-      const minSpeed = topSpeed * 0.08;
-      if (speed < minSpeed) speed = minSpeed;
-      if (speed > topSpeed) speed = topSpeed;
-
-      // Source parity: min speed floor of 0.001 to prevent infinite approach.
-      if (speed < 0.001) speed = 0.001;
-
-      // Compute new position.
-      let newX = vx * speed + entity.x;
-      let newY = vy * speed + entity.y;
-      let newZ = vz * speed + entity.z;
-
-      // Overshoot check via dot product.
-      const tfx = st.targetPos.x - newX;
-      const tfy = st.targetPos.y - newY;
-      const tfz = st.targetPos.z - newZ;
-      if (tfx * dirX + tfy * dirY + tfz * dirZ <= 0.0) {
-        // Use destination position directly.
-        newX = st.targetPos.x;
-        newY = st.targetPos.y;
-        newZ = st.targetPos.z;
-
-        // Advance to next motion in the chain.
-        this.advanceScaffoldMotion(entity, st);
-      }
-
-      // Set the new position.
-      entity.x = newX;
-      entity.y = newY;
-      entity.z = newZ;
-    }
-  }
-
-  /**
-   * Source parity: BridgeScaffoldBehavior::update motion chain transitions.
-   * RISE → BUILD_ACROSS → STILL; TEAR_DOWN_ACROSS → SINK → destroy self.
-   */
-  private advanceScaffoldMotion(entity: MapEntity, st: BridgeScaffoldState): void {
-    switch (st.targetMotion) {
-      case STM_RISE:
-        this.setScaffoldMotion(st, STM_BUILD_ACROSS);
-        break;
-      case STM_BUILD_ACROSS:
-        this.setScaffoldMotion(st, STM_STILL);
-        break;
-      case STM_TEAR_DOWN_ACROSS:
-        this.setScaffoldMotion(st, STM_SINK);
-        break;
-      case STM_SINK:
-        // Source parity: destroy the scaffold object when sink motion completes.
-        this.markEntityDestroyed(entity.id, -1);
-        break;
-      default:
-        break;
-    }
-  }
-
-  /**
-   * Source parity: BridgeScaffoldBehavior::setMotion — set target position for requested motion.
-   */
-  private setScaffoldMotion(st: BridgeScaffoldState, targetMotion: ScaffoldTargetMotion): void {
-    st.targetMotion = targetMotion;
-    switch (targetMotion) {
-      case STM_RISE:
-      case STM_TEAR_DOWN_ACROSS:
-        st.targetPos = { ...st.riseToPos };
-        break;
-      case STM_BUILD_ACROSS:
-        st.targetPos = { ...st.buildPos };
-        break;
-      case STM_SINK:
-        st.targetPos = { ...st.createPos };
-        break;
-      default:
-        break;
-    }
-  }
-
   // ── Source parity: BridgeBehavior — bridge damage/death/repair hooks ──────────
-
-  /**
-   * Source parity: BridgeBehavior::onDamage — propagate damage from bridge to towers.
-   * Called when the bridge entity takes damage where the source is NOT a bridge tower.
-   */
-  private bridgeBehaviorOnDamage(
-    bridge: MapEntity,
-    sourceEntityId: number | null,
-    amount: number,
-    damageType: string,
-  ): void {
-    const state = bridge.bridgeBehaviorState;
-    if (!state) return;
-
-    // Skip propagation if source is a bridge tower (already propagated from there).
-    if (sourceEntityId !== null) {
-      const source = this.spawnedEntities.get(sourceEntityId);
-      if (source && source.kindOf.has('BRIDGE_TOWER')) return;
-    }
-
-    // Calculate damage as percentage of bridge max health.
-    const damagePercentage = bridge.maxHealth > 0 ? amount / bridge.maxHealth : 0;
-    if (damagePercentage <= 0) return;
-
-    // Propagate proportional damage to all towers.
-    for (const towerId of state.towerIds) {
-      const tower = this.spawnedEntities.get(towerId);
-      if (!tower || tower.destroyed) continue;
-      const towerDamageAmount = damagePercentage * tower.maxHealth;
-      // Source parity: use bridge entity as source to prevent recursion.
-      this.applyWeaponDamageAmount(bridge.id, tower, towerDamageAmount, damageType);
-    }
-  }
-
-  /**
-   * Source parity: BridgeBehavior::onHealing — propagate healing from bridge to towers.
-   * Called when the bridge entity receives healing where the source is NOT a bridge tower.
-   */
-  private bridgeBehaviorOnHealing(
-    bridge: MapEntity,
-    healAmount: number,
-    sourceEntityId: number | null,
-  ): void {
-    const state = bridge.bridgeBehaviorState;
-    if (!state) return;
-
-    // Skip propagation if source is a bridge tower.
-    if (sourceEntityId !== null) {
-      const source = this.spawnedEntities.get(sourceEntityId);
-      if (source && source.kindOf.has('BRIDGE_TOWER')) return;
-    }
-
-    // Calculate healing as percentage of bridge max health.
-    const healPercentage = bridge.maxHealth > 0 ? healAmount / bridge.maxHealth : 0;
-    if (healPercentage <= 0) return;
-
-    // Propagate proportional healing to all towers.
-    for (const towerId of state.towerIds) {
-      const tower = this.spawnedEntities.get(towerId);
-      if (!tower || tower.destroyed) continue;
-      const towerHealAmount = healPercentage * tower.maxHealth;
-      tower.health = Math.min(tower.maxHealth, tower.health + towerHealAmount);
-    }
-  }
-
-  /**
-   * Source parity: BridgeBehavior::onDie — kill towers, handle objects on bridge, mark destroyed.
-   * Called when the bridge entity dies.
-   */
-  /* @internal */ bridgeBehaviorOnDie(bridge: MapEntity): void {
-    const state = bridge.bridgeBehaviorState;
-    if (!state) return;
-
-    // Kill all towers.
-    for (const towerId of state.towerIds) {
-      const tower = this.spawnedEntities.get(towerId);
-      if (tower && !tower.destroyed) {
-        this.markEntityDestroyed(tower.id, bridge.id);
-      }
-    }
-
-    // Handle objects standing on bridge — kill entities that can't fly.
-    this.handleObjectsOnBridgeDeath(bridge);
-
-    // Mark bridge cells as impassable in nav grid.
-    if (this.navigationGrid) {
-      for (const cell of state.bridgeCells) {
-        const index = cell.z * this.navigationGrid.width + cell.x;
-        if (index >= 0 && index < this.navigationGrid.bridgePassable.length) {
-          this.navigationGrid.bridgePassable[index] = 0;
-        }
-      }
-    }
-
-    // Record death frame for timed FX.
-    state.isBridgeDestroyed = true;
-    state.deathFrame = this.frameCounter;
-  }
-
-  /**
-   * Source parity: BridgeBehavior::handleObjectsOnBridgeOnDie — drop/kill entities on destroyed bridge.
-   */
-  private handleObjectsOnBridgeDeath(bridge: MapEntity): void {
-    // Simple implementation: kill non-bridge, non-aircraft entities near the bridge.
-    const scanRadius = 50; // Bridge scan radius
-    const bx = bridge.x;
-    const bz = bridge.z;
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) continue;
-      if (entity.id === bridge.id) continue;
-      if (entity.kindOf.has('BRIDGE') || entity.kindOf.has('BRIDGE_TOWER')) continue;
-      if (entity.kindOf.has('AIRCRAFT')) continue;
-
-      const dx = entity.x - bx;
-      const dz = entity.z - bz;
-      if (dx * dx + dz * dz > scanRadius * scanRadius) continue;
-
-      // Source parity: if they have physics, let them fall; otherwise kill them.
-      if (entity.physicsBehaviorProfile) {
-        // They have physics — they will fall.
-      } else {
-        this.markEntityDestroyed(entity.id, bridge.id);
-      }
-    }
-  }
-
-  /**
-   * Source parity: BridgeTowerBehavior::onDamage — propagate tower damage to other towers and bridge.
-   * Damage percentage is calculated from tower health and propagated proportionally.
-   */
-  private bridgeTowerOnDamage(
-    tower: MapEntity,
-    sourceEntityId: number | null,
-    amount: number,
-    damageType: string,
-  ): void {
-    const state = tower.bridgeTowerState;
-    if (!state) return;
-
-    const bridge = this.spawnedEntities.get(state.bridgeEntityId);
-    if (!bridge || bridge.destroyed) return;
-
-    const bridgeState = bridge.bridgeBehaviorState;
-    if (!bridgeState) return;
-
-    // Skip propagation if source is a bridge or bridge tower (prevents recursion).
-    if (sourceEntityId !== null) {
-      const source = this.spawnedEntities.get(sourceEntityId);
-      if (source && (source.kindOf.has('BRIDGE') || source.kindOf.has('BRIDGE_TOWER'))) return;
-    }
-
-    // Calculate damage as percentage of this tower's max health.
-    const damagePercentage = tower.maxHealth > 0 ? amount / tower.maxHealth : 0;
-    if (damagePercentage <= 0) return;
-
-    // Propagate damage to other towers (not self).
-    for (const otherTowerId of bridgeState.towerIds) {
-      const otherTower = this.spawnedEntities.get(otherTowerId);
-      if (!otherTower || otherTower.destroyed || otherTower.id === tower.id) continue;
-      const otherDamageAmount = damagePercentage * otherTower.maxHealth;
-      // Source parity: use this tower as source to prevent recursion.
-      this.applyWeaponDamageAmount(tower.id, otherTower, otherDamageAmount, damageType);
-    }
-
-    // Propagate damage to bridge.
-    const bridgeDamageAmount = damagePercentage * bridge.maxHealth;
-    this.applyWeaponDamageAmount(tower.id, bridge, bridgeDamageAmount, damageType);
-  }
-
-  /**
-   * Source parity: BridgeTowerBehavior::onHealing — propagate tower healing to other towers and bridge.
-   */
-  private bridgeTowerOnHealing(
-    tower: MapEntity,
-    healAmount: number,
-    sourceEntityId: number | null,
-  ): void {
-    const state = tower.bridgeTowerState;
-    if (!state) return;
-
-    const bridge = this.spawnedEntities.get(state.bridgeEntityId);
-    if (!bridge || bridge.destroyed) return;
-
-    const bridgeState = bridge.bridgeBehaviorState;
-    if (!bridgeState) return;
-
-    // Skip propagation if source is a bridge or bridge tower.
-    if (sourceEntityId !== null) {
-      const source = this.spawnedEntities.get(sourceEntityId);
-      if (source && (source.kindOf.has('BRIDGE') || source.kindOf.has('BRIDGE_TOWER'))) return;
-    }
-
-    // Calculate healing as percentage of this tower's max health.
-    const healPercentage = tower.maxHealth > 0 ? healAmount / tower.maxHealth : 0;
-    if (healPercentage <= 0) return;
-
-    // Propagate healing to other towers.
-    for (const otherTowerId of bridgeState.towerIds) {
-      const otherTower = this.spawnedEntities.get(otherTowerId);
-      if (!otherTower || otherTower.destroyed || otherTower.id === tower.id) continue;
-      const otherHealAmount = healPercentage * otherTower.maxHealth;
-      otherTower.health = Math.min(otherTower.maxHealth, otherTower.health + otherHealAmount);
-    }
-
-    // Propagate healing to bridge.
-    const bridgeHealAmount = healPercentage * bridge.maxHealth;
-    bridge.health = Math.min(bridge.maxHealth, bridge.health + bridgeHealAmount);
-
-    // Source parity: if bridge was destroyed and has been healed back, restore passability.
-    if (bridgeState.isBridgeDestroyed && bridge.health > 0) {
-      this.bridgeRestorePassability(bridge);
-    }
-  }
-
-  /**
-   * Source parity: BridgeTowerBehavior::onDie — kill the parent bridge entity.
-   */
-  /* @internal */ bridgeTowerOnDie(tower: MapEntity): void {
-    const state = tower.bridgeTowerState;
-    if (!state) return;
-
-    const bridge = this.spawnedEntities.get(state.bridgeEntityId);
-    if (bridge && !bridge.destroyed) {
-      // Source parity: tower death kills the bridge.
-      bridge.health = 0;
-      if (!bridge.slowDeathState && !bridge.structureCollapseState) {
-        this.markEntityDestroyed(bridge.id, tower.id);
-      }
-    }
-  }
-
-  /**
-   * Source parity: Restore bridge passability in nav grid after repair.
-   */
-  private bridgeRestorePassability(bridge: MapEntity): void {
-    const state = bridge.bridgeBehaviorState;
-    if (!state) return;
-
-    if (this.navigationGrid) {
-      for (const cell of state.bridgeCells) {
-        const index = cell.z * this.navigationGrid.width + cell.x;
-        if (index >= 0 && index < this.navigationGrid.bridgePassable.length) {
-          this.navigationGrid.bridgePassable[index] = 1;
-        }
-      }
-    }
-
-    state.isBridgeDestroyed = false;
-    state.deathFrame = 0;
-  }
 
   /**
    * Source parity: StructureToppleUpdate::update() — building collapse physics.
