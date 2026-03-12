@@ -1,169 +1,19 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
-import type { IniBlock } from '@generals/core';
-import type { InputState } from '@generals/input';
-import {
-  type ArmorDef,
-  type AudioEventDef,
-  type CommandButtonDef,
-  type CommandSetDef,
-  type FactionDef,
-  IniDataRegistry,
-  type IniDataBundle,
-  type LocomotorDef,
-  type ObjectDef,
-  type ScienceDef,
-  type SpecialPowerDef,
-  type UpgradeDef,
-  type WeaponDef,
-} from '@generals/ini-data';
-import { HeightmapGrid, type MapDataJSON, type MapObjectJSON, uint8ArrayToBase64 } from '@generals/terrain';
-
 import { GameLogicSubsystem } from './index.js';
-
-// ── Test helpers ──
-
-function makeBlock(
-  type: string,
-  name: string,
-  fields: Record<string, unknown>,
-  blocks: IniBlock[] = [],
-): IniBlock {
-  return {
-    type,
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks,
-  };
-}
-
-function makeObjectDef(
-  name: string,
-  side: string,
-  kindOf: string[],
-  blocks: IniBlock[],
-  fields: Record<string, unknown> = {},
-): ObjectDef {
-  return {
-    name,
-    side,
-    kindOf,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks,
-    resolved: true,
-  };
-}
-
-function makeWeaponDef(name: string, fields: Record<string, unknown>): WeaponDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks: [],
-  };
-}
-
-function makeArmorDef(name: string, fields: Record<string, unknown>): ArmorDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-  };
-}
-
-function makeLocomotorDef(name: string, speed: number): LocomotorDef {
-  return {
-    name,
-    fields: { Speed: speed },
-    surfaces: ['GROUND'],
-    surfaceMask: 1,
-    downhillOnly: false,
-    speed,
-  };
-}
-
-function makeBundle(params: {
-  objects: ObjectDef[];
-  weapons?: WeaponDef[];
-  armors?: ArmorDef[];
-  locomotors?: LocomotorDef[];
-}): IniDataBundle {
-  const weapons = params.weapons ?? [];
-  const armors = params.armors ?? [];
-  const locomotors = params.locomotors ?? [];
-  return {
-    objects: params.objects,
-    weapons,
-    armors,
-    upgrades: [],
-    commandButtons: [],
-    commandSets: [],
-    sciences: [],
-    specialPowers: [],
-    factions: [],
-    locomotors,
-    audioEvents: [],
-    ai: { attackUsesLineOfSight: true },
-    stats: {
-      objects: params.objects.length,
-      weapons: weapons.length,
-      armors: armors.length,
-      upgrades: 0,
-      sciences: 0,
-      factions: 0,
-      unresolvedInheritance: 0,
-      totalBlocks: params.objects.length + weapons.length + armors.length + locomotors.length,
-    },
-    errors: [],
-    unsupportedBlockTypes: [],
-  };
-}
-
-function makeRegistry(bundle: IniDataBundle): IniDataRegistry {
-  const registry = new IniDataRegistry();
-  registry.loadBundle(bundle);
-  return registry;
-}
-
-function makeHeightmap(width = 64, height = 64): HeightmapGrid {
-  const data = new Uint8Array(width * height).fill(0);
-  return HeightmapGrid.fromJSON({
-    width,
-    height,
-    borderSize: 0,
-    data: uint8ArrayToBase64(data),
-  });
-}
-
-function makeMap(objects: MapObjectJSON[], width = 64, height = 64): MapDataJSON {
-  const data = new Uint8Array(width * height).fill(0);
-  return {
-    heightmap: {
-      width,
-      height,
-      borderSize: 0,
-      data: uint8ArrayToBase64(data),
-    },
-    objects,
-    triggers: [],
-    textureClasses: [],
-    blendTileCount: 0,
-  };
-}
-
-function makeMapObject(
-  templateName: string,
-  x: number,
-  y: number,
-  properties: Record<string, string> = {},
-): MapObjectJSON {
-  return {
-    templateName,
-    angle: 0,
-    flags: 0,
-    position: { x, y, z: 0 },
-    properties,
-  };
-}
+import {
+  makeBlock,
+  makeObjectDef,
+  makeWeaponDef,
+  makeArmorDef,
+  makeLocomotorDef,
+  makeBundle,
+  makeRegistry,
+  makeHeightmap,
+  makeMap,
+  makeMapObject,
+} from './test-helpers.js';
 
 function createLogic(): GameLogicSubsystem {
   const scene = new THREE.Scene();

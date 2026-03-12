@@ -2,6 +2,28 @@
 
 ## Session Summaries
 
+### 2026-03-13T03:10Z — Test infrastructure: shared helpers + test decomposition
+- Created `test-helpers.ts` — single shared module with 18 reusable test builders (makeBlock, makeObjectDef, makeBundle, etc.)
+- Eliminated duplicate helper definitions from index.test.ts, containment.test.ts, parity-agent.ts
+- Decomposed index.test.ts (69,639 → 44,019 lines, 37% reduction) into 8 domain test files:
+  - update-behaviors.test.ts (13,240 lines, 74 describe blocks)
+  - entity-lifecycle.test.ts (3,670 lines, 21 describe blocks)
+  - aircraft-ai.test.ts (2,562 lines, 6 describe blocks)
+  - status-effects.test.ts (1,956 lines, 8 describe blocks)
+  - upgrade-production.test.ts (1,673 lines, 12 describe blocks)
+  - render-state.test.ts (1,315 lines, 6 describe blocks)
+  - stealth-detection.test.ts (679 lines, 3 describe blocks)
+  - bridge-mechanics.test.ts (442 lines, 1 describe block)
+- All 3,241 tests pass across 142 test files, TSC clean
+
+### 2026-03-13T02:26Z — Phases 11-13 COMPLETE, all 13 phases done
+- Phase 11: Extracted entity-factory.ts (97 methods, 4,522 lines) — createMapEntity, spawnEntityFromTemplate, 95 extract*Profile methods
+- Phase 12: Extracted render-state-bridge.ts (10 methods + 2 constants, 691 lines) — syncModelConditionFlags, deriveRenderAnimationState, makeRenderableEntityState
+- Phase 13: Extracted update-behaviors.ts (56 methods, 2,225 lines) — mines, crates, demo traps, battle plan, special abilities, guard, deploy, horde, bone FX, etc.
+- index.ts reduced from 66,247 → 30,987 lines (53% reduction, ~35,260 lines extracted)
+- All 3,241 tests pass, TSC clean (only pre-existing parity-agent errors)
+- 13 phases completed across multiple sessions
+
 ### 2026-03-12T21:20Z — Phase 1a: script-actions.ts extraction COMPLETE
 - Extracted 402 script action methods from `GameLogicSubsystem` class in `index.ts` to new `script-actions.ts` (12,273 lines)
 - `index.ts` reduced from 66,247 → 54,165 lines (12,082 line reduction)

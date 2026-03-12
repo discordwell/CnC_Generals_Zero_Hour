@@ -7,25 +7,50 @@
  */
 
 import * as THREE from 'three';
-import type { IniBlock } from '@generals/core';
-import {
-  IniDataRegistry,
-  type ArmorDef,
-  type AudioEventDef,
-  type CommandButtonDef,
-  type CommandSetDef,
-  type FactionDef,
-  type IniDataBundle,
-  type LocomotorDef,
-  type ObjectDef,
-  type ScienceDef,
-  type SpecialPowerDef,
-  type UpgradeDef,
-  type WeaponDef,
-} from '@generals/ini-data';
-import { HeightmapGrid, type MapDataJSON, type MapObjectJSON, uint8ArrayToBase64 } from '@generals/terrain';
+import type { MapObjectJSON } from '@generals/terrain';
 
 import { GameLogicSubsystem } from './index.js';
+import {
+  makeBlock,
+  makeObjectDef,
+  makeWeaponDef,
+  makeArmorDef,
+  makeLocomotorDef,
+  makeUpgradeDef,
+  makeCommandButtonDef,
+  makeCommandSetDef,
+  makeScienceDef,
+  makeSpecialPowerDef,
+  makeWeaponBlock,
+  makeBundle,
+  makeRegistry,
+  makeHeightmap,
+  makeMap,
+  makeMapObject,
+} from './test-helpers.js';
+
+// Re-export helpers for backward compat (parity-combat.test.ts, parity-pipeline.test.ts, etc.)
+export {
+  makeBlock,
+  makeObjectDef,
+  makeWeaponDef,
+  makeArmorDef,
+  makeLocomotorDef,
+  makeUpgradeDef,
+  makeCommandButtonDef,
+  makeCommandSetDef,
+  makeScienceDef,
+  makeSpecialPowerDef,
+  makeWeaponBlock,
+  makeBundle,
+  makeRegistry,
+  makeHeightmap,
+  makeMap,
+  makeMapObject,
+};
+
+/** Alias for makeMapObject — used in parity tests for brevity. */
+export const place = makeMapObject;
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -83,219 +108,6 @@ export interface ParityAgent {
 
   // Direct access for assertions
   readonly gameLogic: GameLogicSubsystem;
-}
-
-// ── Bundle helpers (mirrors test helpers from index.test.ts) ────────────────
-
-export function makeBlock(
-  type: string,
-  name: string,
-  fields: Record<string, unknown>,
-  blocks: IniBlock[] = [],
-): IniBlock {
-  return {
-    type,
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks,
-  };
-}
-
-export function makeObjectDef(
-  name: string,
-  side: string,
-  kindOf: string[],
-  blocks: IniBlock[],
-  fields: Record<string, unknown> = {},
-): ObjectDef {
-  return {
-    name,
-    side,
-    kindOf,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks,
-    resolved: true,
-  };
-}
-
-export function makeWeaponDef(name: string, fields: Record<string, unknown>): WeaponDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks: [],
-  };
-}
-
-export function makeArmorDef(name: string, fields: Record<string, unknown>): ArmorDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-  };
-}
-
-export function makeLocomotorDef(name: string, speed: number): LocomotorDef {
-  return {
-    name,
-    fields: { Speed: speed },
-    surfaces: ['GROUND'],
-    surfaceMask: 1,
-    downhillOnly: false,
-    speed,
-  };
-}
-
-export function makeUpgradeDef(name: string, fields: Record<string, unknown>): UpgradeDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-  };
-}
-
-export function makeCommandButtonDef(name: string, fields: Record<string, unknown>): CommandButtonDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-  };
-}
-
-export function makeCommandSetDef(name: string, fields: Record<string, unknown>): CommandSetDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-  };
-}
-
-export function makeScienceDef(name: string, fields: Record<string, unknown>): ScienceDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-  };
-}
-
-export function makeSpecialPowerDef(name: string, fields: Record<string, unknown>): SpecialPowerDef {
-  return {
-    name,
-    fields: fields as Record<string, string | number | boolean | string[] | number[]>,
-    blocks: [],
-  };
-}
-
-export function makeWeaponBlock(weaponName: string, slot: string = 'PRIMARY'): IniBlock {
-  return makeBlock('WeaponSet', 'WeaponSet', { Weapon: [slot, weaponName] });
-}
-
-export function makeBundle(params: {
-  objects: ObjectDef[];
-  weapons?: WeaponDef[];
-  armors?: ArmorDef[];
-  upgrades?: UpgradeDef[];
-  commandButtons?: CommandButtonDef[];
-  commandSets?: CommandSetDef[];
-  sciences?: ScienceDef[];
-  specialPowers?: SpecialPowerDef[];
-  locomotors?: LocomotorDef[];
-  audioEvents?: AudioEventDef[];
-  factions?: FactionDef[];
-  ai?: {
-    attackUsesLineOfSight?: boolean;
-    skirmishBaseDefenseExtraDistance?: number;
-  };
-}): IniDataBundle {
-  const weapons = params.weapons ?? [];
-  const armors = params.armors ?? [];
-  const upgrades = params.upgrades ?? [];
-  const commandButtons = params.commandButtons ?? [];
-  const commandSets = params.commandSets ?? [];
-  const sciences = params.sciences ?? [];
-  const specialPowers = params.specialPowers ?? [];
-  const locomotors = params.locomotors ?? [];
-  const audioEvents = params.audioEvents ?? [];
-  const factions = params.factions ?? [];
-  return {
-    objects: params.objects,
-    weapons,
-    armors,
-    upgrades,
-    commandButtons,
-    commandSets,
-    sciences,
-    specialPowers,
-    factions,
-    locomotors,
-    audioEvents,
-    ai: {
-      attackUsesLineOfSight: true,
-      ...params.ai,
-    },
-    stats: {
-      objects: params.objects.length,
-      weapons: weapons.length,
-      armors: armors.length,
-      upgrades: upgrades.length,
-      sciences: sciences.length,
-      factions: 0,
-      unresolvedInheritance: 0,
-      totalBlocks:
-        params.objects.length
-        + weapons.length
-        + armors.length
-        + upgrades.length
-        + specialPowers.length
-        + commandButtons.length
-        + commandSets.length
-        + sciences.length
-        + locomotors.length,
-    },
-    errors: [],
-    unsupportedBlockTypes: [],
-  };
-}
-
-export function makeRegistry(bundle: IniDataBundle): IniDataRegistry {
-  const registry = new IniDataRegistry();
-  registry.loadBundle(bundle);
-  return registry;
-}
-
-export function makeHeightmap(width = 8, height = 8): HeightmapGrid {
-  const data = new Uint8Array(width * height).fill(0);
-  return HeightmapGrid.fromJSON({
-    width,
-    height,
-    borderSize: 0,
-    data: uint8ArrayToBase64(data),
-  });
-}
-
-export function makeMap(objects: MapObjectJSON[], width = 8, height = 8): MapDataJSON {
-  const data = new Uint8Array(width * height).fill(0);
-  return {
-    heightmap: {
-      width,
-      height,
-      borderSize: 0,
-      data: uint8ArrayToBase64(data),
-    },
-    objects,
-    triggers: [],
-    textureClasses: [],
-    blendTileCount: 0,
-  };
-}
-
-export function place(
-  templateName: string,
-  x: number,
-  y: number,
-  properties: Record<string, string> = {},
-): MapObjectJSON {
-  return {
-    templateName,
-    angle: 0,
-    flags: 0,
-    position: { x, y, z: 0 },
-    properties,
-  };
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
