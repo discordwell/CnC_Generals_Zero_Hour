@@ -33,13 +33,6 @@ import {
   type HeightmapGrid,
   type MapDataJSON,
   type MapObjectJSON,
-  type ScriptActionJSON,
-  type ScriptConditionJSON,
-  type ScriptGroupJSON,
-  type ScriptJSON,
-  type ScriptListJSON,
-  type ScriptOrConditionJSON,
-  type ScriptParameterJSON,
 } from '@generals/terrain';
 import type { InputState } from '@generals/input';
 import {
@@ -385,6 +378,37 @@ import {
   evaluateScriptFlagCondition as evaluateScriptFlagConditionImpl,
   evaluateScriptTimerExpired as evaluateScriptTimerExpiredImpl,
 } from './script-conditions.js';
+import {
+  loadMapScripts as loadMapScriptsImpl,
+  createMapScriptListRuntime as createMapScriptListRuntimeImpl,
+  createMapScriptGroupRuntime as createMapScriptGroupRuntimeImpl,
+  createMapScriptRuntime as createMapScriptRuntimeImpl,
+  createMapScriptOrConditionRuntime as createMapScriptOrConditionRuntimeImpl,
+  createMapScriptConditionRuntime as createMapScriptConditionRuntimeImpl,
+  createMapScriptActionRuntime as createMapScriptActionRuntimeImpl,
+  createMapScriptParameterRuntime as createMapScriptParameterRuntimeImpl,
+  resolveMapScriptParameterValue as resolveMapScriptParameterValueImpl,
+  configureScriptKindOfBitLayout as configureScriptKindOfBitLayoutImpl,
+  normalizeMapScriptObjectTypeParam as normalizeMapScriptObjectTypeParamImpl,
+  normalizeMapScriptUpgradeParam as normalizeMapScriptUpgradeParamImpl,
+  checkMapScriptConditionsForTeamNames as checkMapScriptConditionsForTeamNamesImpl,
+  resetScriptWaypointPathCompletions as resetScriptWaypointPathCompletionsImpl,
+  updateScriptCountdownTimers as updateScriptCountdownTimersImpl,
+  updateScriptEntityFlashes as updateScriptEntityFlashesImpl,
+  updatePendingScriptTeamCreated as updatePendingScriptTeamCreatedImpl,
+  markScriptTeamCreatedPulse as markScriptTeamCreatedPulseImpl,
+  updateScriptTeamCreatedPulses as updateScriptTeamCreatedPulsesImpl,
+  updateScriptWaypointPathCompletions as updateScriptWaypointPathCompletionsImpl,
+  updateScriptAttackAreaEntity as updateScriptAttackAreaEntityImpl,
+  updateScriptAttackArea as updateScriptAttackAreaImpl,
+  updateScriptHunt as updateScriptHuntImpl,
+  updatePendingScriptReinforcementTransportArrivals as updatePendingScriptReinforcementTransportArrivalsImpl,
+  updateScriptSideRepairQueues as updateScriptSideRepairQueuesImpl,
+  updateScriptTriggerTransitions as updateScriptTriggerTransitionsImpl,
+  executeMapScripts as executeMapScriptsImpl,
+  updateScriptSequentialScripts as updateScriptSequentialScriptsImpl,
+  updateScriptWanderInPlace as updateScriptWanderInPlaceImpl,
+} from './script-engine.js';
 
 export * from './types.js';
 export * from './campaign-manager.js';
@@ -544,10 +568,10 @@ const SOURCE_DEFAULT_MAX_BEACONS_PER_PLAYER = 3;
 export const SOURCE_DEFAULT_MAX_SHOTS_TO_FIRE = 0x7fffffff;
 export const SOURCE_FLASH_COLOR_WHITE = 0xffffff;
 export const MAX_DYNAMIC_WATER = 64;
-const MAX_SPIN_COUNT = 20;
+export const MAX_SPIN_COUNT = 20;
 export const SCRIPT_WAYPOINT_PATH_LIMIT = 1024;
 const SCRIPT_DIFFICULTY_EASY = 0;
-const SCRIPT_DIFFICULTY_NORMAL = 1;
+export const SCRIPT_DIFFICULTY_NORMAL = 1;
 const SCRIPT_DIFFICULTY_HARD = 2;
 /** Source parity: AIPlayer::MAX_STRUCTURES_TO_REPAIR. */
 const SOURCE_MAX_STRUCTURES_TO_REPAIR = 2;
@@ -5426,25 +5450,25 @@ export const SCRIPT_CONDITION_TYPE_ALIASES = new Map<string, string>([
 /**
  * Source parity: Parameter::ParameterType enum values from Scripts.h.
  */
-const SCRIPT_PARAMETER_TYPE_INT = 0;
-const SCRIPT_PARAMETER_TYPE_REAL = 1;
-const SCRIPT_PARAMETER_TYPE_TEAM = 3;
-const SCRIPT_PARAMETER_TYPE_COMPARISON = 6;
-const SCRIPT_PARAMETER_TYPE_BOOLEAN = 8;
-const SCRIPT_PARAMETER_TYPE_OBJECT_TYPE = 15;
-const SCRIPT_PARAMETER_TYPE_COORD3D = 16;
-const SCRIPT_PARAMETER_TYPE_ANGLE = 17;
-const SCRIPT_PARAMETER_TYPE_RELATION = 19;
-const SCRIPT_PARAMETER_TYPE_AI_MOOD = 20;
-const SCRIPT_PARAMETER_TYPE_KIND_OF = 27;
-const SCRIPT_PARAMETER_TYPE_RADAR_EVENT_TYPE = 29;
+export const SCRIPT_PARAMETER_TYPE_INT = 0;
+export const SCRIPT_PARAMETER_TYPE_REAL = 1;
+export const SCRIPT_PARAMETER_TYPE_TEAM = 3;
+export const SCRIPT_PARAMETER_TYPE_COMPARISON = 6;
+export const SCRIPT_PARAMETER_TYPE_BOOLEAN = 8;
+export const SCRIPT_PARAMETER_TYPE_OBJECT_TYPE = 15;
+export const SCRIPT_PARAMETER_TYPE_COORD3D = 16;
+export const SCRIPT_PARAMETER_TYPE_ANGLE = 17;
+export const SCRIPT_PARAMETER_TYPE_RELATION = 19;
+export const SCRIPT_PARAMETER_TYPE_AI_MOOD = 20;
+export const SCRIPT_PARAMETER_TYPE_KIND_OF = 27;
+export const SCRIPT_PARAMETER_TYPE_RADAR_EVENT_TYPE = 29;
 // Values 30 and 31 are reserved by source parity for SPECIAL_POWER and SCIENCE.
-const SCRIPT_PARAMETER_TYPE_UPGRADE = 32;
-const SCRIPT_PARAMETER_TYPE_BOUNDARY = 34;
-const SCRIPT_PARAMETER_TYPE_BUILDABLE = 35;
-const SCRIPT_PARAMETER_TYPE_SURFACES_ALLOWED = 36;
-const SCRIPT_PARAMETER_TYPE_SHAKE_INTENSITY = 37;
-const SCRIPT_PARAMETER_TYPE_OBJECT_STATUS = 40;
+export const SCRIPT_PARAMETER_TYPE_UPGRADE = 32;
+export const SCRIPT_PARAMETER_TYPE_BOUNDARY = 34;
+export const SCRIPT_PARAMETER_TYPE_BUILDABLE = 35;
+export const SCRIPT_PARAMETER_TYPE_SURFACES_ALLOWED = 36;
+export const SCRIPT_PARAMETER_TYPE_SHAKE_INTENSITY = 37;
+export const SCRIPT_PARAMETER_TYPE_OBJECT_STATUS = 40;
 
 /**
  * Source parity: ObjectStatusBits string table from ObjectStatusBits.h.
@@ -6159,7 +6183,7 @@ export const SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER = new Map<string, number
   SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER.map((name, index) => [name, index]),
 );
 
-const SCRIPT_KIND_OF_ALLOW_SURRENDER_NAMES = new Set<string>([
+export const SCRIPT_KIND_OF_ALLOW_SURRENDER_NAMES = new Set<string>([
   'PRISON',
   'COLLECTS_PRISON_BOUNTY',
   'POW_TRUCK',
@@ -6824,427 +6848,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private loadMapScripts(mapData: MapDataJSON): void {
-    this.mapScriptLists.length = 0;
-    this.mapScriptsByNameUpper.clear();
-    this.mapScriptGroupsByNameUpper.clear();
-    this.scriptPlayerSideByName.clear();
-    this.scriptDefaultTeamNameBySide.clear();
-    this.mapScriptSideByIndex.length = 0;
-    this.mapScriptDifficultyByIndex.length = 0;
-    this.scriptAiBuildListEntriesBySide.clear();
-
-    const sidesList = mapData.sidesList;
-    if (!sidesList) {
-      return;
-    }
-
-    for (let sideIndex = 0; sideIndex < sidesList.sides.length; sideIndex += 1) {
-      const side = sidesList.sides[sideIndex];
-      if (!side) {
-        continue;
-      }
-      const dict = side.dict ?? {};
-      const playerName = this.readScriptDictString(dict, 'playerName');
-      const playerFaction = this.readScriptDictString(dict, 'playerFaction');
-      const resolvedSide = this.resolveScriptSideFromPlayerFaction(playerFaction);
-      if (resolvedSide) {
-        this.mapScriptSideByIndex[sideIndex] = resolvedSide;
-      }
-      const buildListEntries = this.resolveScriptAiBuildListEntries(side.buildList ?? []);
-      if (resolvedSide && buildListEntries.length > 0) {
-        const existingEntries = this.scriptAiBuildListEntriesBySide.get(resolvedSide);
-        if (existingEntries) {
-          existingEntries.push(...buildListEntries);
-        } else {
-          this.scriptAiBuildListEntriesBySide.set(resolvedSide, buildListEntries);
-        }
-      }
-      const normalizedPlayerName = playerName.trim().toUpperCase();
-      if (normalizedPlayerName && resolvedSide) {
-        this.scriptPlayerSideByName.set(normalizedPlayerName, resolvedSide);
-      }
-      const difficulty = this.readScriptDictNumber(dict, 'skirmishDifficulty');
-      this.mapScriptDifficultyByIndex[sideIndex] = difficulty !== null
-        ? Math.trunc(difficulty)
-        : SCRIPT_DIFFICULTY_NORMAL;
-    }
-
-    for (const teamEntry of sidesList.teams) {
-      const dict = teamEntry.dict ?? {};
-      const teamName = this.readScriptDictString(dict, 'teamName');
-      if (!teamName) {
-        continue;
-      }
-      const teamRecord = this.getOrCreateScriptTeamRecord(teamName);
-      if (!teamRecord) {
-        continue;
-      }
-      const teamNameUpper = teamRecord.nameUpper;
-
-      const teamOwner = this.readScriptDictString(dict, 'teamOwner');
-      const ownerKey = teamOwner.trim().toUpperCase();
-      if (ownerKey) {
-        teamRecord.controllingPlayerToken = this.normalizeControllingPlayerToken(teamOwner);
-        const ownerSide = this.scriptPlayerSideByName.get(ownerKey);
-        if (ownerSide) {
-          teamRecord.controllingSide = ownerSide;
-          // Source parity: SidesList::isPlayerDefaultTeam marks "team<playerName>" as
-          // the owning player's default team.
-          if (
-            teamNameUpper.startsWith('TEAM')
-            && teamNameUpper.slice('TEAM'.length) === ownerKey
-            && !this.scriptDefaultTeamNameBySide.has(ownerSide)
-          ) {
-            this.scriptDefaultTeamNameBySide.set(ownerSide, teamNameUpper);
-          }
-        }
-      }
-
-      const isSingleton = this.readScriptDictBoolean(dict, 'teamIsSingleton');
-      if (isSingleton !== null) {
-        teamRecord.isSingleton = isSingleton;
-      }
-      const maxInstances = this.readScriptDictNumber(dict, 'teamMaxInstances');
-      if (maxInstances !== null) {
-        teamRecord.maxInstances = Math.trunc(maxInstances);
-      }
-      const productionPriority = this.readScriptDictNumber(dict, 'teamProductionPriority');
-      if (productionPriority !== null) {
-        teamRecord.productionPriority = Math.trunc(productionPriority);
-      }
-      const productionPrioritySuccessIncrease = this.readScriptDictNumber(
-        dict,
-        'teamProductionPrioritySuccessIncrease',
-      );
-      if (productionPrioritySuccessIncrease !== null) {
-        teamRecord.productionPrioritySuccessIncrease = Math.trunc(productionPrioritySuccessIncrease);
-      }
-      const productionPriorityFailureDecrease = this.readScriptDictNumber(
-        dict,
-        'teamProductionPriorityFailureDecrease',
-      );
-      if (productionPriorityFailureDecrease !== null) {
-        teamRecord.productionPriorityFailureDecrease = Math.trunc(productionPriorityFailureDecrease);
-      }
-      teamRecord.reinforcementUnitEntries = this.resolveScriptTeamTemplateUnitEntries(dict);
-      const reinforcementTransportTemplateName = this.readScriptDictString(dict, 'teamTransport');
-      if (reinforcementTransportTemplateName) {
-        teamRecord.reinforcementTransportTemplateName = reinforcementTransportTemplateName;
-      }
-      const reinforcementStartWaypointName = this.readScriptDictString(dict, 'teamReinforcementOrigin');
-      if (reinforcementStartWaypointName) {
-        teamRecord.reinforcementStartWaypointName = reinforcementStartWaypointName;
-      }
-      const reinforcementTeamStartsFull = this.readScriptDictBoolean(dict, 'teamStartsFull');
-      if (reinforcementTeamStartsFull !== null) {
-        teamRecord.reinforcementTeamStartsFull = reinforcementTeamStartsFull;
-      }
-      const reinforcementTransportsExit = this.readScriptDictBoolean(dict, 'teamTransportsExit');
-      if (reinforcementTransportsExit !== null) {
-        teamRecord.reinforcementTransportsExit = reinforcementTransportsExit;
-      }
-      const teamHomeWaypointName = this.readScriptDictString(dict, 'teamHome');
-      if (teamHomeWaypointName) {
-        teamRecord.homeWaypointName = teamHomeWaypointName;
-      }
-      const teamIsAIRecruitable = this.readScriptDictBoolean(dict, 'teamIsAIRecruitable');
-      if (teamIsAIRecruitable !== null) {
-        teamRecord.isAIRecruitable = teamIsAIRecruitable;
-      }
-    }
-
-    for (let sideIndex = 0; sideIndex < sidesList.sides.length; sideIndex += 1) {
-      const side = sidesList.sides[sideIndex];
-      if (!side || !side.scripts) {
-        this.mapScriptLists[sideIndex] = { scripts: [], groups: [] };
-        continue;
-      }
-      this.mapScriptLists[sideIndex] = this.createMapScriptListRuntime(side.scripts, sideIndex);
-    }
-  }
-
-  private createMapScriptListRuntime(scriptList: ScriptListJSON, sideIndex: number): MapScriptListRuntime {
-    const scripts: MapScriptRuntime[] = [];
-    for (const script of scriptList.scripts ?? []) {
-      scripts.push(this.createMapScriptRuntime(script, sideIndex));
-    }
-
-    const groups: MapScriptGroupRuntime[] = [];
-    for (const group of scriptList.groups ?? []) {
-      groups.push(this.createMapScriptGroupRuntime(group, sideIndex));
-    }
-
-    return { scripts, groups };
-  }
-
-  private createMapScriptGroupRuntime(group: ScriptGroupJSON, sideIndex: number): MapScriptGroupRuntime {
-    const name = group.name ?? '';
-    const nameUpper = name.trim().toUpperCase();
-    const scripts: MapScriptRuntime[] = [];
-    for (const script of group.scripts ?? []) {
-      scripts.push(this.createMapScriptRuntime(script, sideIndex));
-    }
-    const runtime: MapScriptGroupRuntime = {
-      name,
-      nameUpper,
-      active: group.active ?? true,
-      subroutine: group.subroutine ?? false,
-      scripts,
-    };
-    if (nameUpper && !this.mapScriptGroupsByNameUpper.has(nameUpper)) {
-      this.mapScriptGroupsByNameUpper.set(nameUpper, runtime);
-    }
-    return runtime;
-  }
-
-  private createMapScriptRuntime(script: ScriptJSON, sideIndex: number): MapScriptRuntime {
-    const name = script.name ?? '';
-    const nameUpper = name.trim().toUpperCase();
-    const conditions: MapScriptOrConditionRuntime[] = [];
-    const conditionList = script.conditions ?? [];
-    for (let orIndex = 0; orIndex < conditionList.length; orIndex += 1) {
-      const orCondition = conditionList[orIndex]!;
-      conditions.push(this.createMapScriptOrConditionRuntime(orCondition, sideIndex, nameUpper, orIndex));
-    }
-
-    const actions: MapScriptActionRuntime[] = [];
-    for (const action of script.actions ?? []) {
-      actions.push(this.createMapScriptActionRuntime(action));
-    }
-
-    const falseActions: MapScriptActionRuntime[] = [];
-    for (const action of script.falseActions ?? []) {
-      falseActions.push(this.createMapScriptActionRuntime(action));
-    }
-
-    const delaySeconds = Number.isFinite(script.delayEvaluationSeconds)
-      ? script.delayEvaluationSeconds
-      : 0;
-
-    const runtime: MapScriptRuntime = {
-      name,
-      nameUpper,
-      active: script.active ?? true,
-      oneShot: script.oneShot ?? false,
-      easy: script.easy ?? true,
-      normal: script.normal ?? true,
-      hard: script.hard ?? true,
-      subroutine: script.subroutine ?? false,
-      delayEvaluationSeconds: delaySeconds,
-      frameToEvaluateAt: 0,
-      conditionTeamNameUpper: null,
-      sourceSideIndex: sideIndex,
-      conditions,
-      actions,
-      falseActions,
-    };
-
-    this.checkMapScriptConditionsForTeamNames(runtime);
-
-    if (delaySeconds > 0) {
-      runtime.frameToEvaluateAt = this.gameRandom.nextRange(0, 2 * LOGIC_FRAME_RATE);
-    }
-
-    if (nameUpper && !this.mapScriptsByNameUpper.has(nameUpper)) {
-      this.mapScriptsByNameUpper.set(nameUpper, runtime);
-    }
-
-    return runtime;
-  }
-
-  private createMapScriptOrConditionRuntime(
-    orCondition: ScriptOrConditionJSON,
-    sideIndex: number,
-    scriptNameUpper: string,
-    orIndex: number,
-  ): MapScriptOrConditionRuntime {
-    const conditions: MapScriptConditionRuntime[] = [];
-    for (let condIndex = 0; condIndex < (orCondition.conditions ?? []).length; condIndex += 1) {
-      const condition = orCondition.conditions[condIndex]!;
-      const cacheId = `MAPSCRIPT:${sideIndex}:${scriptNameUpper}:OR${orIndex}:COND${condIndex}`;
-      conditions.push(this.createMapScriptConditionRuntime(condition, cacheId));
-    }
-    return { conditions };
-  }
-
-  private createMapScriptConditionRuntime(
-    condition: ScriptConditionJSON,
-    cacheId: string,
-  ): MapScriptConditionRuntime {
-    const params: MapScriptParameterRuntime[] = [];
-    for (const param of condition.params ?? []) {
-      params.push(this.createMapScriptParameterRuntime(param));
-    }
-    return {
-      conditionType: condition.conditionType,
-      params,
-      cacheId,
-    };
-  }
-
-  private createMapScriptActionRuntime(action: ScriptActionJSON): MapScriptActionRuntime {
-    const params: MapScriptParameterRuntime[] = [];
-    for (const param of action.params ?? []) {
-      params.push(this.createMapScriptParameterRuntime(param));
-    }
-    return {
-      actionType: action.actionType,
-      params,
-    };
-  }
-
-  private createMapScriptParameterRuntime(param: ScriptParameterJSON): MapScriptParameterRuntime {
-    return {
-      type: param.type,
-      value: this.resolveMapScriptParameterValue(param),
-    };
-  }
-
-  private resolveMapScriptParameterValue(param: ScriptParameterJSON): unknown {
-    switch (param.type) {
-      case SCRIPT_PARAMETER_TYPE_COORD3D:
-        return param.coord ?? { x: 0, y: 0, z: 0 };
-      case SCRIPT_PARAMETER_TYPE_REAL:
-      case SCRIPT_PARAMETER_TYPE_ANGLE:
-        return Number.isFinite(param.realValue) ? param.realValue : 0;
-      case SCRIPT_PARAMETER_TYPE_BOOLEAN:
-        return param.intValue !== 0;
-      case SCRIPT_PARAMETER_TYPE_KIND_OF: {
-        const kindOf = this.normalizeScriptKindOfToken(param.stringValue);
-        if (kindOf) {
-          const bitIndex = this.resolveScriptKindOfBitFromName(kindOf);
-          if (bitIndex !== null) {
-            return bitIndex;
-          }
-        }
-        return Math.trunc(param.intValue);
-      }
-      case SCRIPT_PARAMETER_TYPE_OBJECT_STATUS: {
-        const mask = this.resolveScriptObjectStatusMaskFromInput(param.stringValue);
-        if (mask !== null) {
-          return mask;
-        }
-        return Math.trunc(param.intValue);
-      }
-      case SCRIPT_PARAMETER_TYPE_OBJECT_TYPE:
-        return this.normalizeMapScriptObjectTypeParam(param.stringValue);
-      case SCRIPT_PARAMETER_TYPE_UPGRADE:
-        return this.normalizeMapScriptUpgradeParam(param.stringValue);
-      case SCRIPT_PARAMETER_TYPE_INT:
-      case SCRIPT_PARAMETER_TYPE_COMPARISON:
-      case SCRIPT_PARAMETER_TYPE_RELATION:
-      case SCRIPT_PARAMETER_TYPE_AI_MOOD:
-      case SCRIPT_PARAMETER_TYPE_RADAR_EVENT_TYPE:
-      case SCRIPT_PARAMETER_TYPE_BOUNDARY:
-      case SCRIPT_PARAMETER_TYPE_BUILDABLE:
-      case SCRIPT_PARAMETER_TYPE_SURFACES_ALLOWED:
-      case SCRIPT_PARAMETER_TYPE_SHAKE_INTENSITY:
-        return Math.trunc(param.intValue);
-      default:
-        return param.stringValue;
-    }
-  }
-
-  private configureScriptKindOfBitLayout(iniDataRegistry: IniDataRegistry): void {
-    let useAllowSurrenderLayout = false;
-    for (const objectDef of iniDataRegistry.objects.values()) {
-      const kindOf = this.normalizeKindOf(objectDef.kindOf);
-      for (const kindOfName of SCRIPT_KIND_OF_ALLOW_SURRENDER_NAMES) {
-        if (kindOf.has(kindOfName)) {
-          useAllowSurrenderLayout = true;
-          break;
-        }
-      }
-      if (useAllowSurrenderLayout) {
-        break;
-      }
-    }
-
-    if (useAllowSurrenderLayout) {
-      this.scriptKindOfNamesBySourceBit = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT_ALLOW_SURRENDER;
-      this.scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT_ALLOW_SURRENDER;
-      return;
-    }
-
-    this.scriptKindOfNamesBySourceBit = SCRIPT_KIND_OF_NAMES_BY_SOURCE_BIT;
-    this.scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
-  }
-
-  private normalizeMapScriptObjectTypeParam(rawValue: string): string {
-    const trimmed = rawValue.trim();
-    if (!trimmed) {
-      return '';
-    }
-    if (trimmed.startsWith('Fundamentalist')) {
-      return `GLA${trimmed.slice('Fundamentalist'.length)}`;
-    }
-    return trimmed;
-  }
-
-  private normalizeMapScriptUpgradeParam(rawValue: string): string {
-    const trimmed = rawValue.trim();
-    if (
-      trimmed === 'Upgrade_AmericaRangerCaptureBuilding'
-      || trimmed === 'Upgrade_ChinaRedguardCaptureBuilding'
-      || trimmed === 'Upgrade_GLARebelCaptureBuilding'
-    ) {
-      return 'Upgrade_InfantryCaptureBuilding';
-    }
-    return trimmed;
-  }
-
-  private checkMapScriptConditionsForTeamNames(script: MapScriptRuntime): void {
-    let singletonTeamName: string | null = null;
-    let multiTeamName: string | null = null;
-    let multiTeamDisplayName: string | null = null;
-
-    for (const orCondition of script.conditions) {
-      for (const condition of orCondition.conditions) {
-        for (const param of condition.params) {
-          if (param.type !== SCRIPT_PARAMETER_TYPE_TEAM) {
-            continue;
-          }
-          const rawName = this.coerceScriptConditionString(param.value).trim();
-          if (!rawName) {
-            continue;
-          }
-          const teamNameUpper = rawName.toUpperCase();
-          const teamRecord = this.scriptTeamsByName.get(teamNameUpper);
-          if (!teamRecord) {
-            continue;
-          }
-          let isSingleton = teamRecord.isSingleton;
-          if (teamRecord.maxInstances < 2) {
-            isSingleton = true;
-          }
-          if (isSingleton) {
-            singletonTeamName = teamNameUpper;
-          } else if (!multiTeamName) {
-            multiTeamName = teamNameUpper;
-            multiTeamDisplayName = rawName;
-          } else if (multiTeamName !== teamNameUpper) {
-            // Source parity: ScriptEngine::checkConditionsForTeamNames warning/debug append chain.
-            this.executeScriptDebugMessage(
-              '***WARNING: Script contains multiple non-singleton team conditions::***',
-              false,
-              false,
-            );
-            this.executeScriptDebugMessage(script.name, false, false);
-            this.executeScriptDebugMessage(multiTeamDisplayName ?? multiTeamName, false, false);
-            this.executeScriptDebugMessage(rawName, false, false);
-          }
-        }
-      }
-    }
-
-    if (multiTeamName) {
-      script.conditionTeamNameUpper = multiTeamName;
-    } else if (singletonTeamName) {
-      script.conditionTeamNameUpper = singletonTeamName;
-    }
-  }
-
   private resolveRailedTransportWaypointData(mapData: MapDataJSON): RailedTransportWaypointData | null {
     if (!mapData.waypoints) {
       return null;
@@ -7863,80 +7466,6 @@ export class GameLogicSubsystem implements Subsystem {
       return 0;
     }
     return dt * combinedMultiplier;
-  }
-
-  /**
-   * Source parity: AIUpdateInterface::update resets m_completedWaypoint each frame.
-   * Waypoint completion conditions are one-frame signals.
-   */
-  private resetScriptWaypointPathCompletions(): void {
-    if (this.scriptCompletedWaypointPathsByEntityId.size === 0) {
-      return;
-    }
-    this.scriptCompletedWaypointPathsByEntityId.clear();
-  }
-
-  private updateScriptCountdownTimers(): void {
-    for (const counter of this.scriptCountersByName.values()) {
-      if (!counter.isCountdownTimer) {
-        continue;
-      }
-      // Source parity: countdown timers decrement to -1 and then stop.
-      if (counter.value >= 0) {
-        counter.value -= 1;
-      }
-    }
-  }
-
-  private updateScriptEntityFlashes(): void {
-    if (this.frameCounter % DRAWABLE_FRAMES_PER_FLASH !== 0) {
-      return;
-    }
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.scriptFlashCount <= 0) {
-        continue;
-      }
-      entity.scriptFlashCount = Math.max(0, entity.scriptFlashCount - 1);
-    }
-  }
-
-  private updatePendingScriptTeamCreated(): void {
-    if (this.scriptTeamCreatedReadyFrameByName.size === 0) {
-      return;
-    }
-
-    for (const [teamNameUpper, readyFrame] of this.scriptTeamCreatedReadyFrameByName) {
-      if (this.frameCounter < readyFrame) {
-        continue;
-      }
-      const team = this.scriptTeamsByName.get(teamNameUpper);
-      if (team) {
-        this.markScriptTeamCreatedPulse(team);
-      }
-      this.scriptTeamCreatedReadyFrameByName.delete(teamNameUpper);
-    }
-  }
-
-  private markScriptTeamCreatedPulse(team: ScriptTeamRecord): void {
-    team.created = true;
-    this.scriptTeamCreatedAutoClearFrameByName.set(team.nameUpper, this.frameCounter + 1);
-  }
-
-  private updateScriptTeamCreatedPulses(): void {
-    if (this.scriptTeamCreatedAutoClearFrameByName.size === 0) {
-      return;
-    }
-
-    for (const [teamNameUpper, clearFrame] of this.scriptTeamCreatedAutoClearFrameByName) {
-      if (this.frameCounter < clearFrame) {
-        continue;
-      }
-      const team = this.scriptTeamsByName.get(teamNameUpper);
-      if (team) {
-        team.created = false;
-      }
-      this.scriptTeamCreatedAutoClearFrameByName.delete(teamNameUpper);
-    }
   }
 
   private resetContainPlayerEnteredSides(): void {
@@ -10940,6 +10469,38 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: ScriptConditions::evaluateCondition dispatcher.
    * Accepts either positional parameter arrays (`params` / `parameters`) or named parameter objects.
    */
+  // ---- Script engine facades (delegate to script-engine.ts) ----
+
+  private loadMapScripts(...args: any[]) { return (loadMapScriptsImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptListRuntime(...args: any[]) { return (createMapScriptListRuntimeImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptGroupRuntime(...args: any[]) { return (createMapScriptGroupRuntimeImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptRuntime(...args: any[]) { return (createMapScriptRuntimeImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptOrConditionRuntime(...args: any[]) { return (createMapScriptOrConditionRuntimeImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptConditionRuntime(...args: any[]) { return (createMapScriptConditionRuntimeImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptActionRuntime(...args: any[]) { return (createMapScriptActionRuntimeImpl as any)(this, ...args); }
+  /* @internal */ createMapScriptParameterRuntime(...args: any[]) { return (createMapScriptParameterRuntimeImpl as any)(this, ...args); }
+  /* @internal */ resolveMapScriptParameterValue(...args: any[]) { return (resolveMapScriptParameterValueImpl as any)(this, ...args); }
+  private configureScriptKindOfBitLayout(...args: any[]) { return (configureScriptKindOfBitLayoutImpl as any)(this, ...args); }
+  /* @internal */ normalizeMapScriptObjectTypeParam(...args: any[]) { return (normalizeMapScriptObjectTypeParamImpl as any)(this, ...args); }
+  /* @internal */ normalizeMapScriptUpgradeParam(...args: any[]) { return (normalizeMapScriptUpgradeParamImpl as any)(this, ...args); }
+  /* @internal */ checkMapScriptConditionsForTeamNames(...args: any[]) { return (checkMapScriptConditionsForTeamNamesImpl as any)(this, ...args); }
+  private resetScriptWaypointPathCompletions(...args: any[]) { return (resetScriptWaypointPathCompletionsImpl as any)(this, ...args); }
+  private updateScriptCountdownTimers(...args: any[]) { return (updateScriptCountdownTimersImpl as any)(this, ...args); }
+  private updateScriptEntityFlashes(...args: any[]) { return (updateScriptEntityFlashesImpl as any)(this, ...args); }
+  private updatePendingScriptTeamCreated(...args: any[]) { return (updatePendingScriptTeamCreatedImpl as any)(this, ...args); }
+  private markScriptTeamCreatedPulse(...args: any[]) { return (markScriptTeamCreatedPulseImpl as any)(this, ...args); }
+  private updateScriptTeamCreatedPulses(...args: any[]) { return (updateScriptTeamCreatedPulsesImpl as any)(this, ...args); }
+  private updateScriptWaypointPathCompletions(...args: any[]) { return (updateScriptWaypointPathCompletionsImpl as any)(this, ...args); }
+  /* @internal */ updateScriptAttackAreaEntity(...args: any[]) { return (updateScriptAttackAreaEntityImpl as any)(this, ...args); }
+  private updateScriptAttackArea(...args: any[]) { return (updateScriptAttackAreaImpl as any)(this, ...args); }
+  private updateScriptHunt(...args: any[]) { return (updateScriptHuntImpl as any)(this, ...args); }
+  private updatePendingScriptReinforcementTransportArrivals(...args: any[]) { return (updatePendingScriptReinforcementTransportArrivalsImpl as any)(this, ...args); }
+  private updateScriptSideRepairQueues(...args: any[]) { return (updateScriptSideRepairQueuesImpl as any)(this, ...args); }
+  private updateScriptTriggerTransitions(...args: any[]) { return (updateScriptTriggerTransitionsImpl as any)(this, ...args); }
+  private executeMapScripts(...args: any[]) { return (executeMapScriptsImpl as any)(this, ...args); }
+  private updateScriptSequentialScripts(...args: any[]) { return (updateScriptSequentialScriptsImpl as any)(this, ...args); }
+  private updateScriptWanderInPlace(...args: any[]) { return (updateScriptWanderInPlaceImpl as any)(this, ...args); }
+
   // ---- Script condition facades (delegate to script-conditions.ts) ----
 
   evaluateScriptCondition(condition: unknown): boolean { return evaluateScriptConditionImpl(this, condition); }
@@ -10960,14 +10521,14 @@ export class GameLogicSubsystem implements Subsystem {
 
   // ---- Script action facades (delegate to script-actions.ts) ----
 
-  private readScriptDictString(...args: any[]) { return (readScriptDictStringImpl as any)(this, ...args); }
-  private readScriptDictNumber(...args: any[]) { return (readScriptDictNumberImpl as any)(this, ...args); }
-  private readScriptDictBoolean(...args: any[]) { return (readScriptDictBooleanImpl as any)(this, ...args); }
-  private resolveScriptTeamTemplateUnitEntries(...args: any[]) { return (resolveScriptTeamTemplateUnitEntriesImpl as any)(this, ...args); }
-  private resolveScriptSideFromPlayerFaction(...args: any[]) { return (resolveScriptSideFromPlayerFactionImpl as any)(this, ...args); }
-  private resolveScriptAiBuildListEntries(...args: any[]) { return (resolveScriptAiBuildListEntriesImpl as any)(this, ...args); }
-  private normalizeScriptKindOfToken(...args: any[]) { return (normalizeScriptKindOfTokenImpl as any)(this, ...args); }
-  private resolveScriptKindOfBitFromName(...args: any[]) { return (resolveScriptKindOfBitFromNameImpl as any)(this, ...args); }
+  /* @internal */ readScriptDictString(...args: any[]) { return (readScriptDictStringImpl as any)(this, ...args); }
+  /* @internal */ readScriptDictNumber(...args: any[]) { return (readScriptDictNumberImpl as any)(this, ...args); }
+  /* @internal */ readScriptDictBoolean(...args: any[]) { return (readScriptDictBooleanImpl as any)(this, ...args); }
+  /* @internal */ resolveScriptTeamTemplateUnitEntries(...args: any[]) { return (resolveScriptTeamTemplateUnitEntriesImpl as any)(this, ...args); }
+  /* @internal */ resolveScriptSideFromPlayerFaction(...args: any[]) { return (resolveScriptSideFromPlayerFactionImpl as any)(this, ...args); }
+  /* @internal */ resolveScriptAiBuildListEntries(...args: any[]) { return (resolveScriptAiBuildListEntriesImpl as any)(this, ...args); }
+  /* @internal */ normalizeScriptKindOfToken(...args: any[]) { return (normalizeScriptKindOfTokenImpl as any)(this, ...args); }
+  /* @internal */ resolveScriptKindOfBitFromName(...args: any[]) { return (resolveScriptKindOfBitFromNameImpl as any)(this, ...args); }
   private clearScriptUIInteractions(...args: any[]) { return (clearScriptUIInteractionsImpl as any)(this, ...args); }
   private getScriptCreditsForPlayerInput(...args: any[]) { return (getScriptCreditsForPlayerInputImpl as any)(this, ...args); }
   private countScriptPlayersForSide(...args: any[]) { return (countScriptPlayersForSideImpl as any)(this, ...args); }
@@ -10983,25 +10544,25 @@ export class GameLogicSubsystem implements Subsystem {
   private resolveScriptCommandButtonHuntMode(...args: any[]) { return (resolveScriptCommandButtonHuntModeImpl as any)(this, ...args); }
   private findScriptEntityCommandButtonsByName(...args: any[]) { return (findScriptEntityCommandButtonsByNameImpl as any)(this, ...args); }
   private executeScriptCommandButtonForEntity(...args: any[]) { return (executeScriptCommandButtonForEntityImpl as any)(this, ...args); }
-  private appendScriptSequentialScript(...args: any[]) { return (appendScriptSequentialScriptImpl as any)(this, ...args); }
-  private executeScriptSkirmishWaitForCommandButtonAvailability(...args: any[]) { return (executeScriptSkirmishWaitForCommandButtonAvailabilityImpl as any)(this, ...args); }
-  private executeScriptTeamWaitForNotContained(...args: any[]) { return (executeScriptTeamWaitForNotContainedImpl as any)(this, ...args); }
+  /* @internal */ appendScriptSequentialScript(...args: any[]) { return (appendScriptSequentialScriptImpl as any)(this, ...args); }
+  /* @internal */ executeScriptSkirmishWaitForCommandButtonAvailability(...args: any[]) { return (executeScriptSkirmishWaitForCommandButtonAvailabilityImpl as any)(this, ...args); }
+  /* @internal */ executeScriptTeamWaitForNotContained(...args: any[]) { return (executeScriptTeamWaitForNotContainedImpl as any)(this, ...args); }
   private buildScriptProjectileWaypointPath(...args: any[]) { return (buildScriptProjectileWaypointPathImpl as any)(this, ...args); }
   private findScriptBuildDozerForTemplate(...args: any[]) { return (findScriptBuildDozerForTemplateImpl as any)(this, ...args); }
   private findScriptBrokenBridgeRepairTarget(...args: any[]) { return (findScriptBrokenBridgeRepairTargetImpl as any)(this, ...args); }
   private resolveScriptContainerCapacity(...args: any[]) { return (resolveScriptContainerCapacityImpl as any)(this, ...args); }
   private resolveScriptContainedControllingPlayerToken(...args: any[]) { return (resolveScriptContainedControllingPlayerTokenImpl as any)(this, ...args); }
   private applyScriptObjectPanelFlag(...args: any[]) { return (applyScriptObjectPanelFlagImpl as any)(this, ...args); }
-  private setScriptWanderInPlaceGoal(...args: any[]) { return (setScriptWanderInPlaceGoalImpl as any)(this, ...args); }
-  private setScriptWanderAwayFromRepulsorGoal(...args: any[]) { return (setScriptWanderAwayFromRepulsorGoalImpl as any)(this, ...args); }
+  /* @internal */ setScriptWanderInPlaceGoal(...args: any[]) { return (setScriptWanderInPlaceGoalImpl as any)(this, ...args); }
+  /* @internal */ setScriptWanderAwayFromRepulsorGoal(...args: any[]) { return (setScriptWanderAwayFromRepulsorGoalImpl as any)(this, ...args); }
   private clearScriptWanderInPlace(...args: any[]) { return (clearScriptWanderInPlaceImpl as any)(this, ...args); }
-  private findScriptClosestEnemyInTriggerArea(...args: any[]) { return (findScriptClosestEnemyInTriggerAreaImpl as any)(this, ...args); }
+  /* @internal */ findScriptClosestEnemyInTriggerArea(...args: any[]) { return (findScriptClosestEnemyInTriggerAreaImpl as any)(this, ...args); }
   private resolveScriptEntityTransportSlotCount(...args: any[]) { return (resolveScriptEntityTransportSlotCountImpl as any)(this, ...args); }
   private resolveScriptTransportValidationEntity(...args: any[]) { return (resolveScriptTransportValidationEntityImpl as any)(this, ...args); }
   private isScriptContainKindAllowed(...args: any[]) { return (isScriptContainKindAllowedImpl as any)(this, ...args); }
   private isScriptContainRelationshipAllowed(...args: any[]) { return (isScriptContainRelationshipAllowedImpl as any)(this, ...args); }
   private resolveScriptContainerUsedTransportSlots(...args: any[]) { return (resolveScriptContainerUsedTransportSlotsImpl as any)(this, ...args); }
-  private findScriptHuntTarget(...args: any[]) { return (findScriptHuntTargetImpl as any)(this, ...args); }
+  /* @internal */ findScriptHuntTarget(...args: any[]) { return (findScriptHuntTargetImpl as any)(this, ...args); }
   private normalizeScriptAttackPrioritySetName(...args: any[]) { return (normalizeScriptAttackPrioritySetNameImpl as any)(this, ...args); }
   private isScriptReinforcementTransportValidForUnit(...args: any[]) { return (isScriptReinforcementTransportValidForUnitImpl as any)(this, ...args); }
   private resolveScriptReinforcementDeliverPayloadProfile(...args: any[]) { return (resolveScriptReinforcementDeliverPayloadProfileImpl as any)(this, ...args); }
@@ -11024,11 +10585,11 @@ export class GameLogicSubsystem implements Subsystem {
   /* @internal */ resolveScriptEntityIdForCondition(...args: any[]) { return (resolveScriptEntityIdForConditionImpl as any)(this, ...args); }
   /* @internal */ resolveScriptEntityConditionRef(...args: any[]) { return (resolveScriptEntityConditionRefImpl as any)(this, ...args); }
   private registerScriptNamedEntity(...args: any[]) { return (registerScriptNamedEntityImpl as any)(this, ...args); }
-  private resolveScriptActionTypeName(...args: any[]) { return (resolveScriptActionTypeNameImpl as any)(this, ...args); }
+  /* @internal */ resolveScriptActionTypeName(...args: any[]) { return (resolveScriptActionTypeNameImpl as any)(this, ...args); }
   /* @internal */ resolveScriptConditionTypeName(...args: any[]) { return (resolveScriptConditionTypeNameImpl as any)(this, ...args); }
   /* @internal */ resolveScriptConditionParams(...args: any[]) { return (resolveScriptConditionParamsImpl as any)(this, ...args); }
   /* @internal */ resolveScriptConditionParamValue(...args: any[]) { return (resolveScriptConditionParamValueImpl as any)(this, ...args); }
-  private coerceScriptConditionString(...args: any[]) { return (coerceScriptConditionStringImpl as any)(this, ...args); }
+  /* @internal */ coerceScriptConditionString(...args: any[]) { return (coerceScriptConditionStringImpl as any)(this, ...args); }
   /* @internal */ coerceScriptConditionNumber(...args: any[]) { return (coerceScriptConditionNumberImpl as any)(this, ...args); }
   /* @internal */ coerceScriptConditionBoolean(...args: any[]) { return (coerceScriptConditionBooleanImpl as any)(this, ...args); }
   /* @internal */ resolveScriptConditionCacheId(...args: any[]) { return (resolveScriptConditionCacheIdImpl as any)(this, ...args); }
@@ -11059,12 +10620,12 @@ export class GameLogicSubsystem implements Subsystem {
   /* @internal */ isScriptTeamMemberInsideTrigger(...args: any[]) { return (isScriptTeamMemberInsideTriggerImpl as any)(this, ...args); }
   private resolveScriptRelationshipInput(...args: any[]) { return (resolveScriptRelationshipInputImpl as any)(this, ...args); }
   private isScriptEntityEffectivelyDead(...args: any[]) { return (isScriptEntityEffectivelyDeadImpl as any)(this, ...args); }
-  private findScriptRepairDozerForBuilding(...args: any[]) { return (findScriptRepairDozerForBuildingImpl as any)(this, ...args); }
+  /* @internal */ findScriptRepairDozerForBuilding(...args: any[]) { return (findScriptRepairDozerForBuildingImpl as any)(this, ...args); }
   private notifyScriptObjectCreationOrDestruction(...args: any[]) { return (notifyScriptObjectCreationOrDestructionImpl as any)(this, ...args); }
   private clearScriptTriggerTrackingForEntity(...args: any[]) { return (clearScriptTriggerTrackingForEntityImpl as any)(this, ...args); }
-  private isScriptSequentialEntityIdle(...args: any[]) { return (isScriptSequentialEntityIdleImpl as any)(this, ...args); }
-  private isScriptSequentialTeamIdle(...args: any[]) { return (isScriptSequentialTeamIdleImpl as any)(this, ...args); }
-  private isScriptSequentialTeamDead(...args: any[]) { return (isScriptSequentialTeamDeadImpl as any)(this, ...args); }
+  /* @internal */ isScriptSequentialEntityIdle(...args: any[]) { return (isScriptSequentialEntityIdleImpl as any)(this, ...args); }
+  /* @internal */ isScriptSequentialTeamIdle(...args: any[]) { return (isScriptSequentialTeamIdleImpl as any)(this, ...args); }
+  /* @internal */ isScriptSequentialTeamDead(...args: any[]) { return (isScriptSequentialTeamDeadImpl as any)(this, ...args); }
   private clearScriptNamedMapReveals(...args: any[]) { return (clearScriptNamedMapRevealsImpl as any)(this, ...args); }
   private notifyScriptCompletedSpecialPowerOnProjectileFired(...args: any[]) { return (notifyScriptCompletedSpecialPowerOnProjectileFiredImpl as any)(this, ...args); }
   private recordScriptLastDamageInfo(...args: any[]) { return (recordScriptLastDamageInfoImpl as any)(this, ...args); }
@@ -11834,21 +11395,6 @@ export class GameLogicSubsystem implements Subsystem {
     this.scriptPendingWaypointPathByEntityId.delete(entityId);
   }
 
-  private updateScriptWaypointPathCompletions(): void {
-    for (const [entityId] of this.scriptPendingWaypointPathByEntityId.entries()) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed) {
-        this.scriptPendingWaypointPathByEntityId.delete(entityId);
-        continue;
-      }
-
-      if (entity.moving || entity.movePath.length > 0 || entity.moveTarget !== null) {
-        continue;
-      }
-      this.scriptPendingWaypointPathByEntityId.delete(entityId);
-    }
-  }
-
   /* @internal */ findNearestFriendlyTunnelNetworkForEntity(entity: MapEntity): MapEntity | null {
     const normalizedSide = this.normalizeSide(entity.side);
     if (!normalizedSide) {
@@ -11979,7 +11525,7 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private findClosestRepulsorEntity(source: MapEntity, range: number): MapEntity | null {
+  /* @internal */ findClosestRepulsorEntity(source: MapEntity, range: number): MapEntity | null {
     if (!(range > 0)) {
       return null;
     }
@@ -12016,69 +11562,6 @@ export class GameLogicSubsystem implements Subsystem {
       return false;
     }
     return this.canEntityAttackFromStatus(candidate);
-  }
-
-  private updateScriptAttackAreaEntity(
-    attacker: MapEntity,
-    state: ScriptAttackAreaState,
-    forceScan: boolean,
-  ): void {
-    const trigger = this.mapTriggerRegions[state.triggerIndex];
-    if (!trigger) {
-      this.scriptAttackAreaStateByEntityId.delete(attacker.id);
-      return;
-    }
-
-    if (!forceScan && this.frameCounter < state.nextEnemyScanFrame) {
-      return;
-    }
-    state.nextEnemyScanFrame = this.frameCounter + LOGIC_FRAME_RATE;
-
-    const currentTargetId = attacker.attackTargetEntityId;
-    if (currentTargetId !== null) {
-      const currentTarget = this.spawnedEntities.get(currentTargetId);
-      if (
-        currentTarget
-        && !currentTarget.destroyed
-        && !this.isScriptEntityEffectivelyDead(currentTarget)
-        && this.getTeamRelationship(attacker, currentTarget) === RELATIONSHIP_ENEMIES
-        && this.isPointInsideTriggerRegion(trigger, currentTarget.x, currentTarget.z)
-        && this.canAttackerTargetEntity(attacker, currentTarget, 'SCRIPT')
-      ) {
-        return;
-      }
-      this.clearAttackTarget(attacker.id);
-    }
-
-    const victim = this.findScriptClosestEnemyInTriggerArea(attacker, state.triggerIndex);
-    if (victim) {
-      this.issueAttackEntity(attacker.id, victim.id, 'SCRIPT');
-    }
-  }
-
-  /**
-   * Source parity: AIAttackAreaState::update.
-   * Re-evaluates scripted attack-area targets once per ENEMY_SCAN_RATE.
-   */
-  private updateScriptAttackArea(): void {
-    if (this.scriptAttackAreaStateByEntityId.size === 0) {
-      return;
-    }
-
-    for (const [entityId, state] of this.scriptAttackAreaStateByEntityId) {
-      const attacker = this.spawnedEntities.get(entityId);
-      if (!attacker || attacker.destroyed || this.isScriptEntityEffectivelyDead(attacker)) {
-        this.scriptAttackAreaStateByEntityId.delete(entityId);
-        continue;
-      }
-      // Source parity: AI_ATTACK_AREA is only valid for mobile, non-projectile units.
-      if (!attacker.canMove || attacker.kindOf.has('PROJECTILE')) {
-        this.scriptAttackAreaStateByEntityId.delete(entityId);
-        continue;
-      }
-
-      this.updateScriptAttackAreaEntity(attacker, state, false);
-    }
   }
 
   private canScriptContainerFitEntity(container: MapEntity, entity: MapEntity): boolean {
@@ -12139,61 +11622,6 @@ export class GameLogicSubsystem implements Subsystem {
       }
     }
     return assignments;
-  }
-
-  /**
-   * Source parity: AIHuntState::update.
-   * Hunt scans for enemies every ENEMY_SCAN_RATE and keeps chasing until no
-   * victims remain (or indefinitely while PLAYER_HUNT is enabled for the side).
-   */
-  private updateScriptHunt(): void {
-    if (this.scriptHuntStateByEntityId.size === 0) {
-      return;
-    }
-
-    for (const [entityId, state] of this.scriptHuntStateByEntityId) {
-      const entity = this.spawnedEntities.get(entityId);
-      if (!entity || entity.destroyed || this.isScriptEntityEffectivelyDead(entity)) {
-        this.scriptHuntStateByEntityId.delete(entityId);
-        continue;
-      }
-      if (!entity.canMove || entity.kindOf.has('PROJECTILE')) {
-        this.scriptHuntStateByEntityId.delete(entityId);
-        continue;
-      }
-      if (this.frameCounter < state.nextEnemyScanFrame) {
-        continue;
-      }
-      state.nextEnemyScanFrame = this.frameCounter + LOGIC_FRAME_RATE;
-
-      const side = this.normalizeSide(entity.side);
-      const hasGlobalPlayerHunt = side !== null && this.scriptSidesUnitsShouldHunt.has(side);
-
-      const currentTargetId = entity.attackTargetEntityId;
-      if (currentTargetId !== null) {
-        const currentTarget = this.spawnedEntities.get(currentTargetId);
-        if (
-          currentTarget
-          && !currentTarget.destroyed
-          && !this.isScriptEntityEffectivelyDead(currentTarget)
-          && this.getTeamRelationship(entity, currentTarget) === RELATIONSHIP_ENEMIES
-          && this.canAttackerTargetEntity(entity, currentTarget, 'SCRIPT')
-        ) {
-          continue;
-        }
-        this.clearAttackTarget(entity.id);
-      }
-
-      const victim = this.findScriptHuntTarget(entity);
-      if (victim) {
-        this.issueAttackEntity(entity.id, victim.id, 'SCRIPT');
-        continue;
-      }
-
-      if (!hasGlobalPlayerHunt) {
-        this.scriptHuntStateByEntityId.delete(entityId);
-      }
-    }
   }
 
   /* @internal */ getOrCreateScriptAttackPrioritySetRecord(
@@ -12391,7 +11819,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private dropScriptReinforcementDeliverPayloadPassenger(
+  /* @internal */ dropScriptReinforcementDeliverPayloadPassenger(
     passengerId: number,
     transport: MapEntity,
     pending: ScriptReinforcementTransportArrivalState,
@@ -12422,7 +11850,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private beginScriptReinforcementTransportExit(
+  /* @internal */ beginScriptReinforcementTransportExit(
     transport: MapEntity,
     pending: ScriptReinforcementTransportArrivalState,
   ): void {
@@ -12453,124 +11881,6 @@ export class GameLogicSubsystem implements Subsystem {
 
     this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
     pending.exitMoveIssued = true;
-  }
-
-  private updatePendingScriptReinforcementTransportArrivals(): void {
-    for (const [entityId, pending] of this.pendingScriptReinforcementTransportArrivalByEntityId.entries()) {
-      const transport = this.spawnedEntities.get(entityId);
-      if (!transport || transport.destroyed) {
-        this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-        continue;
-      }
-
-      const reachDistance = Math.max(
-        MAP_XY_FACTOR,
-        this.resolveEntityMajorRadius(transport) + MAP_XY_FACTOR,
-      );
-
-      if (pending.exitMoveIssued) {
-        if (this.isEntityOffMap(transport)) {
-          this.markEntityDestroyed(transport.id, -1);
-          this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-          continue;
-        }
-        if (transport.moving) {
-          continue;
-        }
-        if (pending.deliverPayloadMode) {
-          this.issueMoveTo(
-            transport.id,
-            pending.exitTargetX,
-            pending.exitTargetZ,
-            NO_ATTACK_DISTANCE,
-            true,
-          );
-          continue;
-        }
-        const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
-        if (distanceToOrigin > reachDistance) {
-          this.issueMoveTo(transport.id, pending.originX, pending.originZ, NO_ATTACK_DISTANCE, true);
-          continue;
-        }
-        this.markEntityDestroyed(transport.id, -1);
-        this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-        continue;
-      }
-
-      if (pending.evacuationIssued) {
-        const remainingContained = this.collectContainedEntityIds(transport.id).length;
-        if (remainingContained <= 0) {
-          if (pending.transportsExit) {
-            if (pending.deliverPayloadMode) {
-              this.beginScriptReinforcementTransportExit(transport, pending);
-              continue;
-            }
-            const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
-            if (distanceToOrigin <= reachDistance) {
-              this.markEntityDestroyed(transport.id, -1);
-              this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-              continue;
-            }
-            this.beginScriptReinforcementTransportExit(transport, pending);
-            continue;
-          }
-          this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-          continue;
-        }
-        if (!pending.deliverPayloadMode) {
-          continue;
-        }
-      }
-
-      const distanceToTarget = Math.hypot(transport.x - pending.targetX, transport.z - pending.targetZ);
-      const allowedTargetDistance = Math.max(reachDistance, pending.deliveryDistance);
-      if (distanceToTarget > allowedTargetDistance) {
-        if (!transport.moving) {
-          this.issueMoveTo(transport.id, pending.targetX, pending.targetZ, NO_ATTACK_DISTANCE, true);
-        }
-        continue;
-      }
-      // Source parity: DeliverPayloadAIUpdate starts drop logic as soon as
-      // distance-to-target constraints are satisfied, not only after path end.
-      // The transport keeps following its move command while delivering.
-
-      const containedEntityIds = this.collectContainedEntityIds(transport.id);
-      if (transport.containProfile && containedEntityIds.length > 0) {
-        if (pending.deliverPayloadMode) {
-          pending.evacuationIssued = true;
-          if (pending.deliverPayloadNextDropFrame < 0) {
-            pending.deliverPayloadNextDropFrame = this.frameCounter + pending.deliverPayloadDoorDelayFrames;
-          }
-          if (this.frameCounter < pending.deliverPayloadNextDropFrame) {
-            continue;
-          }
-          const passengerId = containedEntityIds[0]!;
-          this.dropScriptReinforcementDeliverPayloadPassenger(passengerId, transport, pending);
-          pending.deliverPayloadNextDropFrame = this.frameCounter + Math.max(1, pending.deliverPayloadDropDelayFrames);
-          continue;
-        }
-        this.applyCommand({ type: 'evacuate', entityId: transport.id });
-      }
-
-      if (pending.transportsExit) {
-        pending.evacuationIssued = true;
-        if (this.collectContainedEntityIds(transport.id).length <= 0) {
-          if (pending.deliverPayloadMode) {
-            this.beginScriptReinforcementTransportExit(transport, pending);
-            continue;
-          }
-          const distanceToOrigin = Math.hypot(transport.x - pending.originX, transport.z - pending.originZ);
-          if (distanceToOrigin <= reachDistance) {
-            this.markEntityDestroyed(transport.id, -1);
-            this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-          } else {
-            this.beginScriptReinforcementTransportExit(transport, pending);
-          }
-        }
-        continue;
-      }
-      this.pendingScriptReinforcementTransportArrivalByEntityId.delete(entityId);
-    }
   }
 
   /* @internal */ scheduleScriptTeamCreatedByConfiguredDelay(team: ScriptTeamRecord): void {
@@ -30673,43 +29983,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: AIPlayer::repairStructure queue dispatch.
-   * Attempts to assign queued structure repairs to available dozers on each side.
-   */
-  private updateScriptSideRepairQueues(): void {
-    for (const [side, queuedBuildingIds] of this.scriptSideRepairQueue.entries()) {
-      for (const buildingId of Array.from(queuedBuildingIds.values())) {
-        const building = this.spawnedEntities.get(buildingId);
-        if (!building || building.destroyed) {
-          queuedBuildingIds.delete(buildingId);
-          continue;
-        }
-        if (building.health >= building.maxHealth && building.constructionPercent === CONSTRUCTION_COMPLETE) {
-          queuedBuildingIds.delete(buildingId);
-          continue;
-        }
-
-        const dozer = this.findScriptRepairDozerForBuilding(side, building);
-        if (!dozer) {
-          continue;
-        }
-
-        this.handleRepairBuildingCommand({
-          type: 'repairBuilding',
-          entityId: dozer.id,
-          targetBuildingId: building.id,
-          commandSource: 'AI',
-        });
-        queuedBuildingIds.delete(buildingId);
-      }
-
-      if (queuedBuildingIds.size === 0) {
-        this.scriptSideRepairQueue.delete(side);
-      }
-    }
-  }
-
-  /**
    * Source parity: DozerPrimaryIdleState::update — bored dozers auto-seek nearby repairs.
    */
   private updateDozerIdleBehavior(): void {
@@ -32121,70 +31394,7 @@ export class GameLogicSubsystem implements Subsystem {
     return membership;
   }
 
-  private updateScriptTriggerTransitions(): void {
-    if (this.mapTriggerRegions.length === 0) {
-      return;
-    }
-
-    for (const trackedEntityId of Array.from(this.scriptTriggerMembershipByEntityId.keys())) {
-      const trackedEntity = this.spawnedEntities.get(trackedEntityId);
-      if (!trackedEntity || trackedEntity.destroyed) {
-        this.clearScriptTriggerTrackingForEntity(trackedEntityId);
-      }
-    }
-
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || entity.kindOf.has('INERT') || entity.kindOf.has('PROJECTILE')) {
-        this.clearScriptTriggerTrackingForEntity(entity.id);
-        continue;
-      }
-
-      const previousMembership = this.scriptTriggerMembershipByEntityId.get(entity.id) ?? new Set<number>();
-      const currentMembership = this.computeCurrentScriptTriggerMembership(entity);
-      const entered = new Set<number>();
-      const exited = new Set<number>();
-
-      for (const triggerIndex of currentMembership) {
-        if (!previousMembership.has(triggerIndex)) {
-          entered.add(triggerIndex);
-        }
-      }
-      for (const triggerIndex of previousMembership) {
-        if (!currentMembership.has(triggerIndex)) {
-          exited.add(triggerIndex);
-        }
-      }
-
-      this.scriptTriggerMembershipByEntityId.set(entity.id, currentMembership);
-
-      if (entered.size === 0 && exited.size === 0) {
-        continue;
-      }
-
-      this.scriptTriggerEnteredByEntityId.set(entity.id, entered);
-      this.scriptTriggerExitedByEntityId.set(entity.id, exited);
-      this.scriptTriggerEnterExitFrameByEntityId.set(entity.id, this.frameCounter);
-    }
-  }
-
-  private executeMapScripts(): void {
-    if (this.mapScriptLists.length === 0) {
-      return;
-    }
-
-    const previousCurrentSide = this.scriptCurrentPlayerSide;
-    for (let sideIndex = 0; sideIndex < this.mapScriptLists.length; sideIndex += 1) {
-      const scriptList = this.mapScriptLists[sideIndex];
-      if (!scriptList) {
-        continue;
-      }
-      this.scriptCurrentPlayerSide = this.mapScriptSideByIndex[sideIndex] ?? null;
-      this.executeMapScriptList(scriptList);
-    }
-    this.scriptCurrentPlayerSide = previousCurrentSide;
-  }
-
-  private executeMapScriptList(scriptList: MapScriptListRuntime): void {
+  /* @internal */ executeMapScriptList(scriptList: MapScriptListRuntime): void {
     for (const script of scriptList.scripts) {
       this.executeMapScript(script, false);
     }
@@ -32334,166 +31544,7 @@ export class GameLogicSubsystem implements Subsystem {
     });
   }
 
-  private updateScriptSequentialScripts(): void {
-    let lastIndex = -1;
-    let spinCount = 0;
-
-    for (let index = 0; index < this.scriptSequentialScripts.length; ) {
-      if (index === lastIndex) {
-        spinCount += 1;
-      } else {
-        spinCount = 0;
-      }
-      if (spinCount > MAX_SPIN_COUNT) {
-        index += 1;
-        continue;
-      }
-      lastIndex = index;
-
-      const seqScript = this.scriptSequentialScripts[index];
-      if (!seqScript) {
-        this.cleanupSequentialScriptAt(index, false);
-        continue;
-      }
-
-      const targetEntity = seqScript.objectId !== null ? this.spawnedEntities.get(seqScript.objectId) ?? null : null;
-      const team = seqScript.teamNameUpper
-        ? this.scriptTeamsByName.get(seqScript.teamNameUpper) ?? null
-        : null;
-      if (!targetEntity && !team) {
-        this.cleanupSequentialScriptAt(index, false);
-        continue;
-      }
-
-      const previousCurrentSide = this.scriptCurrentPlayerSide;
-      let scriptSide: string | null = null;
-      if (targetEntity) {
-        scriptSide = this.normalizeSide(targetEntity.side);
-      } else if (team) {
-        scriptSide = this.resolveScriptTeamControllingSide(team);
-      }
-      if (scriptSide && this.sidePlayerTypes.get(scriptSide) === 'COMPUTER') {
-        this.scriptCurrentPlayerSide = scriptSide;
-      } else {
-        this.scriptCurrentPlayerSide = null;
-      }
-
-      const isIdle = targetEntity
-        ? this.isScriptSequentialEntityIdle(targetEntity)
-        : (team ? this.isScriptSequentialTeamIdle(team) : false);
-      let itAdvanced = false;
-
-      if ((isIdle && seqScript.framesToWait < 1) || seqScript.framesToWait === 0) {
-        if (seqScript.dontAdvanceInstruction) {
-          seqScript.dontAdvanceInstruction = false;
-        } else {
-          seqScript.currentInstruction += 1;
-        }
-
-        const scriptRuntime = this.mapScriptsByNameUpper.get(seqScript.scriptNameUpper);
-        if (!scriptRuntime) {
-          this.cleanupSequentialScriptAt(index, false);
-          this.scriptCurrentPlayerSide = previousCurrentSide;
-          continue;
-        }
-
-        const action = scriptRuntime.actions[seqScript.currentInstruction] ?? null;
-        if (action) {
-          const previousConditionTeam = this.scriptConditionTeamNameUpper;
-          const previousConditionEntity = this.scriptConditionEntityId;
-          const previousCallingTeam = this.scriptCallingTeamNameUpper;
-          const previousCallingEntity = this.scriptCallingEntityId;
-
-          this.scriptConditionTeamNameUpper = team ? team.nameUpper : null;
-          this.scriptConditionEntityId = targetEntity ? targetEntity.id : null;
-          seqScript.framesToWait = -1;
-
-          const actionTypeName = this.resolveScriptActionTypeName(action.actionType);
-          if (
-            actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL'
-            || actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL'
-          ) {
-            const params = action.params.map((param) => param.value);
-            const teamName = this.coerceScriptConditionString(params[1]);
-            const commandButtonName = this.coerceScriptConditionString(params[2]);
-            const allReady = actionTypeName === 'SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL';
-            if (!this.executeScriptSkirmishWaitForCommandButtonAvailability(teamName, commandButtonName, allReady)) {
-              seqScript.dontAdvanceInstruction = true;
-            }
-          } else if (
-            actionTypeName === 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL'
-            || actionTypeName === 'TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL'
-          ) {
-            const params = action.params.map((param) => param.value);
-            const teamName = this.coerceScriptConditionString(params[0]);
-            const allContained = actionTypeName === 'TEAM_WAIT_FOR_NOT_CONTAINED_ALL';
-            if (!this.executeScriptTeamWaitForNotContained(teamName, allContained)) {
-              seqScript.dontAdvanceInstruction = true;
-            }
-          } else {
-            this.executeMapScriptAction(action);
-          }
-
-          this.scriptConditionTeamNameUpper = previousConditionTeam;
-          this.scriptConditionEntityId = previousConditionEntity;
-          this.scriptCallingTeamNameUpper = previousCallingTeam;
-          this.scriptCallingEntityId = previousCallingEntity;
-
-          if (seqScript.dontAdvanceInstruction) {
-            this.scriptCurrentPlayerSide = previousCurrentSide;
-            index += 1;
-            continue;
-          }
-
-          if (targetEntity && this.isScriptSequentialEntityIdle(targetEntity)) {
-            itAdvanced = true;
-          } else if (team && this.isScriptSequentialTeamIdle(team)) {
-            itAdvanced = true;
-          }
-
-          if (itAdvanced) {
-            if (targetEntity && targetEntity.destroyed) {
-              this.cleanupSequentialScriptAt(index, true);
-              this.scriptCurrentPlayerSide = previousCurrentSide;
-              continue;
-            }
-            if (team && this.isScriptSequentialTeamDead(team)) {
-              this.cleanupSequentialScriptAt(index, true);
-              this.scriptCurrentPlayerSide = previousCurrentSide;
-              continue;
-            }
-          }
-        } else {
-          if (seqScript.timesToLoop !== 0) {
-            const timesToLoop = seqScript.timesToLoop === -1 ? -1 : seqScript.timesToLoop - 1;
-            this.appendScriptSequentialScript({
-              scriptNameUpper: seqScript.scriptNameUpper,
-              objectId: seqScript.objectId,
-              teamNameUpper: seqScript.teamNameUpper,
-              currentInstruction: -1,
-              timesToLoop,
-              framesToWait: -1,
-              dontAdvanceInstruction: false,
-              nextScript: null,
-            });
-          }
-          this.cleanupSequentialScriptAt(index, false);
-          this.scriptCurrentPlayerSide = previousCurrentSide;
-          continue;
-        }
-      } else if (seqScript.framesToWait > 0) {
-        seqScript.framesToWait -= 1;
-      }
-
-      this.scriptCurrentPlayerSide = previousCurrentSide;
-
-      if (!itAdvanced) {
-        index += 1;
-      }
-    }
-  }
-
-  private cleanupSequentialScriptAt(index: number, cleanDanglers: boolean): void {
+  /* @internal */ cleanupSequentialScriptAt(index: number, cleanDanglers: boolean): void {
     const seqScript = this.scriptSequentialScripts[index];
     if (!seqScript) {
       this.scriptSequentialScripts.splice(index, 1);
@@ -45060,40 +44111,6 @@ export class GameLogicSubsystem implements Subsystem {
       if (other.attackTargetEntityId === hole.id) {
         other.attackTargetEntityId = reconstructing.id;
       }
-    }
-  }
-
-  /**
-   * Source parity: WanderAIUpdate::update — when idle, move to a random nearby position.
-   * C++ file: WanderAIUpdate.cpp — used by civilian units, animals, etc.
-   * C++ uses GameLogicRandomValue(5, 50) offset for both x and y.
-   */
-  private updateScriptWanderInPlace(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed || !entity.scriptWanderInPlaceActive) continue;
-      if (!entity.canMove || this.isEntityDisabledForMovement(entity)) continue;
-      if (entity.attackTargetEntityId !== null || entity.guardState !== 'NONE') continue;
-      if (entity.moving && entity.moveTarget !== null) continue;
-
-      // Source parity: AI_WANDER_IN_PLACE transitions to AI_MOVE_AWAY_FROM_REPULSORS
-      // for CAN_BE_REPULSED units when repulsors are nearby.
-      if (entity.kindOf.has('CAN_BE_REPULSED')) {
-        const repulsor = this.findClosestRepulsorEntity(entity, entity.visionRange);
-        if (repulsor) {
-          if (entity.locomotorSets.has(LOCOMOTORSET_PANIC)) {
-            this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_PANIC);
-          }
-          entity.modelConditionFlags.add('PANICKING');
-          this.setScriptWanderAwayFromRepulsorGoal(entity, repulsor);
-          continue;
-        }
-        entity.modelConditionFlags.delete('PANICKING');
-        if (entity.activeLocomotorSet === LOCOMOTORSET_PANIC && entity.locomotorSets.has(LOCOMOTORSET_WANDER)) {
-          this.setEntityLocomotorSet(entity.id, LOCOMOTORSET_WANDER);
-        }
-      }
-
-      this.setScriptWanderInPlaceGoal(entity);
     }
   }
 
