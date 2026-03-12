@@ -48,7 +48,6 @@ import {
   updateWeaponIdleAutoReload as updateWeaponIdleAutoReloadImpl,
 } from './combat-helpers.js';
 import {
-  applyWeaponDamageEvent as applyWeaponDamageEventImpl,
   type CombatDamageEventContext,
   updatePendingWeaponDamage as updatePendingWeaponDamageImpl,
 } from './combat-damage-events.js';
@@ -644,6 +643,36 @@ import {
   resolveVehicleCrushTarget as resolveVehicleCrushTargetImpl,
   shouldCrushVehicleTarget as shouldCrushVehicleTargetImpl,
 } from './entity-movement.js';
+import {
+  findFireWeaponTargetForPositionUsingWeapon as findFireWeaponTargetForPositionUsingWeaponImpl,
+  canEntityAttackFromStatus as canEntityAttackFromStatusImpl,
+  canAttackerTargetEntity as canAttackerTargetEntityImpl,
+  resolveTargetAntiMask as resolveTargetAntiMaskImpl,
+  refreshEntityCombatProfiles as refreshEntityCombatProfilesImpl,
+  issueAttackEntity as issueAttackEntityImpl,
+  issueFireWeapon as issueFireWeaponImpl,
+  issueFireWeaponAtPosition as issueFireWeaponAtPositionImpl,
+  findFireWeaponTargetForPosition as findFireWeaponTargetForPositionImpl,
+  clearAttackTarget as clearAttackTargetImpl,
+  clearMaxShotsAttackState as clearMaxShotsAttackStateImpl,
+  findCommandButtonHuntTarget as findCommandButtonHuntTargetImpl,
+  isCommandButtonHuntTargetValidForMode as isCommandButtonHuntTargetValidForModeImpl,
+  updateIdleAutoTargeting as updateIdleAutoTargetingImpl,
+  findGuardTarget as findGuardTargetImpl,
+  queueWeaponDamageEvent as queueWeaponDamageEventImpl,
+} from './combat-targeting.js';
+import {
+  resolveWeaponScatterTargets as resolveWeaponScatterTargetsImpl,
+  resolveWeaponProfileFromDef as resolveWeaponProfileFromDefImpl,
+  resolveAttackWeaponProfileForSetSelection as resolveAttackWeaponProfileForSetSelectionImpl,
+  resolveAttackWeaponProfile as resolveAttackWeaponProfileImpl,
+  checkHistoricBonus as checkHistoricBonusImpl,
+  fireHistoricBonusWeapon as fireHistoricBonusWeaponImpl,
+  classifyWeaponVisualType as classifyWeaponVisualTypeImpl,
+  resolveContinuousFireRateOfFireBonus as resolveContinuousFireRateOfFireBonusImpl,
+  resolveWeaponDelayFramesWithBonus as resolveWeaponDelayFramesWithBonusImpl,
+  resolveProjectileTemplateKindOf as resolveProjectileTemplateKindOfImpl,
+} from './weapon-profiles.js';
 
 export * from './types.js';
 export * from './campaign-manager.js';
@@ -750,7 +779,7 @@ type SidePlayerType = 'HUMAN' | 'COMPUTER';
 export type AttackCommandSource = 'PLAYER' | 'AI' | 'SCRIPT' | 'DOZER';
 
 /** Reusable empty kindOf set for projectile templates with no kindOf. */
-const EMPTY_KINDOF_SET = new Set<string>();
+export const EMPTY_KINDOF_SET = new Set<string>();
 
 type ObjectCategory = RenderableObjectCategory;
 
@@ -788,7 +817,7 @@ export const CLIFF_HEIGHT_DELTA = 9.8;
 const PATHFIND_ZONE_BLOCK_SIZE = 10;
 export const NO_ATTACK_DISTANCE = 0;
 export const ATTACK_MOVE_DISTANCE_FUDGE = 3 * MAP_XY_FACTOR;
-const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
+export const ATTACK_RANGE_CELL_EDGE_FUDGE = PATHFIND_CELL_SIZE * 0.25;
 const ATTACK_MIN_RANGE_DISTANCE_SQR_FUDGE = 0.5;
 export const LOGIC_FRAME_RATE = 30;
 export const LOGIC_FRAME_MS = 1000 / LOGIC_FRAME_RATE;
@@ -811,9 +840,9 @@ const SCRIPT_DIFFICULTY_HARD = 2;
 /** Source parity: AIPlayer::MAX_STRUCTURES_TO_REPAIR. */
 const SOURCE_MAX_STRUCTURES_TO_REPAIR = 2;
 
-const SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
-const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
-const SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT = 0x00000004;
+export const SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT = 0x00000001;
+export const SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT = 0x00000002;
+export const SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT = 0x00000004;
 const SCRIPT_COMMAND_OPTION_NEED_TARGET_POS = 0x00000020;
 const SCRIPT_COMMAND_OPTION_ATTACK_OBJECTS_POSITION = 0x00001000;
 const SCRIPT_COMMAND_OPTION_CAN_USE_WAYPOINTS = 0x00400000;
@@ -863,7 +892,7 @@ export const LOCOMOTORSET_FREEFALL = 'SET_FREEFALL';
 export const LOCOMOTORSET_WANDER = 'SET_WANDER';
 export const LOCOMOTORSET_PANIC = 'SET_PANIC';
 export const LOCOMOTORSET_TAXIING = 'SET_TAXIING';
-const LOCOMOTORSET_SUPERSONIC = 'SET_SUPERSONIC';
+export const LOCOMOTORSET_SUPERSONIC = 'SET_SUPERSONIC';
 const LOCOMOTORSET_SLUGGISH = 'SET_SLUGGISH';
 const NO_SURFACES = 0;
 const LOCOMOTORSURFACE_GROUND = 1 << 0;
@@ -905,14 +934,14 @@ const WEAPON_COLLIDE_BALLISTIC_MISSILES = 0x0080;
 const WEAPON_COLLIDE_CONTROLLED_STRUCTURES = 0x0100;
 const WEAPON_COLLIDE_DEFAULT_MASK = WEAPON_COLLIDE_STRUCTURES;
 // Source parity: WeaponAntiMaskType — weapon targeting category bitmask.
-const WEAPON_ANTI_AIRBORNE_VEHICLE = 0x01;
-const WEAPON_ANTI_GROUND = 0x02;
-const WEAPON_ANTI_PROJECTILE = 0x04;
-const WEAPON_ANTI_SMALL_MISSILE = 0x08;
-const WEAPON_ANTI_MINE = 0x10;
-const WEAPON_ANTI_AIRBORNE_INFANTRY = 0x20;
-const WEAPON_ANTI_BALLISTIC_MISSILE = 0x40;
-const WEAPON_ANTI_PARACHUTE = 0x80;
+export const WEAPON_ANTI_AIRBORNE_VEHICLE = 0x01;
+export const WEAPON_ANTI_GROUND = 0x02;
+export const WEAPON_ANTI_PROJECTILE = 0x04;
+export const WEAPON_ANTI_SMALL_MISSILE = 0x08;
+export const WEAPON_ANTI_MINE = 0x10;
+export const WEAPON_ANTI_AIRBORNE_INFANTRY = 0x20;
+export const WEAPON_ANTI_BALLISTIC_MISSILE = 0x40;
+export const WEAPON_ANTI_PARACHUTE = 0x80;
 export const HUGE_DAMAGE_AMOUNT = 1_000_000_000;
 // Source parity: Thing::isSignificantlyAboveTerrain — -(3*3)*m_gravity with m_gravity=-1.0.
 export const SIGNIFICANTLY_ABOVE_TERRAIN_THRESHOLD = 9.0;
@@ -1133,7 +1162,7 @@ function evaluateCubicBezier(t: number, p0: number, p1: number, p2: number, p3: 
  * arc length approximation. Compares chord length vs control polygon length;
  * subdivides at midpoint when the difference exceeds tolerance.
  */
-function approximateCubicBezierArcLength3D(
+export function approximateCubicBezierArcLength3D(
   p0x: number, p0y: number, p0z: number,
   p1x: number, p1y: number, p1z: number,
   p2x: number, p2y: number, p2z: number,
@@ -1169,7 +1198,7 @@ function approximateCubicBezierArcLength3D(
  * Source parity: PartitionManager::estimateTerrainExtremesAlongLine() — sample
  * terrain height at N points along a line segment to find the highest point.
  */
-function estimateHighestTerrainAlongLine(
+export function estimateHighestTerrainAlongLine(
   heightmap: HeightmapGrid,
   startX: number, startZ: number,
   endX: number, endZ: number,
@@ -1187,16 +1216,16 @@ function estimateHighestTerrainAlongLine(
 }
 
 /** Number of samples used for terrain height estimation along projectile paths. */
-const BEZIER_TERRAIN_SAMPLE_COUNT = 10;
+export const BEZIER_TERRAIN_SAMPLE_COUNT = 10;
 /** Tolerance for Bezier arc length approximation. */
-const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
+export const BEZIER_ARC_LENGTH_TOLERANCE = 1.0;
 
 /**
  * Source parity: AIUpdateModuleData::m_moodAttackCheckRate — default interval
  * (in logic frames) between idle auto-target scans. C++ uses 2 seconds (60 frames).
  */
 export const AUTO_TARGET_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE * 2;
-const SCRIPT_AI_ATTITUDE_PASSIVE = 1;
+export const SCRIPT_AI_ATTITUDE_PASSIVE = 1;
 const SCRIPT_AI_ATTITUDE_NORMAL = 2;
 const SCRIPT_ATTACK_PRIORITY_DEFAULT = 1;
 
@@ -9714,6 +9743,38 @@ export class GameLogicSubsystem implements Subsystem {
   /* @internal */ resolveVehicleCrushTarget(...args: any[]) { return (resolveVehicleCrushTargetImpl as any)(this, ...args); }
   /* @internal */ shouldCrushVehicleTarget(...args: any[]) { return (shouldCrushVehicleTargetImpl as any)(this, ...args); }
 
+  // ---- Combat targeting facades (delegate to combat-targeting.ts) ----
+
+  private findFireWeaponTargetForPositionUsingWeapon(...args: any[]) { return (findFireWeaponTargetForPositionUsingWeaponImpl as any)(this, ...args); }
+  private canEntityAttackFromStatus(...args: any[]) { return (canEntityAttackFromStatusImpl as any)(this, ...args); }
+  private canAttackerTargetEntity(...args: any[]) { return (canAttackerTargetEntityImpl as any)(this, ...args); }
+  /* @internal */ resolveTargetAntiMask(...args: any[]) { return (resolveTargetAntiMaskImpl as any)(this, ...args); }
+  private refreshEntityCombatProfiles(...args: any[]) { return (refreshEntityCombatProfilesImpl as any)(this, ...args); }
+  private issueAttackEntity(...args: any[]) { return (issueAttackEntityImpl as any)(this, ...args); }
+  /* @internal */ issueFireWeapon(...args: any[]) { return (issueFireWeaponImpl as any)(this, ...args); }
+  private issueFireWeaponAtPosition(...args: any[]) { return (issueFireWeaponAtPositionImpl as any)(this, ...args); }
+  private findFireWeaponTargetForPosition(...args: any[]) { return (findFireWeaponTargetForPositionImpl as any)(this, ...args); }
+  private clearAttackTarget(...args: any[]) { return (clearAttackTargetImpl as any)(this, ...args); }
+  private clearMaxShotsAttackState(...args: any[]) { return (clearMaxShotsAttackStateImpl as any)(this, ...args); }
+  private findCommandButtonHuntTarget(...args: any[]) { return (findCommandButtonHuntTargetImpl as any)(this, ...args); }
+  /* @internal */ isCommandButtonHuntTargetValidForMode(...args: any[]) { return (isCommandButtonHuntTargetValidForModeImpl as any)(this, ...args); }
+  private updateIdleAutoTargeting(...args: any[]) { return (updateIdleAutoTargetingImpl as any)(this, ...args); }
+  private findGuardTarget(...args: any[]) { return (findGuardTargetImpl as any)(this, ...args); }
+  private queueWeaponDamageEvent(...args: any[]) { return (queueWeaponDamageEventImpl as any)(this, ...args); }
+
+  // ---- Weapon profiles facades (delegate to weapon-profiles.ts) ----
+
+  /* @internal */ resolveWeaponScatterTargets(...args: any[]) { return (resolveWeaponScatterTargetsImpl as any)(this, ...args); }
+  private resolveWeaponProfileFromDef(...args: any[]) { return (resolveWeaponProfileFromDefImpl as any)(this, ...args); }
+  /* @internal */ resolveAttackWeaponProfileForSetSelection(...args: any[]) { return (resolveAttackWeaponProfileForSetSelectionImpl as any)(this, ...args); }
+  private resolveAttackWeaponProfile(...args: any[]) { return (resolveAttackWeaponProfileImpl as any)(this, ...args); }
+  /* @internal */ checkHistoricBonus(...args: any[]) { return (checkHistoricBonusImpl as any)(this, ...args); }
+  /* @internal */ fireHistoricBonusWeapon(...args: any[]) { return (fireHistoricBonusWeaponImpl as any)(this, ...args); }
+  private classifyWeaponVisualType(...args: any[]) { return (classifyWeaponVisualTypeImpl as any)(this, ...args); }
+  /* @internal */ resolveContinuousFireRateOfFireBonus(...args: any[]) { return (resolveContinuousFireRateOfFireBonusImpl as any)(this, ...args); }
+  /* @internal */ resolveWeaponDelayFramesWithBonus(...args: any[]) { return (resolveWeaponDelayFramesWithBonusImpl as any)(this, ...args); }
+  private resolveProjectileTemplateKindOf(...args: any[]) { return (resolveProjectileTemplateKindOfImpl as any)(this, ...args); }
+
   // ---- Command dispatch facades (delegate to command-dispatch.ts) ----
 
   private flushCommands(...args: any[]) { return (flushCommandsImpl as any)(this, ...args); }
@@ -9844,7 +9905,7 @@ export class GameLogicSubsystem implements Subsystem {
   private resetContainPlayerEnteredSides(...args: any[]) { return (resetContainPlayerEnteredSidesImpl as any)(this, ...args); }
   getCaveContainIndex(...args: any[]) { return (getCaveContainIndexImpl as any)(this, ...args); }
   /* @internal */ canSwitchCaveIndexToIndex(...args: any[]) { return (canSwitchCaveIndexToIndexImpl as any)(this, ...args); }
-  private isEntityInEnclosingContainer(...args: any[]) { return (isEntityInEnclosingContainerImpl as any)(this, ...args); }
+  /* @internal */ isEntityInEnclosingContainer(...args: any[]) { return (isEntityInEnclosingContainerImpl as any)(this, ...args); }
   /* @internal */ shouldIgnoreRailedTransportPlayerCommand(...args: any[]) { return (shouldIgnoreRailedTransportPlayerCommandImpl as any)(this, ...args); }
   /* @internal */ isRailedTransportPlayerBlockedCommandType(...args: any[]) { return (isRailedTransportPlayerBlockedCommandTypeImpl as any)(this, ...args); }
   /* @internal */ isRailedTransportEntity(...args: any[]) { return (isRailedTransportEntityImpl as any)(this, ...args); }
@@ -9993,7 +10054,7 @@ export class GameLogicSubsystem implements Subsystem {
   private pruneExpiredScriptRadarEvents(...args: any[]) { return (pruneExpiredScriptRadarEventsImpl as any)(this, ...args); }
   executeScriptAction(action: unknown): boolean { return executeScriptActionImpl(this, action); }
   private resolveScriptTeamSidesForRelationship(...args: any[]) { return (resolveScriptTeamSidesForRelationshipImpl as any)(this, ...args); }
-  private resolveScriptCommandButtonOptionMask(...args: any[]) { return (resolveScriptCommandButtonOptionMaskImpl as any)(this, ...args); }
+  /* @internal */ resolveScriptCommandButtonOptionMask(...args: any[]) { return (resolveScriptCommandButtonOptionMaskImpl as any)(this, ...args); }
   private resolveScriptWeaponSlotFromCommandButton(...args: any[]) { return (resolveScriptWeaponSlotFromCommandButtonImpl as any)(this, ...args); }
   private resolveScriptCommandButtonSpecialPowerName(...args: any[]) { return (resolveScriptCommandButtonSpecialPowerNameImpl as any)(this, ...args); }
   private resolveScriptSpecialPowerCommandButtonExecution(...args: any[]) { return (resolveScriptSpecialPowerCommandButtonExecutionImpl as any)(this, ...args); }
@@ -10682,43 +10743,6 @@ export class GameLogicSubsystem implements Subsystem {
       z: end.z,
       heading: Math.atan2(end.x - start.x, end.z - start.z),
     };
-  }
-
-  private findFireWeaponTargetForPositionUsingWeapon(
-    attacker: MapEntity,
-    weapon: AttackWeaponProfile,
-    targetX: number,
-    targetZ: number,
-  ): MapEntity | null {
-    const attackRange = Math.max(0, weapon.attackRange);
-    const attackRangeSqr = attackRange * attackRange;
-    let bestTarget: MapEntity | null = null;
-    let bestDistanceSqr = Number.POSITIVE_INFINITY;
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (!candidate.canTakeDamage || candidate.destroyed) {
-        continue;
-      }
-      if (candidate.id === attacker.id) {
-        continue;
-      }
-      if (!this.canAttackerTargetEntity(attacker, candidate, 'SCRIPT')) {
-        continue;
-      }
-      const dx = candidate.x - targetX;
-      const dz = candidate.z - targetZ;
-      const distanceSqr = dx * dx + dz * dz;
-      if (distanceSqr > attackRangeSqr) {
-        continue;
-      }
-      if (distanceSqr >= bestDistanceSqr) {
-        continue;
-      }
-      bestTarget = candidate;
-      bestDistanceSqr = distanceSqr;
-    }
-
-    return bestTarget;
   }
 
   /* @internal */ findWaypointFollowingCapableWeaponSlot(entity: MapEntity): number | null {
@@ -17167,46 +17191,12 @@ export class GameLogicSubsystem implements Subsystem {
     return this.extractConditionsMask(affectsValue, WEAPON_AFFECTS_MASK_BY_NAME);
   }
 
-  private resolveWeaponProjectileCollideMask(weaponDef: WeaponDef): number {
+  /* @internal */ resolveWeaponProjectileCollideMask(weaponDef: WeaponDef): number {
     const collideValue = this.readIniFieldValue(weaponDef.fields, 'ProjectileCollidesWith');
     if (typeof collideValue === 'undefined') {
       return WEAPON_COLLIDE_DEFAULT_MASK;
     }
     return this.extractConditionsMask(collideValue, WEAPON_COLLIDE_MASK_BY_NAME);
-  }
-
-  private resolveWeaponScatterTargets(weaponDef: WeaponDef): Array<{ x: number; z: number }> {
-    const scatterTargetValue = this.readIniFieldValue(weaponDef.fields, 'ScatterTarget');
-    if (typeof scatterTargetValue === 'undefined') {
-      return [];
-    }
-
-    const resolvedTargets: Array<{ x: number; z: number }> = [];
-    for (const tokens of this.extractIniValueTokens(scatterTargetValue)) {
-      const numericTokens = tokens
-        .map((token) => Number(token))
-        .filter((value) => Number.isFinite(value));
-      if (numericTokens.length >= 2) {
-        resolvedTargets.push({
-          x: numericTokens[0] ?? 0,
-          z: numericTokens[1] ?? 0,
-        });
-      }
-    }
-
-    if (resolvedTargets.length > 0) {
-      return resolvedTargets;
-    }
-
-    const flattenedNumbers = readNumericList(scatterTargetValue);
-    for (let index = 0; index + 1 < flattenedNumbers.length; index += 2) {
-      resolvedTargets.push({
-        x: flattenedNumbers[index] ?? 0,
-        z: flattenedNumbers[index + 1] ?? 0,
-      });
-    }
-
-    return resolvedTargets;
   }
 
   private extractWeaponNamesBySlot(fields: Record<string, IniValue>): [string | null, string | null, string | null] {
@@ -17296,7 +17286,7 @@ export class GameLogicSubsystem implements Subsystem {
     return count;
   }
 
-  private resolveWeaponDamageTypeName(weaponDef: WeaponDef): string {
+  /* @internal */ resolveWeaponDamageTypeName(weaponDef: WeaponDef): string {
     const explicitType = this.resolveIniFieldString(weaponDef.fields, 'DamageType')?.toUpperCase();
     if (explicitType && SOURCE_DAMAGE_TYPE_NAME_SET.has(explicitType)) {
       return explicitType;
@@ -17313,159 +17303,11 @@ export class GameLogicSubsystem implements Subsystem {
     return 'EXPLOSION';
   }
 
-  private resolveWeaponProfileFromDef(weaponDef: WeaponDef): AttackWeaponProfile | null {
-    const attackRangeRaw = readNumericField(weaponDef.fields, ['AttackRange', 'Range']) ?? NO_ATTACK_DISTANCE;
-    const unmodifiedAttackRange = Math.max(0, attackRangeRaw);
-    const attackRange = Math.max(0, attackRangeRaw - ATTACK_RANGE_CELL_EDGE_FUDGE);
-    const minAttackRange = Math.max(0, readNumericField(weaponDef.fields, ['MinimumAttackRange']) ?? 0);
-    const continueAttackRange = Math.max(0, readNumericField(weaponDef.fields, ['ContinueAttackRange']) ?? 0);
-    const primaryDamage = readNumericField(weaponDef.fields, ['PrimaryDamage']) ?? 0;
-    const secondaryDamage = readNumericField(weaponDef.fields, ['SecondaryDamage']) ?? 0;
-    const primaryDamageRadius = Math.max(0, readNumericField(weaponDef.fields, ['PrimaryDamageRadius']) ?? 0);
-    const secondaryDamageRadius = Math.max(0, readNumericField(weaponDef.fields, ['SecondaryDamageRadius']) ?? 0);
-    const scatterTargetScalar = Math.max(0, readNumericField(weaponDef.fields, ['ScatterTargetScalar']) ?? 0);
-    const scatterTargets = this.resolveWeaponScatterTargets(weaponDef);
-    const scatterRadius = Math.max(0, readNumericField(weaponDef.fields, ['ScatterRadius']) ?? 0);
-    const scatterRadiusVsInfantry = Math.max(0, readNumericField(weaponDef.fields, ['ScatterRadiusVsInfantry']) ?? 0);
-    const radiusDamageAngleDegrees = readNumericField(weaponDef.fields, ['RadiusDamageAngle']);
-    const radiusDamageAngle = radiusDamageAngleDegrees === null
-      ? Math.PI
-      : Math.max(0, radiusDamageAngleDegrees * (Math.PI / 180));
-    const projectileObjectRaw = readStringField(weaponDef.fields, ['ProjectileObject'])?.trim() ?? '';
-    const projectileObjectName = projectileObjectRaw && projectileObjectRaw.toUpperCase() !== 'NONE'
-      ? projectileObjectRaw
-      : null;
-    const damageDealtAtSelfPosition = readBooleanField(weaponDef.fields, ['DamageDealtAtSelfPosition']) ?? false;
-    const radiusDamageAffectsMask = this.resolveWeaponRadiusAffectsMask(weaponDef);
-    const projectileCollideMask = this.resolveWeaponProjectileCollideMask(weaponDef);
-    const weaponSpeedRaw = readNumericField(weaponDef.fields, ['WeaponSpeed']) ?? 999999;
-    const weaponSpeed = Number.isFinite(weaponSpeedRaw) && weaponSpeedRaw > 0 ? weaponSpeedRaw : 999999;
-    const minWeaponSpeedRaw = readNumericField(weaponDef.fields, ['MinWeaponSpeed']) ?? 999999;
-    const minWeaponSpeed = Number.isFinite(minWeaponSpeedRaw) && minWeaponSpeedRaw > 0 ? minWeaponSpeedRaw : 999999;
-    const scaleWeaponSpeed = readBooleanField(weaponDef.fields, ['ScaleWeaponSpeed']) ?? false;
-    const capableOfFollowingWaypoints = readBooleanField(
-      weaponDef.fields,
-      ['CapableOfFollowingWaypoints'],
-    ) ?? false;
-    const leechRangeWeapon = readBooleanField(weaponDef.fields, ['LeechRangeWeapon']) ?? false;
-    const clipSizeRaw = readNumericField(weaponDef.fields, ['ClipSize']) ?? 0;
-    const clipSize = Math.max(0, Math.trunc(clipSizeRaw));
-    const clipReloadFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['ClipReloadTime']) ?? 0);
-    const autoReloadWhenIdleFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['AutoReloadWhenIdle']) ?? 0);
-    const preAttackDelayFrames = this.msToLogicFrames(readNumericField(weaponDef.fields, ['PreAttackDelay']) ?? 0);
-    const preAttackTypeToken = readStringField(weaponDef.fields, ['PreAttackType'])?.trim().toUpperCase();
-    const preAttackType: WeaponPrefireTypeName =
-      preAttackTypeToken === 'PER_ATTACK' || preAttackTypeToken === 'PER_CLIP'
-        ? preAttackTypeToken
-        : 'PER_SHOT';
-    const delayValues = readNumericList(weaponDef.fields['DelayBetweenShots']);
-    const minDelayMs = delayValues[0] ?? 0;
-    const maxDelayMs = delayValues[1] ?? minDelayMs;
-    const minDelayFrames = this.msToLogicFrames(minDelayMs);
-    const maxDelayFrames = this.msToLogicFrames(maxDelayMs);
-    // Source parity: Weapon::m_antiMask — WeaponTemplate::clear() pre-seeds WEAPON_ANTI_GROUND
-    // before INI parsing, so all weapons can target ground by default unless explicitly cleared.
-    let antiMask = WEAPON_ANTI_GROUND;
-    if (readBooleanField(weaponDef.fields, ['AntiAirborneVehicle'])) antiMask |= WEAPON_ANTI_AIRBORNE_VEHICLE;
-    if (readBooleanField(weaponDef.fields, ['AntiGround']) === false) antiMask &= ~WEAPON_ANTI_GROUND;
-    if (readBooleanField(weaponDef.fields, ['AntiProjectile'])) antiMask |= WEAPON_ANTI_PROJECTILE;
-    if (readBooleanField(weaponDef.fields, ['AntiSmallMissile'])) antiMask |= WEAPON_ANTI_SMALL_MISSILE;
-    if (readBooleanField(weaponDef.fields, ['AntiMine'])) antiMask |= WEAPON_ANTI_MINE;
-    if (readBooleanField(weaponDef.fields, ['AntiAirborneInfantry'])) antiMask |= WEAPON_ANTI_AIRBORNE_INFANTRY;
-    if (readBooleanField(weaponDef.fields, ['AntiBallisticMissile'])) antiMask |= WEAPON_ANTI_BALLISTIC_MISSILE;
-    if (readBooleanField(weaponDef.fields, ['AntiParachute'])) antiMask |= WEAPON_ANTI_PARACHUTE;
-
-    // Source parity: FiringTracker continuous-fire INI properties on WeaponTemplate.
-    const continuousFireOneShotsNeeded = Math.max(0, Math.trunc(
-      readNumericField(weaponDef.fields, ['ContinuousFireOne']) ?? 0,
-    ));
-    const continuousFireTwoShotsNeeded = Math.max(0, Math.trunc(
-      readNumericField(weaponDef.fields, ['ContinuousFireTwo']) ?? 0,
-    ));
-    const continuousFireCoastFrames = this.msToLogicFrames(
-      readNumericField(weaponDef.fields, ['ContinuousFireCoast']) ?? 0,
-    );
-    // Source parity: per-weapon WeaponBonus lines — parse RATE_OF_FIRE multipliers
-    // for CONTINUOUS_FIRE_MEAN and CONTINUOUS_FIRE_FAST conditions.
-    const { continuousFireMeanRateOfFire, continuousFireFastRateOfFire } =
-      this.resolveWeaponContinuousFireBonuses(weaponDef);
-
-    // Source parity: WeaponTemplate::m_deathType — per-weapon death type (Weapon.cpp line 186).
-    // Default is DEATH_NORMAL. INI field: DeathType (parsed as index list into TheDeathNames).
-    const deathTypeRaw = readStringField(weaponDef.fields, ['DeathType'])?.trim().toUpperCase() ?? '';
-    const deathType = deathTypeRaw || 'NORMAL';
-
-    // Source parity: Weapon::isLaser() — weapon is a laser if LaserName is non-empty.
-    const laserNameRaw = readStringField(weaponDef.fields, ['LaserName'])?.trim() ?? '';
-    const laserName = laserNameRaw && laserNameRaw.toUpperCase() !== 'NONE' ? laserNameRaw : null;
-
-    // Source parity: DumbProjectileBehavior arc parameters — parsed from the projectile
-    // object template referenced by ProjectileObject on this weapon.
-    const bezierArc = projectileObjectName
-      ? this.extractDumbProjectileArcParams(projectileObjectName)
-      : null;
-
-    if (attackRange <= 0 || primaryDamage <= 0) {
-      return null;
-    }
-
-    return {
-      name: weaponDef.name,
-      primaryDamage,
-      secondaryDamage,
-      primaryDamageRadius,
-      secondaryDamageRadius,
-      scatterTargetScalar,
-      scatterTargets,
-      scatterRadius,
-      scatterRadiusVsInfantry,
-      radiusDamageAngle,
-      damageType: this.resolveWeaponDamageTypeName(weaponDef),
-      deathType,
-      damageDealtAtSelfPosition,
-      radiusDamageAffectsMask,
-      projectileCollideMask,
-      weaponSpeed,
-      minWeaponSpeed,
-      scaleWeaponSpeed,
-      capableOfFollowingWaypoints,
-      projectileObjectName,
-      attackRange,
-      unmodifiedAttackRange,
-      minAttackRange,
-      continueAttackRange,
-      clipSize,
-      clipReloadFrames,
-      autoReloadWhenIdleFrames,
-      preAttackDelayFrames,
-      preAttackType,
-      minDelayFrames: Math.max(0, Math.min(minDelayFrames, maxDelayFrames)),
-      maxDelayFrames: Math.max(minDelayFrames, maxDelayFrames),
-      antiMask,
-      continuousFireOneShotsNeeded,
-      continuousFireTwoShotsNeeded,
-      continuousFireCoastFrames,
-      continuousFireMeanRateOfFire,
-      continuousFireFastRateOfFire,
-      laserName,
-      projectileArcFirstHeight: bezierArc?.firstHeight ?? 0,
-      projectileArcSecondHeight: bezierArc?.secondHeight ?? 0,
-      projectileArcFirstPercentIndent: bezierArc?.firstPercentIndent ?? 0,
-      projectileArcSecondPercentIndent: bezierArc?.secondPercentIndent ?? 0,
-      leechRangeWeapon,
-      fireSoundEvent: readStringField(weaponDef.fields, ['FireSound'])?.trim() || null,
-      historicBonusCount: readNumericField(weaponDef.fields, ['HistoricBonusCount']) ?? 0,
-      historicBonusRadius: readNumericField(weaponDef.fields, ['HistoricBonusRadius']) ?? 0,
-      historicBonusTime: readNumericField(weaponDef.fields, ['HistoricBonusTime']) ?? 0,
-      historicBonusWeapon: readStringField(weaponDef.fields, ['HistoricBonusWeapon'])?.trim() || null,
-    };
-  }
-
   /**
    * Source parity: DumbProjectileBehaviorModuleData — extract Bezier arc parameters
    * from the projectile object template's DumbProjectileBehavior module.
    */
-  private extractDumbProjectileArcParams(projectileObjectName: string): {
+  /* @internal */ extractDumbProjectileArcParams(projectileObjectName: string): {
     firstHeight: number;
     secondHeight: number;
     firstPercentIndent: number;
@@ -17520,7 +17362,7 @@ export class GameLogicSubsystem implements Subsystem {
    * from the projectile object template's MissileAIUpdate behavior.
    * C++ file: MissileAIUpdate.cpp.
    */
-  private extractMissileAIProfile(projectileObjectName: string): MissileAIProfile | null {
+  /* @internal */ extractMissileAIProfile(projectileObjectName: string): MissileAIProfile | null {
     const normalizedTemplateName = projectileObjectName.trim().toUpperCase();
     const cached = this.missileAIProfileByProjectileTemplate.get(normalizedTemplateName);
     if (cached !== undefined) {
@@ -17587,7 +17429,7 @@ export class GameLogicSubsystem implements Subsystem {
    * bonus multipliers for CONTINUOUS_FIRE_MEAN and CONTINUOUS_FIRE_FAST conditions.
    * INI format: `WeaponBonus = CONDITION_NAME FIELD_NAME VALUE%`
    */
-  private resolveWeaponContinuousFireBonuses(weaponDef: WeaponDef): {
+  /* @internal */ resolveWeaponContinuousFireBonuses(weaponDef: WeaponDef): {
     continuousFireMeanRateOfFire: number;
     continuousFireFastRateOfFire: number;
   } {
@@ -17617,7 +17459,7 @@ export class GameLogicSubsystem implements Subsystem {
    * the given weapon slot.
    * (GeneralsMD/Code/GameEngine/Source/GameLogic/AI/TurretAI.cpp:516-518)
    */
-  private findTurretForWeaponSlot(entity: MapEntity, slotIndex: number): TurretProfile | null {
+  /* @internal */ findTurretForWeaponSlot(entity: MapEntity, slotIndex: number): TurretProfile | null {
     const slotBit = 1 << slotIndex;
     for (const turret of entity.turretProfiles) {
       if ((turret.controlledWeaponSlotsMask & slotBit) !== 0) {
@@ -17631,7 +17473,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Resolve the weapon names present in each slot of the currently active weapon set.
    * Returns a 3-element array (PRIMARY, SECONDARY, TERTIARY) with weapon name or null.
    */
-  private resolveActiveWeaponSetSlots(
+  /* @internal */ resolveActiveWeaponSetSlots(
     entity: MapEntity,
   ): [string | null, string | null, string | null] {
     const selectedSet = this.selectBestSetByConditions(entity.weaponTemplateSets, entity.weaponSetFlagsMask);
@@ -17643,48 +17485,6 @@ export class GameLogicSubsystem implements Subsystem {
       selectedSet.weaponNamesBySlot[1] ?? null,
       selectedSet.weaponNamesBySlot[2] ?? null,
     ];
-  }
-
-  private resolveAttackWeaponProfileForSetSelection(
-    weaponTemplateSets: readonly WeaponTemplateSetProfile[],
-    weaponSetFlagsMask: number,
-    iniDataRegistry: IniDataRegistry,
-    forcedWeaponSlot: number | null = null,
-  ): AttackWeaponProfile | null {
-    const selectedSet = this.selectBestSetByConditions(weaponTemplateSets, weaponSetFlagsMask);
-    if (!selectedSet) {
-      return null;
-    }
-
-    const normalizedForcedWeaponSlot = this.normalizeWeaponSlot(forcedWeaponSlot);
-    if (normalizedForcedWeaponSlot !== null) {
-      const weaponName = selectedSet.weaponNamesBySlot[normalizedForcedWeaponSlot];
-      if (weaponName) {
-        const forcedWeapon = findWeaponDefByName(iniDataRegistry, weaponName);
-        if (forcedWeapon) {
-          const profile = this.resolveWeaponProfileFromDef(forcedWeapon);
-          if (profile) {
-            return profile;
-          }
-        }
-      }
-    }
-
-    for (const weaponName of selectedSet.weaponNamesBySlot) {
-      if (!weaponName) {
-        continue;
-      }
-      const weapon = findWeaponDefByName(iniDataRegistry, weaponName);
-      if (!weapon) {
-        continue;
-      }
-      const profile = this.resolveWeaponProfileFromDef(weapon);
-      if (profile) {
-        return profile;
-      }
-    }
-
-    return null;
   }
 
   private resolveLargestWeaponRangeForSetSelection(
@@ -17859,20 +17659,6 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     return null;
-  }
-
-  private resolveAttackWeaponProfile(
-    objectDef: ObjectDef | undefined,
-    iniDataRegistry: IniDataRegistry,
-  ): AttackWeaponProfile | null {
-    if (!objectDef) {
-      return null;
-    }
-    return this.resolveAttackWeaponProfileForSetSelection(
-      this.extractWeaponTemplateSets(objectDef),
-      0,
-      iniDataRegistry,
-    );
   }
 
   private resolveBodyStats(objectDef: ObjectDef | undefined): {
@@ -24005,91 +23791,6 @@ export class GameLogicSubsystem implements Subsystem {
     entity.noCollisions = entity.objectStatusFlags.has('NO_COLLISIONS');
   }
 
-  private canEntityAttackFromStatus(entity: MapEntity): boolean {
-    // Source parity: DeployStyleAIUpdate — only allow attacks when fully deployed.
-    if (entity.deployStyleProfile && entity.deployState !== 'READY_TO_ATTACK') {
-      return false;
-    }
-    // Source parity: GeneralsMD Object::isAbleToAttack() early-outs on OBJECT_STATUS_NO_ATTACK,
-    // OBJECT_STATUS_UNDER_CONSTRUCTION, and OBJECT_STATUS_SOLD.
-    if (this.entityHasObjectStatus(entity, 'NO_ATTACK')) {
-      return false;
-    }
-    if (this.entityHasObjectStatus(entity, 'UNDER_CONSTRUCTION')) {
-      return false;
-    }
-    if (this.entityHasObjectStatus(entity, 'SOLD')) {
-      return false;
-    }
-
-    // Source parity: GeneralsMD Object::isAbleToAttack() adds DISABLED_SUBDUED guard.
-    // - Portable structures and spawned-weapon units are also blocked while
-    //   DISABLED_HACKED or DISABLED_EMP (see Object.cpp).
-    if (this.entityHasObjectStatus(entity, 'DISABLED_SUBDUED')) {
-      return false;
-    }
-    const containingEntity = this.resolveEntityContainingObject(entity);
-    const kindOf = this.resolveEntityKindOfSet(entity);
-    const isPortableOrSpawnWeaponUnit = kindOf.has('PORTABLE_STRUCTURE') || kindOf.has('SPAWNS_ARE_THE_WEAPONS');
-    if (isPortableOrSpawnWeaponUnit && (
-      this.entityHasObjectStatus(entity, 'DISABLED_HACKED')
-      || this.entityHasObjectStatus(entity, 'DISABLED_EMP')
-    )) {
-      return false;
-    }
-    if (containingEntity && !this.isPassengerAllowedToFireFromContainingObject(entity, containingEntity)) {
-      // Source parity: GeneralsMD/Object.cpp checks contain modules via
-      // getContainedBy()->getContain()->isPassengerAllowedToFire().
-      return false;
-    }
-    if (isPortableOrSpawnWeaponUnit && kindOf.has('INFANTRY')) {
-      // Source parity: Object::isAbleToAttack() (Object.cpp:3212-3230) — spawned infantry
-      // checks SlavedUpdateInterface::getSlaverID() and blocks attacks when slaver is
-      // DISABLED_SUBDUED (e.g., Microwave Tank suppressing a Stinger Site also suppresses
-      // its stinger soldiers).
-      const slaverEntity = entity.slaverEntityId !== null
-        ? this.spawnedEntities.get(entity.slaverEntityId) ?? null
-        : containingEntity;
-      if (
-        slaverEntity
-        && this.entityHasObjectStatus(slaverEntity, 'DISABLED_SUBDUED')
-      ) {
-        return false;
-      }
-    }
-
-    // Source parity: Object::isAbleToAttack() (Object.cpp:3237-3280) checks if all
-    // weapons are on disabled turrets. Only turreted weapons can be disabled.
-    // KINDOF_CAN_ATTACK objects skip this check (e.g., Nuke Cannon needs isAbleToAttack()
-    // true even with disabled turret so it can deploy).
-    if (entity.turretProfiles.length > 0 && !kindOf.has('CAN_ATTACK')) {
-      let anyWeapon = false;
-      let anyEnabled = false;
-      const weaponSlots = this.resolveActiveWeaponSetSlots(entity);
-      for (let slotIndex = 0; slotIndex < weaponSlots.length; slotIndex += 1) {
-        if (weaponSlots[slotIndex] === null) {
-          continue;
-        }
-        anyWeapon = true;
-        const turret = this.findTurretForWeaponSlot(entity, slotIndex);
-        if (!turret) {
-          // Non-turreted weapon — always considered enabled.
-          anyEnabled = true;
-          break;
-        }
-        if (turret.enabled) {
-          anyEnabled = true;
-          break;
-        }
-      }
-      if (anyWeapon && !anyEnabled) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   private isEntityStealthedAndUndetected(entity: MapEntity): boolean {
     return (
       this.entityHasObjectStatus(entity, 'STEALTHED')
@@ -24112,183 +23813,6 @@ export class GameLogicSubsystem implements Subsystem {
       || entity.x >= heightmap.worldWidth
       || entity.z >= heightmap.worldDepth
     );
-  }
-
-  private canAttackerTargetEntity(
-    attacker: MapEntity,
-    target: MapEntity,
-    commandSource: AttackCommandSource,
-  ): boolean {
-    if (!target.canTakeDamage || target.destroyed) {
-      return false;
-    }
-    if (this.entityHasObjectStatus(target, 'MASKED')) {
-      return false;
-    }
-    const aiLikeCommandSource = commandSource === 'AI' || commandSource === 'DOZER';
-    if (aiLikeCommandSource && this.entityHasObjectStatus(target, 'NO_ATTACK_FROM_AI')) {
-      return false;
-    }
-    const targetKindOf = this.resolveEntityKindOfSet(target);
-    if (targetKindOf.has('UNATTACKABLE')) {
-      return false;
-    }
-    const relationship = this.getTeamRelationship(attacker, target);
-    const allowNeutralMineTarget = commandSource === 'DOZER'
-      && (targetKindOf.has('MINE') || targetKindOf.has('DEMOTRAP'));
-    if (
-      relationship !== RELATIONSHIP_ENEMIES
-      && (!allowNeutralMineTarget || relationship !== RELATIONSHIP_NEUTRAL)
-    ) {
-      return false;
-    }
-    if (this.isEntityOffMap(attacker) !== this.isEntityOffMap(target)) {
-      return false;
-    }
-    if (
-      !this.entityHasObjectStatus(attacker, 'IGNORING_STEALTH')
-      && this.isEntityStealthedAndUndetected(target)
-    ) {
-      return false;
-    }
-
-    // Source parity: WeaponSet.cpp line 550 — cannot attack targets inside enclosing containers.
-    if (this.isEntityInEnclosingContainer(target)) {
-      return false;
-    }
-
-    // Source parity: AIUpdate.cpp line 4633 — fog of war affects human-player
-    // auto-targeting (UNFOGGED flag). Computer AI players can target through fog.
-    // Gate requires a fog grid and that the attacker has vision capability.
-    if (aiLikeCommandSource && this.fogOfWarGrid && attacker.visionRange > 0) {
-      const attackerSide = this.normalizeSide(attacker.side);
-      if (attackerSide && this.getControllingPlayerTypeForEntity(attacker) === 'HUMAN'
-          && !this.isPositionVisible(attackerSide, target.x, target.z)) {
-        return false;
-      }
-    }
-
-    // Source parity: WeaponSet.cpp line 673 — weapon anti-mask vs target anti-mask.
-    // If no weapon on the attacker can engage this target type, reject.
-    if (attacker.totalWeaponAntiMask !== 0) {
-      const targetAntiMask = this.resolveTargetAntiMask(target, targetKindOf);
-      if (targetAntiMask !== 0 && (attacker.totalWeaponAntiMask & targetAntiMask) === 0) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Source parity: WeaponSet.cpp getVictimAntiMask — compute which weapon anti-mask bits
-   * a target entity matches based on its kindOf flags and airborne status.
-   */
-  private resolveTargetAntiMask(target: MapEntity, targetKindOf: ReadonlySet<string>): number {
-    // Source parity: WeaponSet.cpp getVictimAntiMask — priority order matches C++ exactly.
-    if (targetKindOf.has('SMALL_MISSILE')) {
-      return WEAPON_ANTI_SMALL_MISSILE;
-    }
-    if (targetKindOf.has('BALLISTIC_MISSILE')) {
-      return WEAPON_ANTI_BALLISTIC_MISSILE;
-    }
-    if (targetKindOf.has('PROJECTILE')) {
-      return WEAPON_ANTI_PROJECTILE;
-    }
-    if (targetKindOf.has('MINE') || targetKindOf.has('DEMOTRAP')) {
-      return WEAPON_ANTI_MINE | WEAPON_ANTI_GROUND;
-    }
-    // Source parity: Object::isAirborneTarget checks OBJECT_STATUS_AIRBORNE_TARGET.
-    if (this.entityHasObjectStatus(target, 'AIRBORNE_TARGET') || target.category === 'air') {
-      if (targetKindOf.has('VEHICLE')) {
-        return WEAPON_ANTI_AIRBORNE_VEHICLE;
-      }
-      if (targetKindOf.has('INFANTRY')) {
-        return WEAPON_ANTI_AIRBORNE_INFANTRY;
-      }
-      if (targetKindOf.has('PARACHUTE')) {
-        return WEAPON_ANTI_PARACHUTE;
-      }
-      // Airborne but not a recognized sub-type — unattackable in practice.
-      return 0;
-    }
-    return WEAPON_ANTI_GROUND;
-  }
-
-  private refreshEntityCombatProfiles(entity: MapEntity): void {
-    const registry = this.iniDataRegistry;
-    if (!registry) {
-      return;
-    }
-
-    const previousWeapon = entity.attackWeapon;
-    entity.attackWeapon = this.resolveAttackWeaponProfileForSetSelection(
-      entity.weaponTemplateSets,
-      entity.weaponSetFlagsMask,
-      registry,
-      entity.forcedWeaponSlot,
-    );
-    entity.largestWeaponRange = this.resolveLargestWeaponRangeForSetSelection(
-      entity.weaponTemplateSets,
-      entity.weaponSetFlagsMask,
-      registry,
-      entity.forcedWeaponSlot,
-    );
-    entity.totalWeaponAntiMask = this.resolveTotalWeaponAntiMaskForSetSelection(
-      entity.weaponTemplateSets,
-      entity.weaponSetFlagsMask,
-      registry,
-      entity.forcedWeaponSlot,
-    );
-    entity.armorDamageCoefficients = this.resolveArmorDamageCoefficientsForSetSelection(
-      entity.armorTemplateSets,
-      entity.armorSetFlagsMask,
-      registry,
-    );
-
-    // Source parity: apply RANGE bonus from global weapon bonus table to resolved weapon profile.
-    if (entity.attackWeapon) {
-      const rangeBonus = this.resolveWeaponRangeBonusMultiplier(entity);
-      if (rangeBonus !== 1.0) {
-        entity.attackWeapon = {
-          ...entity.attackWeapon,
-          attackRange: entity.attackWeapon.attackRange * rangeBonus,
-        };
-      }
-    }
-
-    const nextWeapon = entity.attackWeapon;
-    const scatterTargetPatternChanged = (() => {
-      if (!previousWeapon || !nextWeapon) {
-        return previousWeapon !== nextWeapon;
-      }
-      if (previousWeapon.scatterTargets.length !== nextWeapon.scatterTargets.length) {
-        return true;
-      }
-      for (let index = 0; index < previousWeapon.scatterTargets.length; index += 1) {
-        const previousTarget = previousWeapon.scatterTargets[index];
-        const nextTarget = nextWeapon.scatterTargets[index];
-        if (!previousTarget || !nextTarget) {
-          return true;
-        }
-        if (previousTarget.x !== nextTarget.x || previousTarget.z !== nextTarget.z) {
-          return true;
-        }
-      }
-      return false;
-    })();
-    // Source parity: WeaponSet::updateWeaponSet — when a set change keeps the same
-    // weapon template in a slot, preserve runtime state (clip ammo, reload timers,
-    // consecutive shots). Only fully reset timing when the template name changes
-    // (i.e., a truly different weapon is now selected).
-    const weaponTemplateChanged = previousWeapon?.name !== nextWeapon?.name;
-    if (weaponTemplateChanged) {
-      this.resetEntityWeaponTimingState(entity);
-    } else if (scatterTargetPatternChanged && nextWeapon) {
-      // Same weapon template but scatter offsets changed (e.g., upgrade modified scatter) —
-      // rebuild scatter targets without resetting clip/reload state.
-      this.rebuildEntityScatterTargets(entity);
-    }
   }
 
   private msToLogicFrames(milliseconds: number): number {
@@ -33136,49 +32660,6 @@ export class GameLogicSubsystem implements Subsystem {
     entity.rallyPoint = { x: targetX, z: targetZ };
   }
 
-  private issueAttackEntity(
-    entityId: number,
-    targetEntityId: number,
-    commandSource: AttackCommandSource,
-  ): void {
-    const attacker = this.spawnedEntities.get(entityId);
-    const target = this.spawnedEntities.get(targetEntityId);
-    if (!attacker || !target) {
-      return;
-    }
-    if (attacker.destroyed || target.destroyed) {
-      return;
-    }
-    const weapon = attacker.attackWeapon;
-    if (!weapon || weapon.primaryDamage <= 0) {
-      return;
-    }
-    this.setEntityIgnoringStealthStatus(attacker, weapon.continueAttackRange > 0);
-    if (!this.canAttackerTargetEntity(attacker, target, commandSource)) {
-      this.setEntityIgnoringStealthStatus(attacker, false);
-      return;
-    }
-
-    attacker.attackTargetEntityId = targetEntityId;
-    attacker.attackOriginalVictimPosition = {
-      x: target.x,
-      z: target.z,
-    };
-    attacker.attackCommandSource = commandSource;
-
-    const attackRange = weapon.attackRange;
-    if (!attacker.canMove || attackRange <= 0) {
-      attacker.moving = false;
-      attacker.moveTarget = null;
-      attacker.movePath = [];
-      attacker.pathIndex = 0;
-      attacker.pathfindGoalCell = null;
-      return;
-    }
-
-    this.issueMoveTo(attacker.id, target.x, target.z, attackRange);
-  }
-
   /**
    * Source parity: TransportAIUpdate::privateAttackObject — when a transport receives a
    * player-issued attack, propagate the attack to all contained passengers that are allowed
@@ -33225,183 +32706,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
   }
 
-  private issueFireWeapon(
-    entityId: number,
-    weaponSlot: number,
-    maxShotsToFire: number,
-    targetObjectId: number | null,
-    targetPosition: readonly [number, number, number] | null,
-  ): void {
-    const attacker = this.spawnedEntities.get(entityId);
-    if (!attacker || attacker.destroyed) {
-      return;
-    }
-
-    const normalizedWeaponSlot = this.normalizeWeaponSlot(Math.trunc(weaponSlot));
-    if (normalizedWeaponSlot === null) {
-      return;
-    }
-    attacker.forcedWeaponSlot = normalizedWeaponSlot;
-    this.refreshEntityCombatProfiles(attacker);
-
-    const weapon = attacker.attackWeapon;
-    if (!weapon || weapon.primaryDamage <= 0) {
-      return;
-    }
-
-    this.setEntityIgnoringStealthStatus(attacker, weapon.continueAttackRange > 0);
-    attacker.attackCommandSource = 'PLAYER';
-    attacker.attackTargetEntityId = null;
-    attacker.attackOriginalVictimPosition = null;
-    attacker.attackTargetPosition = null;
-    attacker.preAttackFinishFrame = 0;
-
-    // Source parity: MSG_DO_WEAPON sets a temporary weapon lock and shot counter.
-    attacker.weaponLockStatus = 'LOCKED_TEMPORARILY';
-    attacker.maxShotsRemaining = maxShotsToFire > 0 ? maxShotsToFire : 0;
-    if (maxShotsToFire <= 0) {
-      return;
-    }
-
-    if (targetObjectId !== null) {
-      this.issueAttackEntity(entityId, targetObjectId, 'PLAYER');
-      return;
-    }
-
-    if (targetPosition === null) {
-      return;
-    }
-
-    const [targetX, , targetZ] = targetPosition;
-    attacker.attackTargetPosition = { x: targetX, z: targetZ };
-
-    // Source behavior for MSG_DO_WEAPON_AT_LOCATION sends a target location while some
-    // commands also append an object ID for obstacle awareness. We only have positional
-    // targeting here and select a victim dynamically from command-local state.
-    const targetEntity = this.findFireWeaponTargetForPosition(attacker, targetX, targetZ);
-    if (!targetEntity) {
-      const attackRange = Math.max(0, weapon.attackRange);
-      if (attacker.canMove) {
-        this.issueMoveTo(entityId, targetX, targetZ, attackRange);
-      }
-      return;
-    }
-    this.issueAttackEntity(entityId, targetEntity.id, 'PLAYER');
-  }
-
-  /**
-   * Source parity: FireWeaponPower::doSpecialPowerAtLocation — reloads ammo and
-   * issues ai->aiAttackPosition(loc, maxShotsToFire, CMD_FROM_AI).
-   */
-  private issueFireWeaponAtPosition(
-    entityId: number,
-    targetX: number,
-    targetZ: number,
-    maxShotsToFire: number,
-  ): void {
-    const attacker = this.spawnedEntities.get(entityId);
-    if (!attacker || attacker.destroyed) {
-      return;
-    }
-
-    // Source parity: FireWeaponPower.cpp checks self->isDisabled() and returns early.
-    if (attacker.objectStatusFlags.has('DISABLED_EMP')
-      || attacker.objectStatusFlags.has('DISABLED_HACKED')
-      || attacker.objectStatusFlags.has('DISABLED_SUBDUED')
-      || attacker.objectStatusFlags.has('DISABLED_HELD')) {
-      return;
-    }
-
-    // Source parity: FireWeaponPower reloads all ammo before firing.
-    // C++ calls reloadAllAmmo(TRUE) across all weapon slots; we only track one.
-    if (attacker.attackWeapon) {
-      attacker.attackAmmoInClip = attacker.attackWeapon.clipSize;
-    }
-
-    // Issue attack at position using primary weapon slot (0).
-    this.issueFireWeapon(entityId, 0, maxShotsToFire, null, [targetX, 0, targetZ]);
-  }
-
-  private findFireWeaponTargetForPosition(
-    attacker: MapEntity,
-    targetX: number,
-    targetZ: number,
-  ): MapEntity | null {
-    const weapon = attacker.attackWeapon;
-    if (!weapon) {
-      return null;
-    }
-
-    const attackRange = Math.max(0, weapon.attackRange);
-    const attackRangeSqr = attackRange * attackRange;
-    let bestTarget: MapEntity | null = null;
-    let bestDistanceSqr = Number.POSITIVE_INFINITY;
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (!candidate.canTakeDamage || candidate.destroyed) {
-        continue;
-      }
-      if (candidate.id === attacker.id) {
-        continue;
-      }
-      if (!this.canAttackerTargetEntity(attacker, candidate, attacker.attackCommandSource)) {
-        continue;
-      }
-      const dx = candidate.x - targetX;
-      const dz = candidate.z - targetZ;
-      const distanceSqr = dx * dx + dz * dz;
-      if (distanceSqr > attackRangeSqr) {
-        continue;
-      }
-      if (distanceSqr >= bestDistanceSqr) {
-        continue;
-      }
-      bestTarget = candidate;
-      bestDistanceSqr = distanceSqr;
-    }
-
-    return bestTarget;
-  }
-
-  private clearAttackTarget(entityId: number): void {
-    const entity = this.spawnedEntities.get(entityId);
-    if (!entity) {
-      return;
-    }
-    entity.attackTargetEntityId = null;
-    entity.attackTargetPosition = null;
-    entity.attackOriginalVictimPosition = null;
-    entity.attackCommandSource = 'AI';
-    // Source parity: AIAttackState::onExit() — clear all attack flags on target release.
-    this.setEntityAttackStatus(entity, false);
-    entity.preAttackFinishFrame = 0;
-    // Source parity: AIAttackState::onExit() — clear leech range mode for all weapons.
-    // C++ file: AIStates.cpp:5714 — obj->clearLeechRangeModeForAllWeapons().
-    entity.leechRangeActive = false;
-    // Source parity: releaseWeaponLock on attack exit — temporary locks are cleared.
-    this.releaseTemporaryWeaponLock(entity);
-  }
-
-  /**
-   * Source parity: when maxShotsToFire is exhausted during combat-update, clear
-   * the attack state and release the temporary weapon lock.
-   */
-  private clearMaxShotsAttackState(entity: MapEntity): void {
-    entity.attackTargetEntityId = null;
-    entity.attackTargetPosition = null;
-    entity.attackOriginalVictimPosition = null;
-    entity.attackCommandSource = 'AI';
-    entity.maxShotsRemaining = 0;
-    this.setEntityAttackStatus(entity, false);
-    entity.preAttackFinishFrame = 0;
-    this.releaseTemporaryWeaponLock(entity);
-  }
-
   /**
    * Source parity: WeaponSet::releaseWeaponLock — temporary locks are released on
    * attack exit, new commands, or clip exhaustion. Permanent locks persist.
    */
-  private releaseTemporaryWeaponLock(entity: MapEntity): void {
+  /* @internal */ releaseTemporaryWeaponLock(entity: MapEntity): void {
     if (entity.weaponLockStatus === 'LOCKED_TEMPORARILY') {
       entity.weaponLockStatus = 'NOT_LOCKED';
       entity.forcedWeaponSlot = null;
@@ -34595,233 +33904,6 @@ export class GameLogicSubsystem implements Subsystem {
     return true;
   }
 
-  private findCommandButtonHuntTarget(
-    source: MapEntity,
-    commandButtonDef: CommandButtonDef,
-    mode: CommandButtonHuntMode,
-    scanRange: number,
-  ): MapEntity | null {
-    const range = Math.max(0, scanRange);
-    const rangeSqr = range * range;
-    const sourceOffMap = this.isEntityOffMap(source);
-
-    let allowEnemies = false;
-    let allowNeutral = false;
-    let allowAllies = false;
-    if (mode === 'ENTER_CARBOMB') {
-      allowNeutral = true;
-    } else if (mode === 'ENTER_HIJACK' || mode === 'ENTER_SABOTAGE') {
-      allowEnemies = true;
-    } else if (mode === 'SPECIAL_POWER') {
-      const options = this.resolveScriptCommandButtonOptionMask(commandButtonDef);
-      allowEnemies = (options & SCRIPT_COMMAND_OPTION_NEED_TARGET_ENEMY_OBJECT) !== 0;
-      allowNeutral = (options & SCRIPT_COMMAND_OPTION_NEED_TARGET_NEUTRAL_OBJECT) !== 0;
-      allowAllies = (options & SCRIPT_COMMAND_OPTION_NEED_TARGET_ALLY_OBJECT) !== 0;
-      if (!allowEnemies && !allowNeutral && !allowAllies) {
-        allowEnemies = true;
-      }
-    }
-
-    let bestTarget: MapEntity | null = null;
-    let bestDistanceSqr = Number.POSITIVE_INFINITY;
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || candidate.id === source.id) {
-        continue;
-      }
-      if (this.isEntityOffMap(candidate) !== sourceOffMap) {
-        continue;
-      }
-      if (candidate.objectStatusFlags.has('STEALTHED') && !candidate.objectStatusFlags.has('DETECTED')) {
-        continue;
-      }
-
-      const relation = this.getTeamRelationship(source, candidate);
-      const relationAllowed = (allowEnemies && relation === RELATIONSHIP_ENEMIES)
-        || (allowNeutral && relation === RELATIONSHIP_NEUTRAL)
-        || (allowAllies && relation === RELATIONSHIP_ALLIES);
-      if (!relationAllowed) {
-        continue;
-      }
-
-      const dx = candidate.x - source.x;
-      const dz = candidate.z - source.z;
-      const distanceSqr = (dx * dx) + (dz * dz);
-      if (distanceSqr > rangeSqr || distanceSqr >= bestDistanceSqr) {
-        continue;
-      }
-      if (!this.isCommandButtonHuntTargetValidForMode(source, candidate, mode)) {
-        continue;
-      }
-
-      bestTarget = candidate;
-      bestDistanceSqr = distanceSqr;
-    }
-
-    return bestTarget;
-  }
-
-  private isCommandButtonHuntTargetValidForMode(
-    source: MapEntity,
-    target: MapEntity,
-    mode: CommandButtonHuntMode,
-  ): boolean {
-    switch (mode) {
-      case 'SPECIAL_POWER':
-        return target.canTakeDamage;
-      case 'ENTER_HIJACK':
-        return this.canExecuteHijackVehicleEnterAction(source, target);
-      case 'ENTER_CARBOMB':
-        return this.canExecuteConvertToCarBombEnterAction(source, target);
-      case 'ENTER_SABOTAGE':
-        return this.resolveSabotageBuildingProfile(source, target) !== null;
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Source parity: AIIdleState::update() / AIUpdateInterface::getNextMoodTarget() —
-   * idle units scan for nearby enemies and auto-engage. Throttled to every
-   * AUTO_TARGET_SCAN_RATE_FRAMES (2 seconds) per entity.
-   */
-  private updateIdleAutoTargeting(): void {
-    for (const entity of this.spawnedEntities.values()) {
-      if (entity.destroyed) {
-        continue;
-      }
-
-      // Only scan combat-capable entities with weapons.
-      if (!entity.attackWeapon) {
-        continue;
-      }
-
-      // Source parity: skip disabled entities (paralyzed, EMP, hacked, unmanned).
-      if (
-        this.entityHasObjectStatus(entity, 'DISABLED_PARALYZED') ||
-        this.entityHasObjectStatus(entity, 'DISABLED_EMP') ||
-        this.entityHasObjectStatus(entity, 'DISABLED_HACKED') ||
-        this.entityHasObjectStatus(entity, 'DISABLED_UNMANNED')
-      ) {
-        continue;
-      }
-
-      // Source parity: don't auto-acquire while already attacking or moving.
-      if (entity.attackTargetEntityId !== null || entity.attackTargetPosition !== null) {
-        continue;
-      }
-      if (entity.moving) {
-        continue;
-      }
-
-      // Source parity: parked/reloading aircraft should not auto-acquire targets.
-      // C++ JetAI state machine controls command dispatch; grounded jets are inert.
-      const autoTargetJs = entity.jetAIState;
-      if (autoTargetJs && (autoTargetJs.state === 'PARKED' || autoTargetJs.state === 'RELOAD_AMMO'
-        || autoTargetJs.state === 'TAKING_OFF' || autoTargetJs.state === 'LANDING')) {
-        continue;
-      }
-
-      // Source parity: ActiveBody::shouldRetaliate — skip if using a special ability.
-      if (entity.objectStatusFlags.has('IS_USING_ABILITY')) {
-        continue;
-      }
-
-      // Source parity: AIGuardRetaliate — immediate retaliation when attacked.
-      // C++ BodyModule::getClearableLastAttacker() returns the last damage source;
-      // guard/idle AI checks this EVERY FRAME and immediately retaliates, bypassing
-      // the 2-second auto-target scan interval. This makes units feel responsive.
-      if (entity.lastAttackerEntityId !== null) {
-        const attackerId = entity.lastAttackerEntityId;
-        entity.lastAttackerEntityId = null; // Source parity: clearLastAttacker().
-        const attacker = this.spawnedEntities.get(attackerId);
-        if (attacker && !attacker.destroyed
-            && this.getTeamRelationship(entity, attacker) === RELATIONSHIP_ENEMIES
-            && this.canAttackerTargetEntity(entity, attacker, 'AI')
-            // Source parity: ActiveBody.cpp lines 783-786 — stealthed units skip
-            // retaliation UNLESS they are detected (inside a detector's radius).
-            && !(entity.objectStatusFlags.has('STEALTHED') && !entity.objectStatusFlags.has('DETECTED'))) {
-          this.issueAttackEntity(entity.id, attacker.id, 'AI');
-          continue;
-        }
-      }
-
-      // Source parity: passive AI units only retaliate to last attacker and
-      // otherwise skip proactive idle-acquire scans.
-      if (
-        this.getControllingPlayerTypeForEntity(entity) !== 'HUMAN'
-        && entity.scriptAttitude === SCRIPT_AI_ATTITUDE_PASSIVE
-      ) {
-        continue;
-      }
-
-      // Guarding entities use their own scan logic in updateGuardBehavior().
-      if (entity.guardState !== 'NONE') {
-        continue;
-      }
-
-      // Source parity: stealthed units do not auto-acquire targets (would break stealth).
-      // C++ gates this on AutoAcquireEnemiesWhenIdle / AAS_Idle_Stealthed flag.
-      if (entity.objectStatusFlags.has('STEALTHED')) {
-        continue;
-      }
-
-      // Throttle scanning to once per AUTO_TARGET_SCAN_RATE_FRAMES.
-      if (this.frameCounter < entity.autoTargetScanNextFrame) {
-        continue;
-      }
-      entity.autoTargetScanNextFrame = this.frameCounter + AUTO_TARGET_SCAN_RATE_FRAMES;
-
-      // Source parity: findClosestEnemy — C++ uses vision range for AI-controlled
-      // units and weapon range for human-controlled units.
-      const weapon = entity.attackWeapon;
-      const entitySidePlayerType = this.getControllingPlayerTypeForEntity(entity);
-      const scanRange = entitySidePlayerType === 'HUMAN'
-        ? weapon.attackRange
-        : Math.max(weapon.attackRange, entity.visionRange);
-      const scanRangeSqr = scanRange * scanRange;
-
-      let bestTarget: MapEntity | null = null;
-      let bestDistanceSqr = Number.POSITIVE_INFINITY;
-
-      for (const candidate of this.spawnedEntities.values()) {
-        if (candidate.destroyed || !candidate.canTakeDamage) {
-          continue;
-        }
-        if (candidate.id === entity.id) {
-          continue;
-        }
-        // Source parity: only auto-target enemies.
-        if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
-          continue;
-        }
-        // Source parity: stealthed units not auto-acquired unless detected.
-        if (
-          candidate.objectStatusFlags.has('STEALTHED') &&
-          !candidate.objectStatusFlags.has('DETECTED')
-        ) {
-          continue;
-        }
-        if (!this.canAttackerTargetEntity(entity, candidate, 'AI')) {
-          continue;
-        }
-        const dx = candidate.x - entity.x;
-        const dz = candidate.z - entity.z;
-        const distanceSqr = dx * dx + dz * dz;
-        if (distanceSqr > scanRangeSqr) {
-          continue;
-        }
-        if (distanceSqr < bestDistanceSqr) {
-          bestTarget = candidate;
-          bestDistanceSqr = distanceSqr;
-        }
-      }
-
-      if (bestTarget) {
-        this.issueAttackEntity(entity.id, bestTarget.id, 'AI');
-      }
-    }
-  }
-
   // ── Source parity: AIGuardMachine — guard position/object behavior ──
 
   /**
@@ -34921,67 +34003,6 @@ export class GameLogicSubsystem implements Subsystem {
     );
 
     this.issueMoveTo(entityId, centerX, centerZ);
-  }
-
-  /**
-   * Find the closest attackable enemy within the given range of a position.
-   * Source parity: AIGuardMachine::lookForInnerTarget().
-   */
-  private findGuardTarget(
-    entity: MapEntity,
-    centerX: number,
-    centerZ: number,
-    range: number,
-  ): MapEntity | null {
-    const rangeSqr = range * range;
-    const guardArea = entity.guardAreaTriggerIndex >= 0
-      ? this.mapTriggerRegions[entity.guardAreaTriggerIndex] ?? null
-      : null;
-    if (entity.guardAreaTriggerIndex >= 0 && !guardArea) {
-      entity.guardAreaTriggerIndex = -1;
-    }
-    let bestTarget: MapEntity | null = null;
-    let bestDistanceSqr = Number.POSITIVE_INFINITY;
-
-    for (const candidate of this.spawnedEntities.values()) {
-      if (candidate.destroyed || !candidate.canTakeDamage) {
-        continue;
-      }
-      if (candidate.id === entity.id) {
-        continue;
-      }
-      if (this.getTeamRelationship(entity, candidate) !== RELATIONSHIP_ENEMIES) {
-        continue;
-      }
-      if (guardArea && !this.isPointInsideTriggerRegion(guardArea, candidate.x, candidate.z)) {
-        continue;
-      }
-      // Source parity: GUARDMODE_GUARD_FLYING_UNITS_ONLY — only target air units.
-      if (entity.guardMode === 2 && candidate.category !== 'air') {
-        continue;
-      }
-      if (
-        candidate.objectStatusFlags.has('STEALTHED') &&
-        !candidate.objectStatusFlags.has('DETECTED')
-      ) {
-        continue;
-      }
-      if (!this.canAttackerTargetEntity(entity, candidate, 'AI')) {
-        continue;
-      }
-      const dx = candidate.x - centerX;
-      const dz = candidate.z - centerZ;
-      const distanceSqr = dx * dx + dz * dz;
-      if (distanceSqr > rangeSqr) {
-        continue;
-      }
-      if (distanceSqr < bestDistanceSqr) {
-        bestTarget = candidate;
-        bestDistanceSqr = distanceSqr;
-      }
-    }
-
-    return bestTarget;
   }
 
   /**
@@ -35629,423 +34650,6 @@ export class GameLogicSubsystem implements Subsystem {
     return false;
   }
 
-  private queueWeaponDamageEvent(attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
-    // Source parity: Object::getLastShotFiredFrame() — track last normal weapon fire for ExclusiveWeaponDelay.
-    attacker.lastShotFiredFrame = this.frameCounter;
-    const sourceX = attacker.x;
-    const sourceZ = attacker.z;
-    const targetX = target.x;
-    const targetZ = target.z;
-
-    let aimX = targetX;
-    let aimZ = targetZ;
-    let primaryVictimEntityId = weapon.damageDealtAtSelfPosition ? null : target.id;
-
-    const sneakyOffset = this.resolveEntitySneakyTargetingOffset(target);
-    if (sneakyOffset && primaryVictimEntityId !== null) {
-      aimX += sneakyOffset.x;
-      aimZ += sneakyOffset.z;
-      // Source parity: WeaponTemplate::fireWeaponTemplate() converts sneaky-targeted
-      // victim shots into position-shots using AIUpdateInterface::getSneakyTargetingOffset().
-      primaryVictimEntityId = null;
-    }
-
-    if (attacker.attackScatterTargetsUnused.length > 0) {
-      const randomPick = this.gameRandom.nextRange(0, attacker.attackScatterTargetsUnused.length - 1);
-      const targetIndex = attacker.attackScatterTargetsUnused[randomPick];
-      const scatterOffset = targetIndex === undefined ? null : weapon.scatterTargets[targetIndex];
-      if (scatterOffset) {
-        aimX += scatterOffset.x * weapon.scatterTargetScalar;
-        aimZ += scatterOffset.z * weapon.scatterTargetScalar;
-        primaryVictimEntityId = null;
-      }
-
-      attacker.attackScatterTargetsUnused[randomPick] = attacker.attackScatterTargetsUnused[attacker.attackScatterTargetsUnused.length - 1]!;
-      attacker.attackScatterTargetsUnused.pop();
-      // Source parity: Weapon::privateFireWeapon() consumes one ScatterTarget
-      // offset per shot from a randomized "unused" list until reload rebuilds it.
-      // Scatter terrain projection handled at impactY resolution (line uses heightmap).
-    }
-
-    let delivery: 'DIRECT' | 'PROJECTILE' | 'LASER' = 'DIRECT';
-    let travelSpeed = weapon.weaponSpeed;
-    if (weapon.projectileObjectName) {
-      delivery = 'PROJECTILE';
-      // Source parity: Weapon.cpp projectile branch notifies completion immediately when the
-      // source object itself has SpecialPowerCompletionDie with a valid creator id.
-      this.notifyScriptCompletedSpecialPowerOnProjectileFired(attacker);
-      // Source parity: projectile weapons in WeaponTemplate::fireWeaponTemplate()
-      // spawn ProjectileObject and defer damage to projectile update/collision.
-      // We represent this as a deterministic delayed impact without spawning a full
-      // projectile object graph yet.
-
-      const scatterRadius = this.resolveProjectileScatterRadiusForTarget(weapon, target);
-      if (scatterRadius > 0) {
-        const randomizedScatterRadius = scatterRadius * this.gameRandom.nextFloat();
-        const scatterAngleRadians = this.gameRandom.nextFloat() * (2 * Math.PI);
-        aimX += randomizedScatterRadius * Math.cos(scatterAngleRadians);
-        aimZ += randomizedScatterRadius * Math.sin(scatterAngleRadians);
-        primaryVictimEntityId = null;
-        // Source parity: projectile scatter path launches at a position (not victim object),
-        // so impact no longer homes to the moving target.
-        // Scatter terrain projection handled at impactY resolution below.
-      }
-      const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
-      travelSpeed = this.resolveScaledProjectileTravelSpeed(weapon, sourceToAimDistance);
-    } else if (weapon.laserName) {
-      // Source parity: Weapon::fireWeaponTemplate() laser sub-branch.
-      // Laser damage is always instant. If scatter moved the aim point outside the
-      // weapon's damage radius, damageID becomes INVALID (ground shot / miss).
-      delivery = 'LASER';
-      const scatterDx = aimX - targetX;
-      const scatterDz = aimZ - targetZ;
-      const scatterDistSqr = scatterDx * scatterDx + scatterDz * scatterDz;
-      const primaryRadiusSqr = weapon.primaryDamageRadius * weapon.primaryDamageRadius;
-      const secondaryRadiusSqr = weapon.secondaryDamageRadius * weapon.secondaryDamageRadius;
-      if (scatterDistSqr > Math.max(primaryRadiusSqr, secondaryRadiusSqr) && scatterDistSqr > 0) {
-        // Scatter caused a miss — laser hits ground, no victim ID.
-        primaryVictimEntityId = null;
-      }
-    } else {
-      // Source parity: Weapon::fireWeaponTemplate delays direct-damage resolution by
-      // distance / getWeaponSpeed().
-    }
-
-    const impactX = weapon.damageDealtAtSelfPosition ? sourceX : aimX;
-    const impactZ = weapon.damageDealtAtSelfPosition ? sourceZ : aimZ;
-    const heightmap = this.mapHeightmap;
-    const impactY = heightmap ? heightmap.getInterpolatedHeight(impactX, impactZ) : 0;
-
-    // Source parity: DumbProjectileBehavior::calcFlightPath() — compute cubic Bezier
-    // arc control points and use arc length for travel time when arc params are present.
-    let hasBezierArc = false;
-    let bezierP1Y = 0;
-    let bezierP2Y = 0;
-    let bezierFirstPercentIndent = 0;
-    let bezierSecondPercentIndent = 0;
-
-    if (
-      delivery === 'PROJECTILE' &&
-      (weapon.projectileArcFirstHeight !== 0 || weapon.projectileArcSecondHeight !== 0 ||
-       weapon.projectileArcFirstPercentIndent !== 0 || weapon.projectileArcSecondPercentIndent !== 0)
-    ) {
-      hasBezierArc = true;
-      bezierFirstPercentIndent = weapon.projectileArcFirstPercentIndent;
-      bezierSecondPercentIndent = weapon.projectileArcSecondPercentIndent;
-
-      // Source parity: highestInterveningTerrain = max(terrain along line, P0.z, P3.z)
-      let highestTerrain = Math.max(attacker.y, impactY);
-      if (heightmap) {
-        const terrainMax = estimateHighestTerrainAlongLine(
-          heightmap, sourceX, sourceZ, impactX, impactZ, BEZIER_TERRAIN_SAMPLE_COUNT,
-        );
-        highestTerrain = Math.max(highestTerrain, terrainMax);
-      }
-      bezierP1Y = highestTerrain + weapon.projectileArcFirstHeight;
-      bezierP2Y = highestTerrain + weapon.projectileArcSecondHeight;
-    }
-
-    const sourceToAimDistance = Math.hypot(aimX - sourceX, aimZ - sourceZ);
-    let delayFrames: number;
-    if (delivery === 'LASER') {
-      // Source parity: laser damage is always instant — returns TheGameLogic->getFrame().
-      delayFrames = 0;
-    } else if (delivery === 'PROJECTILE') {
-      let flightDistance: number;
-      if (hasBezierArc) {
-        // Source parity: flightDistance = BezierSegment::getApproximateLength()
-        const p0x = sourceX, p0y = attacker.y, p0z = sourceZ;
-        const p3x = impactX, p3y = impactY, p3z = impactZ;
-        const dx = p3x - p0x, dy = p3y - p0y, dz = p3z - p0z;
-        const dist = Math.hypot(dx, dy, dz);
-        const nx = dist > 0 ? dx / dist : 0;
-        const nz = dist > 0 ? dz / dist : 0;
-        const p1x = p0x + nx * dist * bezierFirstPercentIndent;
-        const p1z = p0z + nz * dist * bezierFirstPercentIndent;
-        const p2x = p0x + nx * dist * bezierSecondPercentIndent;
-        const p2z = p0z + nz * dist * bezierSecondPercentIndent;
-        flightDistance = approximateCubicBezierArcLength3D(
-          p0x, p0y, p0z,
-          p1x, bezierP1Y, p1z,
-          p2x, bezierP2Y, p2z,
-          p3x, p3y, p3z,
-          BEZIER_ARC_LENGTH_TOLERANCE, 0,
-        );
-      } else {
-        flightDistance = sourceToAimDistance;
-      }
-      const travelFrames = flightDistance / travelSpeed;
-      delayFrames = Math.max(1, Number.isFinite(travelFrames) && travelFrames >= 1
-        ? Math.ceil(travelFrames) : 1);
-    } else {
-      const travelFrames = sourceToAimDistance / travelSpeed;
-      delayFrames = Number.isFinite(travelFrames) && travelFrames >= 1
-        ? Math.ceil(travelFrames) : 0;
-    }
-
-    // Source parity: Weapon::computeBonus() — apply damage and radius bonuses at fire time.
-    const damageBonus = this.resolveWeaponDamageBonusMultiplier(attacker);
-    const radiusBonus = this.resolveWeaponRadiusBonusMultiplier(attacker);
-    const bonusedWeapon: AttackWeaponProfile = (damageBonus !== 1.0 || radiusBonus !== 1.0)
-      ? {
-        ...weapon,
-        primaryDamage: weapon.primaryDamage * damageBonus,
-        secondaryDamage: weapon.secondaryDamage * damageBonus,
-        primaryDamageRadius: weapon.primaryDamageRadius * radiusBonus,
-        secondaryDamageRadius: weapon.secondaryDamageRadius * radiusBonus,
-      }
-      : weapon;
-
-    let missileAIProfile: MissileAIProfile | null = null;
-    let missileAIState: MissileAIRuntimeState | null = null;
-    let executeFrame = this.frameCounter + delayFrames;
-    let projectilePlannedImpactFrame: number | null = null;
-
-    if (delivery === 'PROJECTILE' && weapon.projectileObjectName) {
-      missileAIProfile = this.extractMissileAIProfile(weapon.projectileObjectName);
-      if (missileAIProfile) {
-        // Source parity: MissileAIUpdate owns flight and detonation timing.
-        // Leave queued executeFrame far in the future until MissileAI transitions to KILL.
-        executeFrame = Number.MAX_SAFE_INTEGER;
-
-        // Source parity: projectileFireAtObjectOrPosition initializes heading from
-        // launcher forward vector with positive-Z correction when target is above missile.
-        let dirX = 0;
-        let dirY = 0;
-        let dirZ = 1;
-        const launcherForward = this.resolveForwardUnitVector(attacker);
-        const forwardLength = Math.hypot(launcherForward.x, launcherForward.z);
-        if (forwardLength > 0) {
-          dirX = launcherForward.x / forwardLength;
-          dirZ = launcherForward.z / forwardLength;
-        } else {
-          const toTargetX = impactX - sourceX;
-          const toTargetZ = impactZ - sourceZ;
-          const toTargetLength = Math.hypot(toTargetX, toTargetZ);
-          if (toTargetLength > 0) {
-            dirX = toTargetX / toTargetLength;
-            dirZ = toTargetZ / toTargetLength;
-          }
-        }
-
-        const xyDistance = Math.max(1, Math.hypot(impactX - sourceX, impactZ - sourceZ));
-        const deltaY = impactY - attacker.y;
-        const zFactor = deltaY > 0 ? (deltaY / xyDistance) : 0;
-        dirY += 2 * zFactor;
-
-        const directionLength = Math.hypot(dirX, dirY, dirZ);
-        if (directionLength > 0) {
-          dirX /= directionLength;
-          dirY /= directionLength;
-          dirZ /= directionLength;
-        } else {
-          dirX = 0;
-          dirY = 0;
-          dirZ = 1;
-        }
-
-        const missileSpeed = missileAIProfile.useWeaponSpeed
-          ? travelSpeed
-          : (missileAIProfile.initialVelocity > 0 ? missileAIProfile.initialVelocity : travelSpeed);
-        const speed = Number.isFinite(missileSpeed) && missileSpeed > 0 ? missileSpeed : travelSpeed;
-        const trackingTarget = missileAIProfile.tryToFollowTarget && primaryVictimEntityId !== null;
-        // Source parity: MissileAIUpdate::projectileFireAtObjectOrPosition adds an approach
-        // height offset for coordinate shots when lock distance is enabled.
-        const approachHeight = (!trackingTarget && missileAIProfile.distanceToTargetForLock > 0)
-          ? 10.0
-          : 0.0;
-
-        missileAIState = {
-          state: 'LAUNCH',
-          stateEnteredFrame: this.frameCounter,
-          currentX: sourceX,
-          currentY: attacker.y,
-          currentZ: sourceZ,
-          prevX: sourceX,
-          prevY: attacker.y,
-          prevZ: sourceZ,
-          velocityX: dirX * speed,
-          velocityY: dirY * speed,
-          velocityZ: dirZ * speed,
-          speed,
-          armed: false,
-          fuelExpirationFrame: Number.MAX_SAFE_INTEGER,
-          noTurnDistanceLeft: missileAIProfile.distanceToTravelBeforeTurning,
-          trackingTarget,
-          targetEntityId: trackingTarget ? primaryVictimEntityId : null,
-          targetX: impactX,
-          targetY: impactY + approachHeight,
-          targetZ: impactZ,
-          originalTargetX: impactX,
-          originalTargetY: impactY,
-          originalTargetZ: impactZ,
-          usePreciseTargetY: false,
-          travelDistance: 0,
-          totalDistanceEstimate: Math.max(1, Math.hypot(impactX - sourceX, impactZ - sourceZ)),
-        };
-      } else {
-        // Source parity: non-missile projectiles detonate from projectile-flight update path.
-        projectilePlannedImpactFrame = this.frameCounter + delayFrames;
-        executeFrame = Number.MAX_SAFE_INTEGER;
-      }
-    }
-    const projectileVisualId = this.nextProjectileVisualId++;
-
-    const event: PendingWeaponDamageEvent = {
-      sourceEntityId: attacker.id,
-      primaryVictimEntityId,
-      impactX,
-      impactZ,
-      executeFrame,
-      projectilePlannedImpactFrame,
-      delivery,
-      weapon: bonusedWeapon,
-      launchFrame: this.frameCounter,
-      sourceX,
-      sourceY: attacker.y,
-      sourceZ,
-      projectileVisualId,
-      cachedVisualType: this.classifyWeaponVisualType(weapon),
-      impactY,
-      bezierP1Y,
-      bezierP2Y,
-      bezierFirstPercentIndent,
-      bezierSecondPercentIndent,
-      hasBezierArc,
-      countermeasureDivertFrame: 0,
-      countermeasureNoDamage: false,
-      suppressImpactVisual: false,
-      missileAIProfile,
-      missileAIState,
-      scriptWaypointPath: null,
-    };
-
-    // Emit muzzle flash visual event (includes target endpoint for beam/tracer rendering).
-    this.emitWeaponFiredVisualEvent(
-      attacker,
-      weapon,
-      { x: impactX, y: impactY, z: impactZ },
-    );
-    if (delivery === 'PROJECTILE') {
-      this.registerActiveWeaponProjectileState(
-        projectileVisualId,
-        attacker,
-        weapon,
-        sourceX,
-        attacker.y,
-        sourceZ,
-      );
-    }
-
-    if (delivery === 'LASER') {
-      // Source parity: laser weapons always deal damage synchronously (instant hit).
-      // createLaser() is called for the visual beam; damage is applied immediately.
-      this.emitWeaponImpactVisualEvent(event);
-      applyWeaponDamageEventImpl(this.createCombatDamageEventContext(), event);
-      return;
-    }
-
-    if (delivery === 'DIRECT' && delayFrames <= 0) {
-      // Source parity: WeaponTemplate::fireWeaponTemplate() applies non-projectile
-      // damage immediately when delayInFrames < 1.0f instead of queuing delayed damage.
-      this.emitWeaponImpactVisualEvent(event);
-      applyWeaponDamageEventImpl(this.createCombatDamageEventContext(), event);
-      return;
-    }
-
-    // Source parity: Weapon.cpp:1169-1177 — check victim for countermeasures at weapon fire time.
-    // Only MISSILE projectiles (KINDOF_SMALL_MISSILE) can be diverted.
-    // Source parity: supersonic jets cannot deploy countermeasures (too fast).
-    if (delivery === 'PROJECTILE' && event.cachedVisualType === 'MISSILE' && primaryVictimEntityId !== null) {
-      const victim = this.spawnedEntities.get(primaryVictimEntityId);
-      if (victim && victim.countermeasuresState && victim.countermeasuresProfile
-        && !victim.locomotorSets.has(LOCOMOTORSET_SUPERSONIC)) {
-        this.reportMissileForCountermeasures(victim, event);
-      }
-    }
-
-    this.pendingWeaponDamageEvents.push(event);
-
-    // Source parity: HistoricBonus — track hit location for bonus weapon triggering.
-    this.checkHistoricBonus(bonusedWeapon, impactX, impactZ, attacker.id);
-  }
-
-  /**
-   * Source parity: Weapon.cpp:1090-1130 — per-WeaponTemplate historic damage tracking.
-   * C++ tracks hits on the WeaponTemplate (shared across ALL units using that weapon),
-   * counts hits within radius and time window, and fires bonus weapon at threshold.
-   * Entry is added only when bonus does NOT fire (C++ line 1126).
-   * Count uses `>= historicBonusCount - 1` (C++ line 1112) to implicitly include current hit.
-   */
-  private checkHistoricBonus(weapon: AttackWeaponProfile, targetX: number, targetZ: number, attackerId: number): void {
-    if (weapon.historicBonusCount <= 0 || !weapon.historicBonusWeapon) return;
-
-    // Source parity: keyed by weapon template name, shared across all units.
-    const key = weapon.name;
-    let log = this.historicDamageLog.get(key);
-    if (!log) {
-      log = [];
-      this.historicDamageLog.set(key, log);
-    }
-
-    // Trim old entries (outside time window).
-    // Source parity: C++ trimOldHistoricDamage uses GlobalData::m_historicDamageLimit;
-    // we approximate with the per-weapon time window.
-    const timeWindowFrames = Math.ceil(weapon.historicBonusTime * 30 / 1000);
-    const oldestThatWillCount = this.frameCounter - timeWindowFrames;
-    while (log.length > 0 && log[0]!.frame <= oldestThatWillCount) {
-      log.shift();
-    }
-
-    // Count hits within radius and time window.
-    const radiusSq = weapon.historicBonusRadius * weapon.historicBonusRadius;
-    let hitsInRadius = 0;
-    for (const entry of log) {
-      if (entry.frame >= oldestThatWillCount) {
-        const dx = entry.x - targetX;
-        const dz = entry.z - targetZ;
-        if (dx * dx + dz * dz <= radiusSq) {
-          hitsInRadius++;
-        }
-      }
-    }
-
-    // Source parity: count >= m_historicBonusCount - 1 (includes current hit implicitly).
-    if (hitsInRadius >= weapon.historicBonusCount - 1) {
-      // Clear the log to prevent retriggering (C++ line 1119).
-      log.length = 0;
-      // Fire the bonus weapon at the target location.
-      this.fireHistoricBonusWeapon(weapon.historicBonusWeapon, targetX, targetZ, attackerId);
-    } else {
-      // Source parity: add AFTER checking (C++ line 1126).
-      log.push({ frame: this.frameCounter, x: targetX, z: targetZ });
-    }
-  }
-
-  /**
-   * Source parity: Fire a HistoricBonus weapon at the given position.
-   * Looks up the weapon template by name and applies area damage using the
-   * existing fireTemporaryWeaponAtPosition infrastructure.
-   */
-  private fireHistoricBonusWeapon(weaponName: string, targetX: number, targetZ: number, attackerId: number): void {
-    const weaponDef = this.iniDataRegistry?.getWeapon(weaponName);
-    if (!weaponDef) return;
-    const source = this.spawnedEntities.get(attackerId);
-    if (!source || source.destroyed) return;
-    this.fireTemporaryWeaponAtPosition(source, weaponDef, targetX, targetZ);
-  }
-
-  private classifyWeaponVisualType(weapon: AttackWeaponProfile): import('./types.js').ProjectileVisualType {
-    // Source parity: weapon with LaserName is definitively a laser.
-    if (weapon.laserName) return 'LASER';
-    const name = weapon.name.toUpperCase();
-    if (name.includes('MISSILE') || name.includes('ROCKET') || name.includes('PATRIOT')) return 'MISSILE';
-    if (name.includes('ARTILLERY') || name.includes('CANNON') || name.includes('SHELL')
-      || weapon.primaryDamageRadius > 10) return 'ARTILLERY';
-    if (name.includes('LASER')) return 'LASER';
-    return 'BULLET';
-  }
-
   private emitWeaponFiredVisualEvent(
     attacker: MapEntity,
     weapon: AttackWeaponProfile,
@@ -36191,7 +34795,7 @@ export class GameLogicSubsystem implements Subsystem {
     return entityHasSneakyTargetingOffsetImpl(entity, this.frameCounter);
   }
 
-  private resolveEntitySneakyTargetingOffset(entity: MapEntity): VectorXZ | null {
+  /* @internal */ resolveEntitySneakyTargetingOffset(entity: MapEntity): VectorXZ | null {
     return resolveEntitySneakyTargetingOffsetImpl(entity, this.frameCounter, this.resolveForwardUnitVector(entity));
   }
 
@@ -36206,7 +34810,7 @@ export class GameLogicSubsystem implements Subsystem {
     );
   }
 
-  private resolveProjectileScatterRadiusForTarget(weapon: AttackWeaponProfile, target: MapEntity): number {
+  /* @internal */ resolveProjectileScatterRadiusForTarget(weapon: AttackWeaponProfile, target: MapEntity): number {
     return resolveProjectileScatterRadiusForCategoryImpl(weapon, target.category);
   }
 
@@ -37114,7 +35718,7 @@ export class GameLogicSubsystem implements Subsystem {
     return { x: retreatX, z: retreatZ };
   }
 
-  private resetEntityWeaponTimingState(entity: MapEntity): void {
+  /* @internal */ resetEntityWeaponTimingState(entity: MapEntity): void {
     resetEntityWeaponTimingStateImpl(entity);
   }
 
@@ -37250,20 +35854,6 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /**
-   * Source parity: resolve the effective rate-of-fire multiplier for the attacker's
-   * current continuous-fire state from the weapon's per-weapon bonus config.
-   */
-  private resolveContinuousFireRateOfFireBonus(entity: MapEntity, weapon: AttackWeaponProfile): number {
-    if (entity.continuousFireState === 'FAST') {
-      return weapon.continuousFireFastRateOfFire;
-    }
-    if (entity.continuousFireState === 'MEAN') {
-      return weapon.continuousFireMeanRateOfFire;
-    }
-    return 1.0;
-  }
-
-  /**
    * Source parity: Weapon::computeBonus() — resolve the effective bonus condition flags
    * for an entity, including veterancy, player upgrades, continuous-fire, and garrisoned state.
    * Returns the full condition bitmask to use with computeWeaponBonusField().
@@ -37287,7 +35877,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: WeaponTemplate::getPrimaryDamage(bonus) — compute effective weapon damage
    * multiplied by the active DAMAGE bonus from the global weapon bonus table.
    */
-  private resolveWeaponDamageBonusMultiplier(entity: MapEntity): number {
+  /* @internal */ resolveWeaponDamageBonusMultiplier(entity: MapEntity): number {
     const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
     return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_DAMAGE);
   }
@@ -37296,7 +35886,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: WeaponTemplate::getAttackRange(bonus) — compute effective attack range
    * multiplied by the active RANGE bonus from the global weapon bonus table.
    */
-  private resolveWeaponRangeBonusMultiplier(entity: MapEntity): number {
+  /* @internal */ resolveWeaponRangeBonusMultiplier(entity: MapEntity): number {
     const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
     return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_RANGE);
   }
@@ -37305,7 +35895,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: WeaponTemplate::getDelayBetweenShots(bonus) — compute effective ROF bonus
    * multiplied by the active RATE_OF_FIRE bonus from the global weapon bonus table.
    */
-  private resolveWeaponRateOfFireBonusMultiplier(entity: MapEntity): number {
+  /* @internal */ resolveWeaponRateOfFireBonusMultiplier(entity: MapEntity): number {
     const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
     return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_RATE_OF_FIRE);
   }
@@ -37323,12 +35913,12 @@ export class GameLogicSubsystem implements Subsystem {
    * Source parity: WeaponTemplate::getPrimaryDamageRadius(bonus) — compute effective damage
    * radius multiplied by the active RADIUS bonus from the global weapon bonus table.
    */
-  private resolveWeaponRadiusBonusMultiplier(entity: MapEntity): number {
+  /* @internal */ resolveWeaponRadiusBonusMultiplier(entity: MapEntity): number {
     const flags = this.resolveEntityWeaponBonusConditionFlags(entity);
     return computeWeaponBonusField(this.globalWeaponBonusTable, flags, WEAPON_BONUS_FIELD_RADIUS);
   }
 
-  private resolveWeaponDelayFrames(weapon: AttackWeaponProfile): number {
+  /* @internal */ resolveWeaponDelayFrames(weapon: AttackWeaponProfile): number {
     return resolveWeaponDelayFramesImpl(
       weapon,
       (minDelay, maxDelay) => this.gameRandom.nextRange(minDelay, maxDelay),
@@ -37347,24 +35937,6 @@ export class GameLogicSubsystem implements Subsystem {
     const maxFrames = Math.max(minFrames, this.msToLogicFrames(maxDelayMs));
     if (minFrames === maxFrames) return minFrames;
     return this.gameRandom.nextRange(minFrames, maxFrames);
-  }
-
-  /**
-   * Source parity: WeaponTemplate::getDelayBetweenShots(bonus) — compute delay
-   * and divide by the active RATE_OF_FIRE bonus multiplier.
-   */
-  private resolveWeaponDelayFramesWithBonus(attacker: MapEntity, weapon: AttackWeaponProfile): number {
-    const baseDelay = this.resolveWeaponDelayFrames(weapon);
-    // Source parity: combine per-weapon continuous-fire bonus with global table ROF bonus.
-    const continuousFireBonus = this.resolveContinuousFireRateOfFireBonus(attacker, weapon);
-    const globalRofBonus = this.resolveWeaponRateOfFireBonusMultiplier(attacker);
-    // Additive accumulation: both bonuses contribute (globalRofBonus already includes 1.0 base).
-    const totalRofBonus = continuousFireBonus + (globalRofBonus - 1.0);
-    if (totalRofBonus <= 0 || totalRofBonus === 1.0) {
-      return baseDelay;
-    }
-    // Source parity: REAL_TO_INT_FLOOR(delay / rofBonus).
-    return Math.max(0, Math.floor(baseDelay / totalRofBonus));
   }
 
   private applyWeaponDamageAmount(
@@ -38246,25 +36818,7 @@ export class GameLogicSubsystem implements Subsystem {
    * Resolve the kindOf set of a weapon's projectile template.
    * Caches results to avoid repeated INI lookups.
    */
-  private projectileKindOfCache = new Map<string, Set<string>>();
-
-  private resolveProjectileTemplateKindOf(weapon: AttackWeaponProfile): Set<string> {
-    const templateName = weapon.projectileObjectName;
-    if (!templateName) return EMPTY_KINDOF_SET;
-
-    const cached = this.projectileKindOfCache.get(templateName);
-    if (cached) return cached;
-
-    const registry = this.iniDataRegistry;
-    if (!registry) return EMPTY_KINDOF_SET;
-
-    const objectDef = findObjectDefByName(registry, templateName);
-    if (!objectDef) return EMPTY_KINDOF_SET;
-
-    const kindOf = this.normalizeKindOf(objectDef.kindOf);
-    this.projectileKindOfCache.set(templateName, kindOf);
-    return kindOf;
-  }
+  /* @internal */ projectileKindOfCache = new Map<string, Set<string>>();
 
   /**
    * Intercept a projectile event: remove it from pending events and emit visual event.
@@ -39428,7 +37982,7 @@ export class GameLogicSubsystem implements Subsystem {
    * called at weapon-fire time when a SMALL_MISSILE targets a unit with countermeasures.
    * Rolls evasion probability and marks the missile for diversion if successful.
    */
-  private reportMissileForCountermeasures(victim: MapEntity, event: PendingWeaponDamageEvent): void {
+  /* @internal */ reportMissileForCountermeasures(victim: MapEntity, event: PendingWeaponDamageEvent): void {
     const profile = victim.countermeasuresProfile!;
     const state = victim.countermeasuresState!;
 
