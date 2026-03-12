@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseVideoIni } from './video-player.js';
+import { RuntimeManifest } from '@generals/assets';
+import {
+  buildVideoIndex,
+  createVideoUrlResolver,
+  parseVideoIni,
+  VideoPlayer,
+} from './video-player.js';
 
 const VIDEO_INI = `
 ; FILE: Video.ini
@@ -29,6 +35,23 @@ Video PortraitDrThraxLeft
 End
 `;
 
+function makeManifest(entries: Array<{ outputPath: string; converter: string }>): RuntimeManifest {
+  return new RuntimeManifest({
+    version: 1,
+    generatedAt: '2025-01-01T00:00:00Z',
+    entryCount: entries.length,
+    entries: entries.map((entry) => ({
+      sourcePath: `source/${entry.outputPath}`,
+      sourceHash: 'abc123',
+      outputPath: entry.outputPath,
+      outputHash: 'def456',
+      converter: entry.converter,
+      converterVersion: '1.0.0',
+      timestamp: '2025-01-01T00:00:00Z',
+    })),
+  });
+}
+
 describe('parseVideoIni', () => {
   it('parses video entries from INI text', () => {
     const entries = parseVideoIni(VIDEO_INI);
@@ -57,5 +80,45 @@ End
 `;
     const entries = parseVideoIni(ini);
     expect(entries.size).toBe(0);
+  });
+
+  it('indexes video-converter outputs by lowercase basename', () => {
+    const manifest = makeManifest([
+      { outputPath: 'videos/GC_Background.mp4', converter: 'video-converter' },
+      { outputPath: 'videos/MD_USA01_0.mp4', converter: 'video-converter' },
+      { outputPath: 'audio/vgenlo2a.wav', converter: 'audio-converter' },
+    ]);
+    const index = buildVideoIndex(manifest);
+
+    expect(index.get('gc_background')).toBe('videos/GC_Background.mp4');
+    expect(index.get('md_usa01_0')).toBe('videos/MD_USA01_0.mp4');
+    expect(index.has('vgenlo2a')).toBe(false);
+  });
+
+  it('resolves Video.ini aliases through the runtime manifest', () => {
+    const manifest = makeManifest([
+      { outputPath: 'videos/GC_Background.mp4', converter: 'video-converter' },
+      { outputPath: 'videos/MD_USA01_0.mp4', converter: 'video-converter' },
+    ]);
+    const resolver = createVideoUrlResolver(manifest);
+    const player = new VideoPlayer({
+      root: {} as HTMLElement,
+      resolveVideoAssetUrl: resolver,
+    });
+    player.init(VIDEO_INI);
+
+    expect(player.resolveVideoUrl('GeneralsChallengeBackground')).toBe('assets/videos/GC_Background.mp4');
+    expect(player.resolveVideoUrl('MD_USA01')).toBe('assets/videos/MD_USA01_0.mp4');
+    expect(player.resolveVideoUrl('MissingMovie')).toBeNull();
+  });
+
+  it('falls back to a base URL when no manifest resolver is provided', () => {
+    const player = new VideoPlayer({
+      root: {} as HTMLElement,
+      videoBaseUrl: 'assets/videos',
+    });
+    player.init(VIDEO_INI);
+
+    expect(player.resolveVideoUrl('GeneralsChallengeBackground')).toBe('assets/videos/GC_Background.mp4');
   });
 });

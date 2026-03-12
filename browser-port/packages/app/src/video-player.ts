@@ -9,12 +9,22 @@
  * and wires into the script movie playback bridge.
  */
 
+import { RUNTIME_ASSET_BASE_URL, type RuntimeManifest } from '@generals/assets';
+
 // ──── Video.ini parsing ─────────────────────────────────────────────────────
 
 export interface VideoEntry {
   name: string;
   filename: string;
   comment: string;
+}
+
+function basenameLower(pathValue: string): string {
+  const normalized = pathValue.trim().replace(/\\/g, '/');
+  const lastSlash = normalized.lastIndexOf('/');
+  const filename = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const dotIdx = filename.lastIndexOf('.');
+  return (dotIdx > 0 ? filename.slice(0, dotIdx) : filename).toLowerCase();
 }
 
 /**
@@ -64,20 +74,47 @@ export function parseVideoIni(text: string): Map<string, VideoEntry> {
   return entries;
 }
 
+export function buildVideoIndex(manifest: RuntimeManifest): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const entry of manifest.raw.entries) {
+    if (entry.converter !== 'video-converter') continue;
+    const basename = basenameLower(entry.outputPath);
+    if (!basename || index.has(basename)) continue;
+    index.set(basename, entry.outputPath);
+  }
+  return index;
+}
+
+export function createVideoUrlResolver(
+  manifest: RuntimeManifest,
+): (filename: string) => string | null {
+  const index = buildVideoIndex(manifest);
+  return (filename: string): string | null => {
+    const outputPath = index.get(basenameLower(filename));
+    if (!outputPath) {
+      return null;
+    }
+    return `${RUNTIME_ASSET_BASE_URL}/${outputPath}`;
+  };
+}
+
 // ──── VideoPlayer ───────────────────────────────────────────────────────────
 
 export interface VideoPlayerOptions {
   /** Root element to append the video overlay to. */
   root: HTMLElement;
-  /** Base URL for video files (e.g., "assets/_extracted/video"). */
-  videoBaseUrl: string;
+  /** Optional manifest-backed video asset URL resolver. */
+  resolveVideoAssetUrl?: (filename: string) => string | null;
+  /** Optional fallback base URL for video files. */
+  videoBaseUrl?: string;
   /** Called when a video finishes playing (or is skipped). */
   onVideoCompleted?: (movieName: string) => void;
 }
 
 export class VideoPlayer {
   private root: HTMLElement;
-  private videoBaseUrl: string;
+  private videoBaseUrl: string | null;
+  private resolveVideoAssetUrl: ((filename: string) => string | null) | null;
   private onVideoCompleted: ((movieName: string) => void) | null;
   private videoNameToEntry = new Map<string, VideoEntry>();
 
@@ -90,7 +127,8 @@ export class VideoPlayer {
 
   constructor(options: VideoPlayerOptions) {
     this.root = options.root;
-    this.videoBaseUrl = options.videoBaseUrl.replace(/\/+$/, '');
+    this.videoBaseUrl = options.videoBaseUrl?.replace(/\/+$/, '') ?? null;
+    this.resolveVideoAssetUrl = options.resolveVideoAssetUrl ?? null;
     this.onVideoCompleted = options.onVideoCompleted ?? null;
   }
 
@@ -104,6 +142,13 @@ export class VideoPlayer {
     const entry = this.videoNameToEntry.get(movieName);
     const filename = entry?.filename ?? movieName;
     if (!filename) return null;
+    const resolvedAssetUrl = this.resolveVideoAssetUrl?.(filename) ?? null;
+    if (resolvedAssetUrl) {
+      return resolvedAssetUrl;
+    }
+    if (!this.videoBaseUrl) {
+      return null;
+    }
     return `${this.videoBaseUrl}/${filename}.mp4`;
   }
 

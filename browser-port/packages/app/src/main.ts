@@ -90,7 +90,7 @@ import { syncScriptViewRuntimeBridge } from './script-view-runtime.js';
 import { assertIniBundleConsistency, assertRequiredManifestEntries } from './runtime-guardrails.js';
 import { GameShell, type SkirmishSettings, type CampaignStartSettings } from './game-shell.js';
 import { CampaignManager } from '@generals/game-logic';
-import { VideoPlayer } from './video-player.js';
+import { createVideoUrlResolver, VideoPlayer } from './video-player.js';
 import {
   buildChallengePersonasFromRegistry,
   getEnabledChallengePersonas,
@@ -3336,9 +3336,10 @@ async function init(): Promise<void> {
       '_extracted/INIZH/Data/INI/Video.ini',
     );
     const videoIniText = new TextDecoder().decode(videoIniHandle.data);
+    const manifest = ctx.assets.getManifest();
     videoPlayer = new VideoPlayer({
       root: gameContainer,
-      videoBaseUrl: 'assets/_extracted/video',
+      resolveVideoAssetUrl: manifest ? createVideoUrlResolver(manifest) : undefined,
       onVideoCompleted: (_movieName) => {
         // Script video completion is handled in the bridge
       },
