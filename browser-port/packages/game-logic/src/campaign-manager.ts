@@ -36,6 +36,18 @@ export interface Campaign {
   missions: Mission[];
 }
 
+export function resolveCampaignMapAssetPath(mapName: string | null | undefined): string | null {
+  if (!mapName) return null;
+  const normalized = mapName
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  if (!normalized || !/\.map$/i.test(normalized)) {
+    return null;
+  }
+  return `maps/_extracted/MapsZH/${normalized.replace(/\.map$/i, '.json')}`;
+}
+
 // ──── Parsing ───────────────────────────────────────────────────────────────
 
 /**
@@ -196,7 +208,7 @@ export class CampaignManager {
   /** Get non-challenge, non-training, non-demo campaigns (USA, GLA, China). */
   getStoryCampaigns(): Campaign[] {
     return this.campaigns.filter(
-      c => !c.isChallengeCampaign && !c.name.startsWith('training') && !c.name.startsWith('demo'),
+      c => !c.isChallengeCampaign && c.name !== 'training' && !c.name.endsWith('_demo'),
     );
   }
 
@@ -312,14 +324,7 @@ export class CampaignManager {
    * e.g. "Maps\\MD_USA01\\MD_USA01.map" → "maps/_extracted/MapsZH/Maps/MD_USA01/MD_USA01.json"
    */
   resolveMapAssetPath(mission?: Mission | null): string | null {
-    const m = mission ?? this.currentMission;
-    if (!m?.mapName) return null;
-    // INI uses backslash: "Maps\MD_USA01\MD_USA01.map"
-    const parts = m.mapName.replace(/\\/g, '/').split('/');
-    // Extract the map directory name (e.g., "MD_USA01")
-    const mapDir = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
-    if (!mapDir) return null;
-    return `maps/_extracted/MapsZH/Maps/${mapDir}/${mapDir}.json`;
+    return resolveCampaignMapAssetPath((mission ?? this.currentMission)?.mapName);
   }
 
   /**

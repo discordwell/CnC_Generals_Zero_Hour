@@ -8,12 +8,22 @@
  *
  * The original engine uses a WND-based (Westwood Window) UI system for its
  * shell screens. We replicate the screen flow with DOM elements:
- *   MAIN_MENU → SINGLE_PLAYER → CAMPAIGN_FACTION → CAMPAIGN_DIFFICULTY → (game loads)
+ *   MAIN_MENU → SINGLE_PLAYER → CAMPAIGN_FACTION → CAMPAIGN_DIFFICULTY → CAMPAIGN_BRIEFING → (game loads)
  *   MAIN_MENU → SKIRMISH_SETUP → (game loads)
  *   MAIN_MENU → SINGLE_PLAYER → CHALLENGE_SELECT → (game loads)
  */
 
-import { DEFAULT_PERSONAS } from './challenge-generals.js';
+import { resolveCampaignMapAssetPath } from '@generals/game-logic';
+import {
+  DEFAULT_PERSONAS,
+  type GeneralPersona,
+} from './challenge-generals.js';
+import { resolveLocalizedText } from './localization.js';
+import {
+  DEFAULT_STARTING_CREDITS_OPTIONS,
+  getDefaultStartingCreditsValue,
+  type StartingCreditsOption,
+} from './shell-runtime-data.js';
 
 // ──── Types ─────────────────────────────────────────────────────────────────
 
@@ -102,6 +112,9 @@ const FACTIONS = [
   { side: 'China', label: 'China', description: "People's Republic of China", campaignName: 'china' },
   { side: 'GLA', label: 'GLA', description: 'Global Liberation Army', campaignName: 'gla' },
 ] as const;
+const FACTION_BY_CAMPAIGN = new Map<string, (typeof FACTIONS)[number]>(
+  FACTIONS.map((faction) => [faction.campaignName, faction] as const),
+);
 
 const DIFFICULTIES: { value: GameDifficulty; label: string; description: string }[] = [
   { value: 'EASY', label: 'Easy', description: 'For beginners' },
@@ -113,13 +126,6 @@ const DIFFICULTIES: { value: GameDifficulty; label: string; description: string 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-
-const STARTING_CREDITS_OPTIONS = [
-  { value: 5000, label: '$5,000' },
-  { value: 10000, label: '$10,000 (Default)' },
-  { value: 20000, label: '$20,000' },
-  { value: 40000, label: '$40,000' },
-] as const;
 
 // ──── Challenge general data ────────────────────────────────────────────────
 
@@ -454,10 +460,13 @@ export class GameShell {
   private playerSide = 'America';
   private aiEnabled = true;
   private aiSide = 'China';
-  private startingCredits = 10000;
+  private startingCredits = getDefaultStartingCreditsValue(DEFAULT_STARTING_CREDITS_OPTIONS);
+  private startingCreditsOptions: StartingCreditsOption[] = [...DEFAULT_STARTING_CREDITS_OPTIONS];
 
   // Campaign state
   private campaigns: ShellCampaign[] = [];
+  private challengePersonas: GeneralPersona[] = [...DEFAULT_PERSONAS];
+  private localizedStrings = new Map<string, string>();
   private selectedCampaignFaction = 'usa';
   private selectedDifficulty: GameDifficulty = 'NORMAL';
   private selectedChallengeIndex = 0;
@@ -503,6 +512,25 @@ export class GameShell {
   /** Set parsed campaign data from CampaignManager. */
   setCampaigns(campaigns: readonly ShellCampaign[]): void {
     this.campaigns = [...campaigns];
+    if (!this.getStoryCampaignChoices().some((choice) => choice.campaignName === this.selectedCampaignFaction)) {
+      this.selectedCampaignFaction = this.getStoryCampaignChoices()[0]?.campaignName ?? 'usa';
+    }
+  }
+
+  setChallengePersonas(personas: readonly GeneralPersona[]): void {
+    this.challengePersonas = personas.length > 0 ? [...personas] : [...DEFAULT_PERSONAS];
+    if (!this.challengePersonas.some((persona) => persona.index === this.selectedChallengeIndex)) {
+      this.selectedChallengeIndex = this.challengePersonas[0]?.index ?? 0;
+    }
+  }
+
+  setStartingCreditsOptions(options: readonly StartingCreditsOption[]): void {
+    this.startingCreditsOptions = options.length > 0 ? [...options] : [...DEFAULT_STARTING_CREDITS_OPTIONS];
+    this.startingCredits = getDefaultStartingCreditsValue(this.startingCreditsOptions);
+  }
+
+  setLocalizedStrings(localizedStrings: ReadonlyMap<string, string>): void {
+    this.localizedStrings = new Map(localizedStrings);
   }
 
   /** Show the shell and render the current screen. */
@@ -557,6 +585,29 @@ export class GameShell {
     this.styleEl = document.createElement('style');
     this.styleEl.textContent = SHELL_STYLES;
     document.head.appendChild(this.styleEl);
+  }
+
+  private resolveText(value: string): string {
+    return resolveLocalizedText(value, this.localizedStrings);
+  }
+
+  private resolveChallengeName(persona: GeneralPersona): string {
+    if (persona.bioNameLabel) {
+      return this.resolveText(persona.bioNameLabel);
+    }
+    return persona.name;
+  }
+
+  private getStoryCampaignChoices(): Array<(typeof FACTIONS)[number]> {
+    const storyCampaigns = this.campaigns.filter((campaign) =>
+      !campaign.isChallengeCampaign && campaign.name !== 'training' && !campaign.name.endsWith('_demo'),
+    );
+    if (storyCampaigns.length === 0) {
+      return [...FACTIONS];
+    }
+
+    const storyNames = new Set(storyCampaigns.map((campaign) => campaign.name));
+    return FACTIONS.filter((faction) => storyNames.has(faction.campaignName));
   }
 
   // ──── Private: Main Menu ────────────────────────────────────────────────
@@ -636,19 +687,26 @@ export class GameShell {
     const el = document.createElement('div');
     el.className = 'shell-screen hidden';
     el.id = 'campaign-faction-screen';
+    const campaignChoices = this.getStoryCampaignChoices();
 
     el.innerHTML = `
       <div class="shell-panel">
         <div class="shell-panel-title">Select Faction</div>
         <div class="shell-section">
           <div class="faction-row" data-ref="campaign-factions">
-            ${FACTIONS.map(f => `
-              <button class="faction-option${f.campaignName === this.selectedCampaignFaction ? ' selected' : ''}"
-                      data-campaign="${f.campaignName}">
-                <div class="faction-name">${f.label}</div>
-                <div class="faction-desc">${f.description}</div>
+            ${campaignChoices.map((choice) => {
+              const campaign = this.campaigns.find((entry) => entry.name === choice.campaignName);
+              const label = campaign?.campaignNameLabel
+                ? this.resolveText(campaign.campaignNameLabel)
+                : choice.label;
+              return `
+              <button class="faction-option${choice.campaignName === this.selectedCampaignFaction ? ' selected' : ''}"
+                      data-campaign="${choice.campaignName}">
+                <div class="faction-name">${esc(label)}</div>
+                <div class="faction-desc">${esc(choice.description)}</div>
               </button>
-            `).join('')}
+            `;
+            }).join('')}
           </div>
         </div>
         <div class="shell-actions">
@@ -723,7 +781,7 @@ export class GameShell {
       if (target.dataset.action === 'back') {
         this.showScreen('campaign-faction');
       } else if (target.dataset.action === 'start') {
-        this.handleStartCampaign(this.selectedCampaignFaction, this.selectedDifficulty, 'CAMPAIGN');
+        this.showScreen('campaign-briefing');
       }
     });
 
@@ -777,29 +835,40 @@ export class GameShell {
     }
 
     const mission = campaign.missions[0]!;
-    const factionLabel = FACTIONS.find(f => f.campaignName === this.selectedCampaignFaction)?.label ?? campaign.name;
+    const factionLabel = campaign.campaignNameLabel
+      ? this.resolveText(campaign.campaignNameLabel)
+      : (FACTION_BY_CAMPAIGN.get(this.selectedCampaignFaction)?.label ?? campaign.name);
+    const locationLabel = mission.locationNameLabel ? this.resolveText(mission.locationNameLabel) : '';
+    const generalName = mission.generalName ? this.resolveText(mission.generalName) : '';
+    const objectiveLines = mission.objectiveLines
+      .map((objective) => this.resolveText(objective))
+      .filter((objective) => objective.trim().length > 0);
+    const unitNames = mission.unitNames
+      .map((unitName) => this.resolveText(unitName))
+      .filter((unitName) => unitName.trim().length > 0);
 
     let html = `
       <div class="briefing-info">
-        <strong>Campaign:</strong> ${esc(factionLabel)}<br>
-        <strong>Mission:</strong> ${esc(mission.name)}
+        <strong>Campaign:</strong> ${esc(factionLabel)}
     `;
-    if (mission.locationNameLabel) {
-      html += `<br><strong>Location:</strong> ${esc(mission.locationNameLabel)}`;
+    if (locationLabel) {
+      html += `<br><strong>Location:</strong> ${esc(locationLabel)}`;
+    }
+    if (generalName) {
+      html += `<br><strong>Opponent:</strong> ${esc(generalName)}`;
     }
     html += '</div>';
 
-    if (mission.objectiveLines.length > 0) {
-      html += '<div class="briefing-info"><strong>Objectives:</strong></div>';
+    if (objectiveLines.length > 0) {
       html += '<ul class="briefing-objectives">';
-      for (const obj of mission.objectiveLines) {
+      for (const obj of objectiveLines) {
         html += `<li>${esc(obj)}</li>`;
       }
       html += '</ul>';
     }
 
-    if (mission.unitNames.length > 0) {
-      html += `<div class="briefing-info"><strong>Key Units:</strong> ${mission.unitNames.map(esc).join(', ')}</div>`;
+    if (unitNames.length > 0) {
+      html += `<div class="briefing-info"><strong>Key Units:</strong> ${unitNames.map(esc).join(', ')}</div>`;
     }
 
     contentEl.innerHTML = html;
@@ -818,13 +887,13 @@ export class GameShell {
       <div class="shell-panel" style="min-width:480px; max-width:520px;">
         <div class="shell-panel-title">Generals Challenge</div>
         <div class="shell-section">
-          <div class="shell-label">Select Your Opponent</div>
+          <div class="shell-label">Select Your General</div>
           <div class="challenge-grid" data-ref="challenge-grid">
-            ${DEFAULT_PERSONAS.map(g => `
+            ${this.challengePersonas.map(g => `
               <button class="challenge-card${g.index === this.selectedChallengeIndex ? ' selected' : ''}"
                       data-challenge="${g.index}">
                 <span class="general-indicator" style="background:${CHALLENGE_GENERAL_COLORS[g.index] ?? '#888'};"></span>
-                <span class="general-name">${esc(g.name)}</span>
+                <span class="general-name">${esc(this.resolveChallengeName(g))}</span>
                 <div class="general-faction">${esc(g.faction)}</div>
               </button>
             `).join('')}
@@ -869,7 +938,7 @@ export class GameShell {
       if (target.dataset.action === 'back') {
         this.showScreen('single-player');
       } else if (target.dataset.action === 'start') {
-        const general = DEFAULT_PERSONAS[this.selectedChallengeIndex];
+        const general = this.challengePersonas.find((persona) => persona.index === this.selectedChallengeIndex);
         if (general) {
           this.handleStartCampaign(general.campaignName, this.selectedDifficulty, 'CHALLENGE');
         }
@@ -890,7 +959,7 @@ export class GameShell {
 
     // Build map options
     const mapOptionsHtml = this.buildMapOptionsHtml();
-    const creditsOptionsHtml = STARTING_CREDITS_OPTIONS.map(opt =>
+    const creditsOptionsHtml = this.startingCreditsOptions.map(opt =>
       `<option value="${opt.value}"${opt.value === this.startingCredits ? ' selected' : ''}>${opt.label}</option>`,
     ).join('');
 
@@ -1072,13 +1141,11 @@ export class GameShell {
     const mission = campaign.missions.find((m: ShellMission) => m.name === firstMissionName) ?? campaign.missions[0]!;
 
     // Resolve map path
-    const mapParts = mission.mapName.replace(/\\/g, '/').split('/');
-    const mapDir = mapParts.length >= 2 ? mapParts[mapParts.length - 2] : mapParts[0];
-    if (!mapDir) {
+    const mapPath = resolveCampaignMapAssetPath(mission.mapName);
+    if (!mapPath) {
       console.warn(`[GameShell] Mission "${mission.name}" has no valid map path`);
       return;
     }
-    const mapPath = `maps/_extracted/MapsZH/Maps/${mapDir}/${mapDir}.json`;
 
     const settings: CampaignStartSettings = {
       gameMode: mode,

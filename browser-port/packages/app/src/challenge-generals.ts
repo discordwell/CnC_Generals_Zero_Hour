@@ -8,44 +8,65 @@
  * Persists defeated generals to localStorage so progress carries across sessions.
  */
 
-export const NUM_GENERALS = 9;
+import type { IniBlock, IniValue } from '@generals/core';
+import type { IniDataRegistry } from '@generals/ini-data';
 
 export interface GeneralPersona {
   index: number;
+  startsEnabled: boolean;
   name: string;
   faction: string;
+  bioNameLabel: string;
   campaignName: string;
   playerTemplateName: string;
+  bioPortraitSmallName: string;
+  bioPortraitLargeName: string;
   portraitMovieLeftName: string;
   portraitMovieRightName: string;
+  defeatedImageName: string;
+  victoriousImageName: string;
+  defeatedStringLabel: string;
+  victoriousStringLabel: string;
   selectionSound: string;
   tauntSounds: string[];
   winSound: string;
   lossSound: string;
+  previewSound: string;
+  nameSound: string;
 }
 
 /** Single source of truth for general persona data. */
 export const DEFAULT_PERSONAS: readonly GeneralPersona[] = [
-  { index: 0, name: 'General Granger', faction: 'USA Air Force', campaignName: 'challenge_0', playerTemplateName: 'FactionAmericaAirForceGeneral', portraitMovieLeftName: 'PortraitAirGenLeft', portraitMovieRightName: 'PortraitAirGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 1, name: 'Dr. Thrax', faction: 'GLA Toxin', campaignName: 'challenge_1', playerTemplateName: 'FactionGLAToxinGeneral', portraitMovieLeftName: 'PortraitDrThraxLeft', portraitMovieRightName: 'PortraitDrThraxRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 2, name: 'General Tao', faction: 'China Nuclear', campaignName: 'challenge_2', playerTemplateName: 'FactionChinaNukeGeneral', portraitMovieLeftName: 'PortraitNukeGenLeft', portraitMovieRightName: 'PortraitNukeGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 3, name: 'General Alexander', faction: 'USA Super Weapons', campaignName: 'challenge_3', playerTemplateName: 'FactionAmericaSuperWeaponGeneral', portraitMovieLeftName: 'PortraitSuperGenLeft', portraitMovieRightName: 'PortraitSuperGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 4, name: 'General Kwai', faction: 'China Tank', campaignName: 'challenge_4', playerTemplateName: 'FactionChinaTankGeneral', portraitMovieLeftName: 'PortraitTankGenLeft', portraitMovieRightName: 'PortraitTankGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 5, name: 'General Townes', faction: 'USA Laser', campaignName: 'challenge_5', playerTemplateName: 'FactionAmericaLaserGeneral', portraitMovieLeftName: 'PortraitLaserGenLeft', portraitMovieRightName: 'PortraitLaserGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 6, name: 'Prince Kassad', faction: 'GLA Stealth', campaignName: 'challenge_6', playerTemplateName: 'FactionGLAStealthGeneral', portraitMovieLeftName: 'PortraitStealthGenLeft', portraitMovieRightName: 'PortraitStealthGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 7, name: 'General Fai', faction: 'China Infantry', campaignName: 'challenge_7', playerTemplateName: 'FactionChinaInfantryGeneral', portraitMovieLeftName: 'PortraitInfantryGenLeft', portraitMovieRightName: 'PortraitInfantryGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
-  { index: 8, name: 'General Leang', faction: 'Boss General', campaignName: 'challenge_8', playerTemplateName: 'FactionBossGeneral', portraitMovieLeftName: 'PortraitBossGenLeft', portraitMovieRightName: 'PortraitBossGenRight', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '' },
+  { index: 0, startsEnabled: true, name: 'General Granger', faction: 'USA Air Force', bioNameLabel: '', campaignName: 'challenge_0', playerTemplateName: 'FactionAmericaAirForceGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitAirGenLeft', portraitMovieRightName: 'PortraitAirGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 1, startsEnabled: true, name: 'Dr. Thrax', faction: 'GLA Toxin', bioNameLabel: '', campaignName: 'challenge_1', playerTemplateName: 'FactionGLAToxinGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitDrThraxLeft', portraitMovieRightName: 'PortraitDrThraxRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 2, startsEnabled: true, name: 'General Tao', faction: 'China Nuclear', bioNameLabel: '', campaignName: 'challenge_2', playerTemplateName: 'FactionChinaNukeGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitNukeGenLeft', portraitMovieRightName: 'PortraitNukeGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 3, startsEnabled: true, name: 'General Alexander', faction: 'USA Super Weapons', bioNameLabel: '', campaignName: 'challenge_3', playerTemplateName: 'FactionAmericaSuperWeaponGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitSuperGenLeft', portraitMovieRightName: 'PortraitSuperGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 4, startsEnabled: true, name: 'General Kwai', faction: 'China Tank', bioNameLabel: '', campaignName: 'challenge_4', playerTemplateName: 'FactionChinaTankGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitTankGenLeft', portraitMovieRightName: 'PortraitTankGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 5, startsEnabled: true, name: 'General Townes', faction: 'USA Laser', bioNameLabel: '', campaignName: 'challenge_5', playerTemplateName: 'FactionAmericaLaserGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitLaserGenLeft', portraitMovieRightName: 'PortraitLaserGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 6, startsEnabled: true, name: 'Prince Kassad', faction: 'GLA Stealth', bioNameLabel: '', campaignName: 'challenge_6', playerTemplateName: 'FactionGLAStealthGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitStealthGenLeft', portraitMovieRightName: 'PortraitStealthGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 7, startsEnabled: true, name: 'General Fai', faction: 'China Infantry', bioNameLabel: '', campaignName: 'challenge_7', playerTemplateName: 'FactionChinaInfantryGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitInfantryGenLeft', portraitMovieRightName: 'PortraitInfantryGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
+  { index: 8, startsEnabled: true, name: 'GLA Demolition General', faction: 'GLA Demolition General', bioNameLabel: '', campaignName: 'challenge_8', playerTemplateName: 'FactionGLADemolitionGeneral', bioPortraitSmallName: '', bioPortraitLargeName: '', portraitMovieLeftName: 'PortraitDemolitionGenLeft', portraitMovieRightName: 'PortraitDemolitionGenRight', defeatedImageName: '', victoriousImageName: '', defeatedStringLabel: '', victoriousStringLabel: '', selectionSound: '', tauntSounds: [], winSound: '', lossSound: '', previewSound: '', nameSound: '' },
 ];
+
+export const NUM_GENERALS = DEFAULT_PERSONAS.length;
+
+const DEFAULT_PERSONA_BY_CAMPAIGN = new Map(
+  DEFAULT_PERSONAS.map((persona) => [persona.campaignName.toLowerCase(), persona] as const),
+);
+const DEFAULT_PERSONA_BY_TEMPLATE = new Map(
+  DEFAULT_PERSONAS.map((persona) => [persona.playerTemplateName, persona] as const),
+);
 
 const STORAGE_KEY = 'generals_challenge_progress';
 
 export class ChallengeGenerals {
-  private personas: GeneralPersona[] = [...DEFAULT_PERSONAS];
+  private personas: GeneralPersona[];
   private defeatedIndices = new Set<number>();
   private currentPlayerTemplateNum = 0;
   private storage: Storage | null = null;
 
-  constructor(storage?: Storage | null) {
+  constructor(storage?: Storage | null, personas: readonly GeneralPersona[] = DEFAULT_PERSONAS) {
+    this.personas = [...personas];
     this.storage = storage ?? null;
     this.loadProgress();
   }
@@ -64,6 +85,10 @@ export class ChallengeGenerals {
 
   getPersonaByTemplateName(name: string): GeneralPersona | null {
     return this.personas.find(p => p.playerTemplateName === name) ?? null;
+  }
+
+  getEnabledPersonas(): readonly GeneralPersona[] {
+    return this.personas.filter((persona) => persona.startsEnabled);
   }
 
   isDefeated(index: number): boolean {
@@ -94,13 +119,14 @@ export class ChallengeGenerals {
 
   private loadProgress(): void {
     if (!this.storage) return;
+    const personaIndices = new Set(this.personas.map((persona) => persona.index));
     try {
       const raw = this.storage.getItem(STORAGE_KEY);
       if (raw) {
         const data = JSON.parse(raw);
         if (Array.isArray(data.defeated)) {
           for (const idx of data.defeated) {
-            if (typeof idx === 'number' && idx >= 0 && idx < NUM_GENERALS) {
+            if (typeof idx === 'number' && personaIndices.has(idx)) {
               this.defeatedIndices.add(idx);
             }
           }
@@ -122,4 +148,139 @@ export class ChallengeGenerals {
       // Storage may be full or unavailable
     }
   }
+}
+
+/**
+ * Source parity:
+ *   GeneralsMD/Code/GameEngine/Source/GameClient/GUI/ChallengeGenerals.cpp
+ */
+export function buildChallengePersonasFromRegistry(
+  iniDataRegistry: IniDataRegistry,
+): GeneralPersona[] {
+  const challengeBlocks = iniDataRegistry.getChallengeGeneralsBlocks();
+  const sourceBlock = challengeBlocks[challengeBlocks.length - 1];
+  if (!sourceBlock) {
+    return [...DEFAULT_PERSONAS];
+  }
+
+  const personas = sourceBlock.blocks
+    .map((block) => buildChallengePersonaFromBlock(block))
+    .filter((persona): persona is GeneralPersona => persona !== null)
+    .sort((a, b) => a.index - b.index);
+
+  return personas.length > 0 ? personas : [...DEFAULT_PERSONAS];
+}
+
+export function getEnabledChallengePersonas(personas: readonly GeneralPersona[]): GeneralPersona[] {
+  return personas.filter((persona) =>
+    persona.startsEnabled && persona.campaignName.length > 0 && persona.campaignName.toLowerCase() !== 'unimplemented',
+  );
+}
+
+function buildChallengePersonaFromBlock(block: IniBlock): GeneralPersona | null {
+  const match = /^GeneralPersona(\d+)$/i.exec(block.type);
+  if (!match) {
+    return null;
+  }
+
+  const index = Number(match[1]);
+  if (!Number.isInteger(index) || index < 0) {
+    return null;
+  }
+
+  const campaignName = extractString(block.fields['Campaign'])?.toLowerCase() ?? '';
+  const playerTemplateName = extractString(block.fields['PlayerTemplate']) ?? '';
+  const fallbackPersona =
+    DEFAULT_PERSONA_BY_CAMPAIGN.get(campaignName)
+    ?? DEFAULT_PERSONA_BY_TEMPLATE.get(playerTemplateName)
+    ?? DEFAULT_PERSONAS[index];
+
+  const name = fallbackPersona?.name
+    ?? humanizePlayerTemplateName(playerTemplateName)
+    ?? extractString(block.fields['BioNameString'])
+    ?? `GeneralPersona${index}`;
+  const faction = fallbackPersona?.faction
+    ?? humanizePlayerTemplateName(playerTemplateName)
+    ?? playerTemplateName
+    ?? `GeneralPersona${index}`;
+
+  return {
+    index,
+    startsEnabled: extractBoolean(block.fields['StartsEnabled']) ?? false,
+    name,
+    faction,
+    bioNameLabel: extractString(block.fields['BioNameString']) ?? '',
+    campaignName,
+    playerTemplateName,
+    bioPortraitSmallName: normalizeSourceToken(extractString(block.fields['BioPortraitSmall'])) ?? '',
+    bioPortraitLargeName: normalizeSourceToken(extractString(block.fields['BioPortraitLarge'])) ?? '',
+    portraitMovieLeftName: normalizeSourceToken(extractString(block.fields['PortraitMovieLeftName'])) ?? '',
+    portraitMovieRightName: normalizeSourceToken(extractString(block.fields['PortraitMovieRightName'])) ?? '',
+    defeatedImageName: normalizeSourceToken(extractString(block.fields['DefeatedImage'])) ?? '',
+    victoriousImageName: normalizeSourceToken(extractString(block.fields['VictoriousImage'])) ?? '',
+    defeatedStringLabel: extractString(block.fields['DefeatedString']) ?? '',
+    victoriousStringLabel: extractString(block.fields['VictoriousString']) ?? '',
+    selectionSound: normalizeSourceToken(extractString(block.fields['SelectionSound'])) ?? '',
+    tauntSounds: [
+      normalizeSourceToken(extractString(block.fields['TauntSound1'])),
+      normalizeSourceToken(extractString(block.fields['TauntSound2'])),
+      normalizeSourceToken(extractString(block.fields['TauntSound3'])),
+    ].filter((value): value is string => Boolean(value)),
+    winSound: normalizeSourceToken(extractString(block.fields['WinSound'])) ?? '',
+    lossSound: normalizeSourceToken(extractString(block.fields['LossSound'])) ?? '',
+    previewSound: normalizeSourceToken(extractString(block.fields['PreviewSound'])) ?? '',
+    nameSound: normalizeSourceToken(extractString(block.fields['NameSound'])) ?? '',
+  };
+}
+
+function extractString(value: IniValue | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function extractBoolean(value: IniValue | undefined): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === 'yes' || normalized === '1') {
+      return true;
+    }
+    if (normalized === 'false' || normalized === 'no' || normalized === '0') {
+      return false;
+    }
+  }
+  return undefined;
+}
+
+function normalizeSourceToken(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.toLowerCase() === 'none' || normalized.toLowerCase() === 'unimplemented') {
+    return undefined;
+  }
+  return normalized;
+}
+
+function humanizePlayerTemplateName(playerTemplateName: string): string | undefined {
+  const normalized = playerTemplateName.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const withoutPrefix = normalized.replace(/^Faction/, '');
+  const tokens = withoutPrefix
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^America\b/, 'USA')
+    .replace(/^GLA\b/, 'GLA')
+    .trim();
+  return tokens.length > 0 ? tokens : undefined;
 }

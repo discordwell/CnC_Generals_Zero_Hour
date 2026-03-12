@@ -92,6 +92,12 @@ import { GameShell, type SkirmishSettings, type CampaignStartSettings } from './
 import { CampaignManager } from '@generals/game-logic';
 import { VideoPlayer } from './video-player.js';
 import {
+  buildChallengePersonasFromRegistry,
+  getEnabledChallengePersonas,
+} from './challenge-generals.js';
+import { buildStartingCreditsOptionsFromRegistry } from './shell-runtime-data.js';
+import { loadLocalizationStrings } from './localization.js';
+import {
   OptionsScreen,
   saveOptionsToStorage,
   loadOptionsState,
@@ -3343,6 +3349,11 @@ async function init(): Promise<void> {
     console.warn('Video.ini not available, movie playback disabled:', err);
   }
 
+  const localizedStrings = await loadLocalizationStrings(ctx.assets, [
+    'localization/EnglishZH/Data/English/generals.json',
+    'localization/W3DEnglishZH/Data/English/generals.json',
+  ]);
+
   const shell = new GameShell(gameContainer, {
     onStartGame: async (settings: SkirmishSettings) => {
       shell.hide();
@@ -3372,6 +3383,13 @@ async function init(): Promise<void> {
     shell.setAvailableMaps(manifest.getOutputPaths());
   }
   shell.setCampaigns(campaignManager.getCampaigns());
+  shell.setChallengePersonas(
+    getEnabledChallengePersonas(buildChallengePersonasFromRegistry(ctx.iniDataRegistry)),
+  );
+  shell.setLocalizedStrings(localizedStrings);
+  shell.setStartingCreditsOptions(
+    buildStartingCreditsOptionsFromRegistry(ctx.iniDataRegistry),
+  );
 
   shell.show();
 }

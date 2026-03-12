@@ -1,5 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { CampaignManager, parseCampaignIni, type Campaign } from './campaign-manager.js';
+import {
+  CampaignManager,
+  parseCampaignIni,
+  resolveCampaignMapAssetPath,
+  type Campaign,
+} from './campaign-manager.js';
 
 const MINIMAL_CAMPAIGN_INI = `
 Campaign USA
@@ -61,6 +68,35 @@ Campaign TRAINING
   END
 END
 `;
+
+const RETAIL_ASSETS_ROOT = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  'app',
+  'public',
+  'assets',
+);
+const RETAIL_CAMPAIGN_INI_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  '_extracted',
+  'INIZH',
+  'Data',
+  'INI',
+  'Campaign.ini',
+);
+const RETAIL_MANIFEST_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  'manifest.json',
+);
+const RETAIL_LOCALIZATION_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  'localization',
+  'EnglishZH',
+  'Data',
+  'English',
+  'generals.json',
+);
 
 describe('parseCampaignIni', () => {
   it('parses campaigns from INI text', () => {
@@ -275,5 +311,118 @@ describe('CampaignManager', () => {
     const training = mgr.getTrainingCampaign();
     expect(training).not.toBeNull();
     expect(training!.name).toBe('training');
+  });
+
+  it('filters retail story campaigns to usa, gla, and china only', () => {
+    if (!fs.existsSync(RETAIL_CAMPAIGN_INI_PATH)) {
+      return;
+    }
+
+    const mgr = new CampaignManager();
+    mgr.init(fs.readFileSync(RETAIL_CAMPAIGN_INI_PATH, 'utf8'));
+
+    expect(mgr.getStoryCampaigns().map((campaign) => campaign.name).sort()).toEqual([
+      'china',
+      'gla',
+      'usa',
+    ]);
+  });
+
+  it('certifies retail campaign missions resolve to shipped map assets and valid next-mission links', () => {
+    if (!fs.existsSync(RETAIL_CAMPAIGN_INI_PATH) || !fs.existsSync(RETAIL_MANIFEST_PATH)) {
+      return;
+    }
+
+    const campaigns = parseCampaignIni(fs.readFileSync(RETAIL_CAMPAIGN_INI_PATH, 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(RETAIL_MANIFEST_PATH, 'utf8')) as {
+      entries: Array<{ outputPath: string }>;
+    };
+    const manifestOutputPaths = new Set(manifest.entries.map((entry) => entry.outputPath));
+
+    expect(campaigns).toHaveLength(17);
+    const missingMapAssets: Array<{ campaign: string; mission: string; mapPath: string }> = [];
+
+    for (const campaign of campaigns) {
+      expect(campaign.missions.length, `campaign "${campaign.name}" should contain missions`).toBeGreaterThan(0);
+      expect(
+        campaign.missions.some((mission) => mission.name === campaign.firstMission),
+        `campaign "${campaign.name}" should resolve first mission "${campaign.firstMission}"`,
+      ).toBe(true);
+
+      const missionNames = new Set(campaign.missions.map((mission) => mission.name));
+      for (const mission of campaign.missions) {
+        const mapPath = resolveCampaignMapAssetPath(mission.mapName);
+        expect(mapPath, `mission "${campaign.name}:${mission.name}" should resolve an asset path`).not.toBeNull();
+        if (
+          !campaign.name.endsWith('_demo')
+          && (!manifestOutputPaths.has(mapPath!) || !fs.existsSync(path.join(RETAIL_ASSETS_ROOT, mapPath!)))
+        ) {
+          missingMapAssets.push({
+            campaign: campaign.name,
+            mission: mission.name,
+            mapPath: mapPath!,
+          });
+        }
+
+        if (mission.nextMission) {
+          expect(
+            missionNames.has(mission.nextMission),
+            `mission "${campaign.name}:${mission.name}" should link to existing next mission "${mission.nextMission}"`,
+          ).toBe(true);
+        }
+      }
+    }
+
+    expect(missingMapAssets).toEqual([
+      {
+        campaign: 'training',
+        mission: 'mission01',
+        mapPath: 'maps/_extracted/MapsZH/Maps/Training01/Training01.json',
+      },
+    ]);
+  });
+
+  it('certifies retail campaign display labels exist for non-demo missions', () => {
+    if (!fs.existsSync(RETAIL_CAMPAIGN_INI_PATH) || !fs.existsSync(RETAIL_LOCALIZATION_PATH)) {
+      return;
+    }
+
+    const campaigns = parseCampaignIni(fs.readFileSync(RETAIL_CAMPAIGN_INI_PATH, 'utf8'));
+    const localizedEntries = (
+      JSON.parse(fs.readFileSync(RETAIL_LOCALIZATION_PATH, 'utf8')) as {
+        entries: Record<string, { text: string }>;
+      }
+    ).entries;
+
+    const labels = new Set<string>();
+    for (const campaign of campaigns) {
+      if (campaign.name.endsWith('_demo')) {
+        continue;
+      }
+      if (campaign.campaignNameLabel) {
+        labels.add(campaign.campaignNameLabel);
+      }
+      for (const mission of campaign.missions) {
+        if (mission.locationNameLabel) {
+          labels.add(mission.locationNameLabel);
+        }
+        if (mission.generalName) {
+          labels.add(mission.generalName);
+        }
+        for (const objectiveLine of mission.objectiveLines) {
+          if (objectiveLine) {
+            labels.add(objectiveLine);
+          }
+        }
+        for (const unitName of mission.unitNames) {
+          if (unitName) {
+            labels.add(unitName);
+          }
+        }
+      }
+    }
+
+    const missingLabels = [...labels].filter((label) => !(localizedEntries[label]?.text.length > 0));
+    expect(missingLabels).toEqual([]);
   });
 });
