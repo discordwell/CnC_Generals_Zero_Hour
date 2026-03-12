@@ -26,9 +26,6 @@ const SCIENCE_EVAL_INTERVAL = 150;  // ~10 seconds
 const DOZER_EVAL_INTERVAL = 60;     // ~4 seconds
 const SPECIAL_POWER_EVAL_INTERVAL = 60; // ~4 seconds
 
-// ──── Resource thresholds (source parity: AIData.ini) ────────────────────────
-const RESOURCES_POOR_THRESHOLD = 500;
-const RESOURCES_WEALTHY_THRESHOLD = 3000;
 const MIN_ATTACK_FORCE = 4;
 const DESIRED_HARVESTERS = 2;
 const RETREAT_HEALTH_RATIO = 0.25;
@@ -56,6 +53,10 @@ export interface AIEntity {
 export interface SkirmishAIContext<TEntity extends AIEntity> {
   readonly frameCounter: number;
   readonly spawnedEntities: ReadonlyMap<number, TEntity>;
+  readonly aiConfig: {
+    readonly resourcesPoor: number;
+    readonly resourcesWealthy: number;
+  };
 
   /** Get credits for a side. */
   getSideCredits(side: string): number;
@@ -163,6 +164,18 @@ export interface SkirmishAIState {
   rallyPointEntities: Set<number>;
   /** Last frame special powers were evaluated. */
   lastSpecialPowerFrame: number;
+}
+
+function getResourcesPoorThreshold<TEntity extends AIEntity>(
+  context: SkirmishAIContext<TEntity>,
+): number {
+  return context.aiConfig.resourcesPoor;
+}
+
+function getResourcesWealthyThreshold<TEntity extends AIEntity>(
+  context: SkirmishAIContext<TEntity>,
+): number {
+  return context.aiConfig.resourcesWealthy;
 }
 
 export function createSkirmishAIState(side: string): SkirmishAIState {
@@ -536,7 +549,7 @@ function evaluateProduction<TEntity extends AIEntity>(
   context: SkirmishAIContext<TEntity>,
 ): void {
   const credits = context.getSideCredits(state.side);
-  if (credits < RESOURCES_POOR_THRESHOLD) {
+  if (credits < getResourcesPoorThreshold(context)) {
     return; // Save money.
   }
 
@@ -562,7 +575,7 @@ function evaluateProduction<TEntity extends AIEntity>(
   }
 
   // Source parity: AI builds more aggressively when wealthy.
-  const desiredUnits = credits >= RESOURCES_WEALTHY_THRESHOLD ? 12 : 8;
+  const desiredUnits = credits >= getResourcesWealthyThreshold(context) ? 12 : 8;
 
   if (combatUnits.length >= desiredUnits) {
     return; // Have enough.
@@ -570,7 +583,7 @@ function evaluateProduction<TEntity extends AIEntity>(
 
   // Queue units at idle factories.
   for (const factory of factories) {
-    if (credits < RESOURCES_POOR_THRESHOLD) {
+    if (credits < getResourcesPoorThreshold(context)) {
       break;
     }
 
@@ -785,7 +798,7 @@ function evaluateStructures<TEntity extends AIEntity>(
   context: SkirmishAIContext<TEntity>,
 ): void {
   const credits = context.getSideCredits(state.side);
-  if (credits < RESOURCES_POOR_THRESHOLD) return;
+  if (credits < getResourcesPoorThreshold(context)) return;
 
   const dozers = context.getDozers(state.side);
   if (dozers.length === 0) return;
@@ -841,7 +854,7 @@ function evaluateStructures<TEntity extends AIEntity>(
   }
 
   // If we've built everything in the order, try to build additional defenses when wealthy.
-  if (dozerIndex < idleDozers.length && credits >= RESOURCES_WEALTHY_THRESHOLD) {
+  if (dozerIndex < idleDozers.length && credits >= getResourcesWealthyThreshold(context)) {
     const dozer = idleDozers[dozerIndex]!;
     const buildable = context.getBuildableStructures(dozer);
     const defenseTemplate = buildable.find((name) => {
@@ -1061,7 +1074,7 @@ function evaluateUpgrades<TEntity extends AIEntity>(
   if (!context.getResearchableUpgrades || !context.hasUpgradeCompleted) return;
 
   const credits = context.getSideCredits(state.side);
-  if (credits < RESOURCES_POOR_THRESHOLD) return;
+  if (credits < getResourcesPoorThreshold(context)) return;
 
   // Find buildings with idle production queues.
   const buildings = collectEntitiesBySide(

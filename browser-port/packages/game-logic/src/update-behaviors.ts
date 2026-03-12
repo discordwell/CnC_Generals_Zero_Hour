@@ -9,8 +9,6 @@
 import { addExperiencePoints as addExperiencePointsImpl, LEVEL_REGULAR, LEVEL_HEROIC } from './experience.js';
 import { depositSideCredits as depositSideCreditsImpl } from './side-credits.js';
 import {
-  GUARD_CHASE_UNIT_FRAMES,
-  GUARD_ENEMY_SCAN_RATE_FRAMES,
   LOGIC_FRAME_RATE,
   PATHFIND_CELL_SIZE,
   RELATIONSHIP_ALLIES,
@@ -781,7 +779,7 @@ export function updateGuardIdle(self: GL, entity: MapEntity, anchor: { x: number
       const followThreshold = PATHFIND_CELL_SIZE * 4;
       if (dx * dx + dz * dz > followThreshold * followThreshold) {
         entity.guardState = 'RETURNING';
-        entity.guardNextScanFrame = self.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+        entity.guardNextScanFrame = self.frameCounter + self.getGuardEnemyReturnScanRateFrames();
         self.issueMoveTo(entity.id, anchor.x, anchor.z);
         return;
       }
@@ -791,7 +789,7 @@ export function updateGuardIdle(self: GL, entity: MapEntity, anchor: { x: number
     if (self.frameCounter < entity.guardNextScanFrame) {
       return;
     }
-    entity.guardNextScanFrame = self.frameCounter + GUARD_ENEMY_SCAN_RATE_FRAMES;
+    entity.guardNextScanFrame = self.frameCounter + self.getGuardEnemyScanRateFrames();
 
     // Source parity: stealthed guarders don't auto-acquire.
     if (entity.objectStatusFlags.has('STEALTHED')) {
@@ -806,7 +804,7 @@ export function updateGuardIdle(self: GL, entity: MapEntity, anchor: { x: number
     if (target) {
       // Source parity: GUARDMODE_GUARD_WITHOUT_PURSUIT — attack only within inner range, don't chase.
       entity.guardState = 'PURSUING';
-      entity.guardChaseExpireFrame = self.frameCounter + GUARD_CHASE_UNIT_FRAMES;
+      entity.guardChaseExpireFrame = self.frameCounter + self.getGuardChaseUnitFrames();
       self.issueAttackEntity(entity.id, target.id, 'AI');
     }
 }
@@ -852,7 +850,7 @@ export function updateGuardPursuing(self: GL, entity: MapEntity, anchor: { x: nu
 
     if (targetDistSqr <= innerRangeSqr) {
       // Target is in inner range — fight indefinitely, reset chase timer.
-      entity.guardChaseExpireFrame = self.frameCounter + GUARD_CHASE_UNIT_FRAMES;
+      entity.guardChaseExpireFrame = self.frameCounter + self.getGuardChaseUnitFrames();
       return;
     }
 
@@ -862,7 +860,7 @@ export function updateGuardPursuing(self: GL, entity: MapEntity, anchor: { x: nu
       return;
     }
 
-    if (GUARD_CHASE_UNIT_FRAMES > 0 && self.frameCounter >= entity.guardChaseExpireFrame) {
+    if (self.getGuardChaseUnitFrames() > 0 && self.frameCounter >= entity.guardChaseExpireFrame) {
       self.transitionGuardToReturning(entity, anchor);
       return;
     }
@@ -882,7 +880,7 @@ export function updateGuardReturning(self: GL, entity: MapEntity, anchor: { x: n
       const arrivalThreshold = PATHFIND_CELL_SIZE * 2;
       if (dx * dx + dz * dz <= arrivalThreshold * arrivalThreshold) {
         entity.guardState = 'IDLE';
-        entity.guardNextScanFrame = self.frameCounter + GUARD_ENEMY_SCAN_RATE_FRAMES;
+        entity.guardNextScanFrame = self.frameCounter + self.getGuardEnemyScanRateFrames();
         return;
       }
       // Not moving but not at guard point — re-issue move.
@@ -893,7 +891,7 @@ export function updateGuardReturning(self: GL, entity: MapEntity, anchor: { x: n
     if (self.frameCounter < entity.guardNextScanFrame) {
       return;
     }
-    entity.guardNextScanFrame = self.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardNextScanFrame = self.frameCounter + self.getGuardEnemyReturnScanRateFrames();
 
     if (entity.objectStatusFlags.has('STEALTHED') || !entity.attackWeapon) {
       return;
@@ -902,7 +900,7 @@ export function updateGuardReturning(self: GL, entity: MapEntity, anchor: { x: n
     const target = self.findGuardTarget(entity, anchor.x, anchor.z, entity.guardInnerRange);
     if (target) {
       entity.guardState = 'PURSUING';
-      entity.guardChaseExpireFrame = self.frameCounter + GUARD_CHASE_UNIT_FRAMES;
+      entity.guardChaseExpireFrame = self.frameCounter + self.getGuardChaseUnitFrames();
       self.issueAttackEntity(entity.id, target.id, 'AI');
     }
 }
@@ -915,7 +913,7 @@ export function updateGuardReturning(self: GL, entity: MapEntity, anchor: { x: n
 export function transitionGuardToReturning(self: GL, entity: MapEntity, anchor: { x: number; z: number }): void {
     self.clearAttackTarget(entity.id);
     entity.guardState = 'RETURNING';
-    entity.guardNextScanFrame = self.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardNextScanFrame = self.frameCounter + self.getGuardEnemyReturnScanRateFrames();
     self.issueMoveTo(entity.id, anchor.x, anchor.z);
 }
 

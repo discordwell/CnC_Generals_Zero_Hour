@@ -1087,9 +1087,12 @@ End
   Side = America
 End
 
-AI
+AIData
   AttackUsesLineOfSight = no
   SkirmishBaseDefenseExtraDistance = 37.5
+  Poor = 2000
+  Wealthy = 7000
+  GuardEnemyScanRate = 500
 End
 `);
 
@@ -1108,6 +1111,9 @@ End
       ));
       expect(gameBundle.ai?.attackUsesLineOfSight).toBe(false);
       expect(gameBundle.ai?.skirmishBaseDefenseExtraDistance).toBeCloseTo(37.5);
+      expect(gameBundle.ai?.resourcesPoor).toBe(2000);
+      expect(gameBundle.ai?.resourcesWealthy).toBe(7000);
+      expect(gameBundle.ai?.guardEnemyScanRateFrames).toBe(15);
 
       const runtimeManifestText = readFileSync(
         resolve(outputDir, RUNTIME_MANIFEST_FILE),
@@ -1134,13 +1140,22 @@ End
         objects: unknown[];
         weapons: unknown[];
         stats: { objects: number; weapons: number };
-        ai?: { attackUsesLineOfSight?: boolean; skirmishBaseDefenseExtraDistance?: number };
+        ai?: {
+          attackUsesLineOfSight?: boolean;
+          skirmishBaseDefenseExtraDistance?: number;
+          resourcesPoor?: number;
+          resourcesWealthy?: number;
+          guardEnemyScanRateFrames?: number;
+        };
       };
       expect(bundle.objects).toHaveLength(1);
       expect(bundle.stats.objects).toBe(1);
       expect(bundle.stats.weapons).toBe(0);
       expect(bundle.ai?.attackUsesLineOfSight).toBe(false);
       expect(bundle.ai?.skirmishBaseDefenseExtraDistance).toBeCloseTo(37.5);
+      expect(bundle.ai?.resourcesPoor).toBe(2000);
+      expect(bundle.ai?.resourcesWealthy).toBe(7000);
+      expect(bundle.ai?.guardEnemyScanRateFrames).toBe(15);
     });
   });
 

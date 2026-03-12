@@ -8,6 +8,8 @@
 import type { IniBlock } from '@generals/core';
 import type { InputState } from '@generals/input';
 import {
+  DEFAULT_AI_CONFIG,
+  type AiConfig,
   type AudioEventDef,
   type ArmorDef,
   type CommandButtonDef,
@@ -171,10 +173,7 @@ export function makeBundle(params: {
   locomotors?: LocomotorDef[];
   audioEvents?: AudioEventDef[];
   factions?: FactionDef[];
-  ai?: {
-    attackUsesLineOfSight?: boolean;
-    skirmishBaseDefenseExtraDistance?: number;
-  };
+  ai?: Partial<AiConfig>;
 }): IniDataBundle {
   const weapons = params.weapons ?? [];
   const armors = params.armors ?? [];
@@ -199,7 +198,7 @@ export function makeBundle(params: {
     locomotors,
     audioEvents,
     ai: {
-      attackUsesLineOfSight: true,
+      ...DEFAULT_AI_CONFIG,
       ...params.ai,
     },
     stats: {

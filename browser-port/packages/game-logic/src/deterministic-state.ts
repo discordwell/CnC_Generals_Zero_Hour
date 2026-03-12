@@ -191,6 +191,19 @@ interface GameLogicConfigLike {
   sellPercentage: number;
 }
 
+interface RuntimeAiConfigLike {
+  resourcesPoor: number;
+  resourcesWealthy: number;
+  guardInnerModifierAI: number;
+  guardOuterModifierAI: number;
+  guardInnerModifierHuman: number;
+  guardOuterModifierHuman: number;
+  guardChaseUnitFrames: number;
+  guardEnemyScanRateFrames: number;
+  guardEnemyReturnScanRateFrames: number;
+  skirmishBaseDefenseExtraDistance: number;
+}
+
 interface DeterministicObjectsOwnerSnapshot {
   entitiesInRuntimeOrder: readonly DeterministicMapEntityLike[];
 }
@@ -238,6 +251,7 @@ interface DeterministicAiOwnerSnapshot {
   isAttackMoveToMode: boolean;
   previousAttackMoveToggleDown: boolean;
   scriptInputDisabled: boolean;
+  runtimeAiConfig: RuntimeAiConfigLike;
   config: GameLogicConfigLike;
   commandQueue: readonly GameLogicCommand[];
 }
@@ -495,6 +509,16 @@ function writeDeterministicAiCrc(
   addFloat32Crc(context, crc, aiSnapshot.config.defaultMoveSpeed);
   addFloat32Crc(context, crc, aiSnapshot.config.terrainSnapSpeed);
   addFloat32Crc(context, crc, aiSnapshot.config.sellPercentage);
+  crc.addUnsignedInt(Math.trunc(aiSnapshot.runtimeAiConfig.resourcesPoor) >>> 0);
+  crc.addUnsignedInt(Math.trunc(aiSnapshot.runtimeAiConfig.resourcesWealthy) >>> 0);
+  addFloat32Crc(context, crc, aiSnapshot.runtimeAiConfig.guardInnerModifierAI);
+  addFloat32Crc(context, crc, aiSnapshot.runtimeAiConfig.guardOuterModifierAI);
+  addFloat32Crc(context, crc, aiSnapshot.runtimeAiConfig.guardInnerModifierHuman);
+  addFloat32Crc(context, crc, aiSnapshot.runtimeAiConfig.guardOuterModifierHuman);
+  crc.addUnsignedInt(Math.trunc(aiSnapshot.runtimeAiConfig.guardChaseUnitFrames) >>> 0);
+  crc.addUnsignedInt(Math.trunc(aiSnapshot.runtimeAiConfig.guardEnemyScanRateFrames) >>> 0);
+  crc.addUnsignedInt(Math.trunc(aiSnapshot.runtimeAiConfig.guardEnemyReturnScanRateFrames) >>> 0);
+  addFloat32Crc(context, crc, aiSnapshot.runtimeAiConfig.skirmishBaseDefenseExtraDistance);
 
   crc.addUnsignedInt(aiSnapshot.commandQueue.length >>> 0);
   for (const command of aiSnapshot.commandQueue) {

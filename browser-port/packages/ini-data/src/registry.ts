@@ -167,7 +167,38 @@ export interface RegistryError {
 export interface AiConfig {
   attackUsesLineOfSight?: boolean;
   skirmishBaseDefenseExtraDistance?: number;
+  resourcesWealthy?: number;
+  resourcesPoor?: number;
+  guardInnerModifierAI?: number;
+  guardOuterModifierAI?: number;
+  guardInnerModifierHuman?: number;
+  guardOuterModifierHuman?: number;
+  /** Source parity: INI::parseDurationUnsignedInt stores duration fields as logic frames. */
+  guardChaseUnitFrames?: number;
+  /** Source parity: INI::parseDurationUnsignedInt stores duration fields as logic frames. */
+  guardEnemyScanRateFrames?: number;
+  /** Source parity: INI::parseDurationUnsignedInt stores duration fields as logic frames. */
+  guardEnemyReturnScanRateFrames?: number;
 }
+
+/**
+ * Source parity: Zero Hour `Data/INI/Default/AIData.ini`.
+ * Duration fields are normalized to logic frames the same way the retail
+ * loader stores them after `parseDurationUnsignedInt`.
+ */
+export const DEFAULT_AI_CONFIG: Required<AiConfig> = {
+  attackUsesLineOfSight: true,
+  skirmishBaseDefenseExtraDistance: 150,
+  resourcesWealthy: 7000,
+  resourcesPoor: 2000,
+  guardInnerModifierAI: 1.1,
+  guardOuterModifierAI: 1.333,
+  guardInnerModifierHuman: 1.8,
+  guardOuterModifierHuman: 2.2,
+  guardChaseUnitFrames: 300,
+  guardEnemyScanRateFrames: 15,
+  guardEnemyReturnScanRateFrames: 30,
+};
 
 /**
  * Source parity: WeaponBonusSet::parseWeaponBonusSet — a single entry from
@@ -912,14 +943,8 @@ export class IniDataRegistry {
       case 'Body':
       case 'ArmorSet':
       case 'AI':
-        this.ai = {
-          ...this.ai,
-          attackUsesLineOfSight: extractBoolean(block.fields['AttackUsesLineOfSight']) ??
-            this.ai?.attackUsesLineOfSight,
-          skirmishBaseDefenseExtraDistance:
-            extractNumber(block.fields['SkirmishBaseDefenseExtraDistance']) ??
-            this.ai?.skirmishBaseDefenseExtraDistance,
-        };
+      case 'AIData':
+        this.indexAiBlock(block);
         break;
 
       case 'AudioSettings':
@@ -1144,6 +1169,34 @@ export class IniDataRegistry {
     }
     return count;
   }
+
+  private indexAiBlock(block: IniBlock): void {
+    this.ai = {
+      ...this.ai,
+      attackUsesLineOfSight: extractBoolean(block.fields['AttackUsesLineOfSight']) ??
+        this.ai?.attackUsesLineOfSight,
+      skirmishBaseDefenseExtraDistance:
+        extractNumber(block.fields['SkirmishBaseDefenseExtraDistance']) ??
+        this.ai?.skirmishBaseDefenseExtraDistance,
+      resourcesWealthy: extractInteger(block.fields['Wealthy']) ?? this.ai?.resourcesWealthy,
+      resourcesPoor: extractInteger(block.fields['Poor']) ?? this.ai?.resourcesPoor,
+      guardInnerModifierAI:
+        extractNumber(block.fields['GuardInnerModifierAI']) ?? this.ai?.guardInnerModifierAI,
+      guardOuterModifierAI:
+        extractNumber(block.fields['GuardOuterModifierAI']) ?? this.ai?.guardOuterModifierAI,
+      guardInnerModifierHuman:
+        extractNumber(block.fields['GuardInnerModifierHuman']) ?? this.ai?.guardInnerModifierHuman,
+      guardOuterModifierHuman:
+        extractNumber(block.fields['GuardOuterModifierHuman']) ?? this.ai?.guardOuterModifierHuman,
+      guardChaseUnitFrames:
+        extractDurationFrames(block.fields['GuardChaseUnitsDuration']) ?? this.ai?.guardChaseUnitFrames,
+      guardEnemyScanRateFrames:
+        extractDurationFrames(block.fields['GuardEnemyScanRate']) ?? this.ai?.guardEnemyScanRateFrames,
+      guardEnemyReturnScanRateFrames:
+        extractDurationFrames(block.fields['GuardEnemyReturnScanRate']) ??
+        this.ai?.guardEnemyReturnScanRateFrames,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1273,6 +1326,14 @@ function extractInteger(value: IniValue | undefined): number | undefined {
     return undefined;
   }
   return Math.trunc(numberValue);
+}
+
+function extractDurationFrames(value: IniValue | undefined): number | undefined {
+  const durationMs = extractNumber(value);
+  if (durationMs === undefined) {
+    return undefined;
+  }
+  return Math.max(0, Math.ceil(durationMs * 30 / 1000));
 }
 
 function extractPercentToReal(value: IniValue | undefined): number | undefined {

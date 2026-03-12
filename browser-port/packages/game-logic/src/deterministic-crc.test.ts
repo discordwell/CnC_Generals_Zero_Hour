@@ -292,7 +292,7 @@ const CAMPAIGN_PROGRESS_CERTIFICATION_CASES: CampaignProgressCertificationCase[]
   {
     name: 'early',
     totalFrames: 30,
-    checkpointCrcs: [3326828329, 682446428, 2277361881, 566409877, 2799679642, 3738333345],
+    checkpointCrcs: [532536302, 3947061676, 3787563668, 287815004, 87763797, 1833012],
     missionState: {
       missionStage: 5,
       missionTimer: 11,
@@ -315,7 +315,7 @@ const CAMPAIGN_PROGRESS_CERTIFICATION_CASES: CampaignProgressCertificationCase[]
   {
     name: 'mid',
     totalFrames: 75,
-    checkpointCrcs: [3326828329, 682446428, 2277361881, 566409877, 2799679642, 890963251],
+    checkpointCrcs: [532536302, 3947061676, 3787563668, 287815004, 87763797, 2658605446],
     missionState: {
       missionStage: 4,
       missionTimer: -1,
@@ -338,7 +338,7 @@ const CAMPAIGN_PROGRESS_CERTIFICATION_CASES: CampaignProgressCertificationCase[]
   {
     name: 'late',
     totalFrames: 130,
-    checkpointCrcs: [3326828329, 682446428, 2277361881, 566409877, 2799679642, 131125365],
+    checkpointCrcs: [532536302, 3947061676, 3787563668, 287815004, 87763797, 2445339828],
     missionState: {
       missionStage: 4,
       missionTimer: -1,
@@ -393,6 +393,23 @@ describe('GameLogic deterministic CRC ownership', () => {
         entityId: 1,
       });
       subsystem.update(1 / 30);
+      const changed = computeGameLogicCrc(subsystem, 0);
+      expect(changed).not.toBe(baseline);
+    } finally {
+      subsystem.dispose();
+    }
+  });
+
+  it('changes CRC when runtime AI config changes', () => {
+    const subsystem = createSubsystem();
+    try {
+      const baseline = computeGameLogicCrc(subsystem, 0);
+      const privateApi = subsystem as unknown as {
+        runtimeAiConfig: {
+          resourcesPoor: number;
+        };
+      };
+      privateApi.runtimeAiConfig.resourcesPoor = 2001;
       const changed = computeGameLogicCrc(subsystem, 0);
       expect(changed).not.toBe(baseline);
     } finally {
@@ -587,19 +604,19 @@ describe('GameLogic deterministic CRC ownership', () => {
     const replayRun = runCampaignScenarioReplay();
     expect(replayRun.crcTimeline).toEqual(firstRun.crcTimeline);
     expect(firstRun.checkpointCrcs).toEqual([
-      3326828329,
-      682446428,
-      2277361881,
-      566409877,
-      2799679642,
-      2298562280,
-      3219718135,
-      1415531284,
-      2288294176,
-      2625765016,
-      2153533935,
-      1533632425,
-      131125365,
+      532536302,
+      3947061676,
+      3787563668,
+      287815004,
+      87763797,
+      3687428745,
+      2527219569,
+      200616351,
+      4240719575,
+      3658658667,
+      665198263,
+      521097967,
+      2445339828,
     ]);
   });
 
@@ -608,19 +625,19 @@ describe('GameLogic deterministic CRC ownership', () => {
     const replayRun = runDeterministicStressReplay(LONG_STRESS_REPLAY_TOTAL_FRAMES);
     expect(replayRun).toEqual(firstRun);
     expect(LONG_STRESS_REPLAY_CHECKPOINT_FRAMES.map((frame) => firstRun[frame]!)).toEqual([
-      1225492793,
-      301210440,
-      854423820,
-      1707562365,
-      1544119623,
-      1377508217,
-      1404314908,
-      2050936735,
-      4019947829,
-      1252825241,
-      3525645754,
-      1327343843,
-      2873803509,
+      1623710101,
+      1525185761,
+      2892849497,
+      1865992904,
+      1209324037,
+      1458313694,
+      3958406408,
+      3918177966,
+      2422152344,
+      3771358676,
+      1659716550,
+      3655409938,
+      2438125434,
     ]);
   });
 

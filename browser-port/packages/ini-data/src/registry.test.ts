@@ -220,16 +220,36 @@ describe('IniDataRegistry', () => {
       ]);
     });
 
-    it('indexes AI block config values', () => {
+    it('indexes AIData block config values and normalizes durations to frames', () => {
       registry.loadBlocks([
-        makeBlock('AI', 'AI', {
+        makeBlock('AIData', '', {
           AttackUsesLineOfSight: 'no',
           SkirmishBaseDefenseExtraDistance: '25.5',
+          Wealthy: '7000',
+          Poor: '2000',
+          GuardInnerModifierAI: '1.1',
+          GuardOuterModifierAI: '1.333',
+          GuardInnerModifierHuman: '1.8',
+          GuardOuterModifierHuman: '2.2',
+          GuardChaseUnitsDuration: '10000',
+          GuardEnemyScanRate: '500',
+          GuardEnemyReturnScanRate: '1000',
         }),
       ]);
 
-      expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
-      expect(registry.getAiConfig()?.skirmishBaseDefenseExtraDistance).toBeCloseTo(25.5);
+      expect(registry.getAiConfig()).toMatchObject({
+        attackUsesLineOfSight: false,
+        skirmishBaseDefenseExtraDistance: 25.5,
+        resourcesWealthy: 7000,
+        resourcesPoor: 2000,
+        guardInnerModifierAI: 1.1,
+        guardOuterModifierAI: 1.333,
+        guardInnerModifierHuman: 1.8,
+        guardOuterModifierHuman: 2.2,
+        guardChaseUnitFrames: 300,
+        guardEnemyScanRateFrames: 15,
+        guardEnemyReturnScanRateFrames: 30,
+      });
     });
 
     it('indexes AudioSettings runtime fields', () => {
@@ -570,6 +590,15 @@ describe('IniDataRegistry', () => {
         ai: {
           attackUsesLineOfSight: false,
           skirmishBaseDefenseExtraDistance: 12.25,
+          resourcesWealthy: 7000,
+          resourcesPoor: 2000,
+          guardInnerModifierAI: 1.1,
+          guardOuterModifierAI: 1.333,
+          guardInnerModifierHuman: 1.8,
+          guardOuterModifierHuman: 2.2,
+          guardChaseUnitFrames: 300,
+          guardEnemyScanRateFrames: 15,
+          guardEnemyReturnScanRateFrames: 30,
         },
         audioSettings: {
           sampleCount2D: 12,
@@ -605,8 +634,19 @@ describe('IniDataRegistry', () => {
 
       expect(registry.objects.get('TankA')?.side).toBe('America');
       expect(registry.weapons.get('Gun')?.fields['Damage']).toBe(50);
-      expect(registry.getAiConfig()?.attackUsesLineOfSight).toBe(false);
-      expect(registry.getAiConfig()?.skirmishBaseDefenseExtraDistance).toBeCloseTo(12.25);
+      expect(registry.getAiConfig()).toMatchObject({
+        attackUsesLineOfSight: false,
+        skirmishBaseDefenseExtraDistance: 12.25,
+        resourcesWealthy: 7000,
+        resourcesPoor: 2000,
+        guardInnerModifierAI: 1.1,
+        guardOuterModifierAI: 1.333,
+        guardInnerModifierHuman: 1.8,
+        guardOuterModifierHuman: 2.2,
+        guardChaseUnitFrames: 300,
+        guardEnemyScanRateFrames: 15,
+        guardEnemyReturnScanRateFrames: 30,
+      });
       expect(registry.getAudioSettings()).toEqual({
         sampleCount2D: 12,
         sampleCount3D: 36,

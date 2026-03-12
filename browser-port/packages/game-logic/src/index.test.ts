@@ -14037,6 +14037,93 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(attackingCount).toBeGreaterThan(0);
   });
 
+  it('skirmish AI uses AIData resource thresholds for production decisions', () => {
+    const runScenario = (resourcesPoor: number, credits: number): { queueLength: number; producedUnits: number } => {
+      const logic = new GameLogicSubsystem();
+
+      const factoryDef = makeObjectDef('WarFactory', 'America', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        makeBlock('Behavior', 'ProductionUpdate ModuleTag_Production', {
+          MaxQueueEntries: 4,
+        }),
+      ], {
+        CommandSet: 'WarFactoryCommandSet',
+      });
+
+      const tankDef = makeObjectDef('AIBattleTank', 'America', ['VEHICLE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+        makeBlock('Locomotor', 'Locomotor', { Speed: 15 }),
+      ], {
+        BuildCost: 500,
+        BuildTime: 120,
+      });
+
+      const enemyDef = makeObjectDef('EnemyHQ', 'China', ['STRUCTURE'], [
+        makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50000, InitialHealth: 50000 }),
+      ]);
+
+      const registry = makeRegistry(makeBundle({
+        objects: [factoryDef, tankDef, enemyDef],
+        commandButtons: [
+          makeCommandButtonDef('Command_BuildAIBattleTank', {
+            Command: 'UNIT_BUILD',
+            Object: 'AIBattleTank',
+          }),
+        ],
+        commandSets: [
+          makeCommandSetDef('WarFactoryCommandSet', {
+            '1': 'Command_BuildAIBattleTank',
+          }),
+        ],
+        ai: {
+          resourcesPoor,
+          resourcesWealthy: 7000,
+        },
+      }));
+
+      const map = makeMap([
+        makeMapObject('WarFactory', 10, 10),
+        makeMapObject('EnemyHQ', 50, 50),
+      ], 64, 64);
+
+      logic.loadMapObjects(map, registry, makeHeightmap(64, 64));
+      logic.setTeamRelationship('America', 'China', 0);
+      logic.setTeamRelationship('China', 'America', 0);
+      logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: credits });
+      logic.enableSkirmishAI('America');
+
+      for (let i = 0; i < 90; i++) {
+        logic.update(1 / 30);
+      }
+
+      const privateApi = logic as unknown as {
+        spawnedEntities: Map<number, {
+          templateName: string;
+          productionQueue: unknown[];
+          destroyed: boolean;
+        }>;
+      };
+      const factory = privateApi.spawnedEntities.get(1);
+      const producedUnits = Array.from(privateApi.spawnedEntities.values()).filter(
+        (entity) => entity.templateName === 'AIBattleTank' && !entity.destroyed,
+      ).length;
+
+      return {
+        queueLength: factory?.productionQueue.length ?? 0,
+        producedUnits,
+      };
+    };
+
+    const belowPoorThreshold = runScenario(2000, 1500);
+    expect(belowPoorThreshold).toEqual({
+      queueLength: 0,
+      producedUnits: 0,
+    });
+
+    const abovePoorThreshold = runScenario(1000, 1500);
+    expect(abovePoorThreshold.queueLength + abovePoorThreshold.producedUnits).toBeGreaterThan(0);
+  });
+
   it('skirmish AI replaces lost dozer by queueing production at a factory', () => {
     const logic = new GameLogicSubsystem();
 
@@ -25125,6 +25212,9 @@ describe('Script condition groundwork', () => {
           2: 'Command_ConstructBarracks',
         }),
       ],
+      ai: {
+        skirmishBaseDefenseExtraDistance: 0,
+      },
     });
 
     const map = makeMap([
@@ -25227,6 +25317,9 @@ describe('Script condition groundwork', () => {
           1: 'Command_ConstructPatriot',
         }),
       ],
+      ai: {
+        skirmishBaseDefenseExtraDistance: 0,
+      },
     });
 
     const map = makeMap([
@@ -25324,6 +25417,9 @@ describe('Script condition groundwork', () => {
           1: 'Command_ConstructPatriot',
         }),
       ],
+      ai: {
+        skirmishBaseDefenseExtraDistance: 0,
+      },
     });
 
     const map = makeMap([
@@ -36211,19 +36307,59 @@ describe('Script condition groundwork', () => {
       return privateApi.spawnedEntities.get(1)?.guardOuterRange ?? 0;
     };
 
-    // Side says human, but owner is AI => use AI outer modifier (2.0x).
+    // Side says human, but owner is AI => use AI outer modifier (ZH AIData default: 1.333x).
     expect(resolveGuardOuterRange({
       americaPlayerType: 'HUMAN',
       ownerToken: 'AIPlayer',
       ownerPlayerType: 'COMPUTER',
-    })).toBeCloseTo(200, 5);
+    })).toBeCloseTo(133.3, 1);
 
-    // Side says AI, but owner is human => use human outer modifier (1.5x).
+    // Side says AI, but owner is human => use human outer modifier (ZH AIData default: 2.2x).
     expect(resolveGuardOuterRange({
       americaPlayerType: 'COMPUTER',
       ownerToken: 'HumanPlayer',
       ownerPlayerType: 'HUMAN',
-    })).toBeCloseTo(150, 5);
+    })).toBeCloseTo(220, 5);
+  });
+
+  it('uses AIData-configured guard timing and range values', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Ranger', 'America', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ], {
+          VisionRange: 100,
+        }),
+      ],
+      ai: {
+        guardInnerModifierAI: 1.25,
+        guardOuterModifierAI: 1.75,
+        guardEnemyReturnScanRateFrames: 77,
+      },
+    });
+
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('Ranger', 10, 10),
+      ], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setSidePlayerType('America', 'COMPUTER');
+    logic.submitCommand({ type: 'guardPosition', entityId: 1, targetX: 30, targetZ: 30, guardMode: 0 });
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      spawnedEntities: Map<number, {
+        guardInnerRange: number;
+        guardOuterRange: number;
+        guardNextScanFrame: number;
+      }>;
+    };
+    expect(privateApi.spawnedEntities.get(1)?.guardInnerRange).toBeCloseTo(125, 5);
+    expect(privateApi.spawnedEntities.get(1)?.guardOuterRange).toBeCloseTo(175, 5);
+    expect(privateApi.spawnedEntities.get(1)?.guardNextScanFrame).toBe(78);
   });
 
   it('executes script damage/delete/kill actions using source action ids', () => {

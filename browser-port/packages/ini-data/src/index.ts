@@ -1,5 +1,7 @@
 export { IniDataRegistry } from './registry.js';
+export { DEFAULT_AI_CONFIG } from './registry.js';
 export type {
+  AiConfig,
   ObjectDef,
   WeaponDef,
   ArmorDef,

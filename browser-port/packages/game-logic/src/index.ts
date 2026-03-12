@@ -12,7 +12,9 @@ import type {
 } from '@generals/engine';
 import { GameRandom, type IniBlock, type IniValue } from '@generals/core';
 import {
+  DEFAULT_AI_CONFIG,
   IniDataRegistry,
+  type AiConfig,
   type AudioEventDef,
   type ArmorDef,
   type CommandButtonDef,
@@ -1516,18 +1518,15 @@ export const AUTO_TARGET_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE * 2;
 export const SCRIPT_AI_ATTITUDE_PASSIVE = 1;
 export const SCRIPT_AI_ATTITUDE_NORMAL = 2;
 const SCRIPT_ATTACK_PRIORITY_DEFAULT = 1;
+type RuntimeAiConfig = Required<AiConfig>;
+const DEFAULT_RUNTIME_AI_CONFIG: RuntimeAiConfig = { ...DEFAULT_AI_CONFIG };
 
 /**
- * Source parity: TAiData guard parameters. Real values come from AIData.ini;
- * these defaults match the typical Zero Hour configuration.
+ * Source parity fallback: Zero Hour `Default/AIData.ini`.
+ * Runtime values are loaded from bundle AIData whenever available.
  */
-export const GUARD_ENEMY_SCAN_RATE_FRAMES = Math.trunc(LOGIC_FRAME_RATE / 2); // 15 frames = 0.5s
-const GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES = LOGIC_FRAME_RATE; // 30 frames = 1s
-const GUARD_INNER_MODIFIER_HUMAN = 1.0;
-const GUARD_OUTER_MODIFIER_HUMAN = 1.5;
-const GUARD_INNER_MODIFIER_AI = 1.0;
-const GUARD_OUTER_MODIFIER_AI = 2.0;
-export const GUARD_CHASE_UNIT_FRAMES = LOGIC_FRAME_RATE * 10; // 300 frames = 10s
+export const GUARD_ENEMY_SCAN_RATE_FRAMES = DEFAULT_RUNTIME_AI_CONFIG.guardEnemyScanRateFrames;
+export const GUARD_CHASE_UNIT_FRAMES = DEFAULT_RUNTIME_AI_CONFIG.guardChaseUnitFrames;
 export const MAX_SCRIPT_RADAR_EVENTS = 64;
 export const SCRIPT_RADAR_EVENT_TTL_FRAMES = LOGIC_FRAME_RATE * 4;
 export const SCRIPT_THIS_TEAM = '<This Team>';
@@ -1543,8 +1542,6 @@ export const SCRIPT_SKIRMISH_PATH_FLANK_LABEL = 'FLANK';
 export const SCRIPT_SKIRMISH_PATH_BACKDOOR_LABEL = 'BACKDOOR';
 export const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ANGLE = Math.PI / 3;
 export const SCRIPT_SKIRMISH_BASE_DEFENSE_MAX_ATTEMPTS = 64;
-// Source parity: AIData::m_skirmishBaseDefenseExtraDistance (defaults to 0 in TAiData ctor).
-const SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE = 0;
 // Source parity: ScriptEngine.cpp FRAMES_TO_SHOW_WIN_LOSE_MESSAGE.
 export const SCRIPT_ENDGAME_MESSAGE_DURATION_FRAMES = 120;
 // Source parity: ScriptEngine::startQuickEndGameTimer.
@@ -6751,8 +6748,8 @@ export class GameLogicSubsystem implements Subsystem {
   readonly name = 'GameLogic';
 
   private readonly config: GameLogicConfig;
-  /** Source parity: TAiData::m_skirmishBaseDefenseExtraDistance from AI block. */
-  private skirmishBaseDefenseExtraDistance = SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
+  /** Source parity: TAiData — runtime-normalized AIData values loaded from the INI bundle. */
+  private runtimeAiConfig: RuntimeAiConfig = { ...DEFAULT_RUNTIME_AI_CONFIG };
   private readonly spawnedEntities = new Map<number, MapEntity>();
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -7267,8 +7264,10 @@ export class GameLogicSubsystem implements Subsystem {
       this.globalWeaponBonusTable = buildWeaponBonusTable(gameDataConfig.weaponBonusEntries);
     }
     const aiConfig = iniDataRegistry.getAiConfig();
-    this.skirmishBaseDefenseExtraDistance =
-      aiConfig?.skirmishBaseDefenseExtraDistance ?? SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
+    this.runtimeAiConfig = {
+      ...DEFAULT_RUNTIME_AI_CONFIG,
+      ...(aiConfig ?? {}),
+    };
 
     this.railedTransportWaypointIndex = createRailedTransportWaypointIndexImpl(
       this.resolveRailedTransportWaypointData(mapData),
@@ -7498,6 +7497,18 @@ export class GameLogicSubsystem implements Subsystem {
         isAttackMoveToMode: this.isAttackMoveToMode,
         previousAttackMoveToggleDown: this.previousAttackMoveToggleDown,
         scriptInputDisabled: this.scriptInputDisabled,
+        runtimeAiConfig: {
+          resourcesPoor: this.runtimeAiConfig.resourcesPoor,
+          resourcesWealthy: this.runtimeAiConfig.resourcesWealthy,
+          guardInnerModifierAI: this.runtimeAiConfig.guardInnerModifierAI,
+          guardOuterModifierAI: this.runtimeAiConfig.guardOuterModifierAI,
+          guardInnerModifierHuman: this.runtimeAiConfig.guardInnerModifierHuman,
+          guardOuterModifierHuman: this.runtimeAiConfig.guardOuterModifierHuman,
+          guardChaseUnitFrames: this.runtimeAiConfig.guardChaseUnitFrames,
+          guardEnemyScanRateFrames: this.runtimeAiConfig.guardEnemyScanRateFrames,
+          guardEnemyReturnScanRateFrames: this.runtimeAiConfig.guardEnemyReturnScanRateFrames,
+          skirmishBaseDefenseExtraDistance: this.runtimeAiConfig.skirmishBaseDefenseExtraDistance,
+        },
         config: this.config,
         commandQueue: this.commandQueue,
       }),
@@ -10989,7 +11000,7 @@ export class GameLogicSubsystem implements Subsystem {
   }
 
   /* @internal */ resolveSkirmishBaseDefenseExtraDistance(): number {
-    return this.skirmishBaseDefenseExtraDistance;
+    return this.runtimeAiConfig.skirmishBaseDefenseExtraDistance;
   }
 
   /* @internal */ resolveCachedSkirmishBaseCenterAndRadius(side: string): ScriptBaseCenterAndRadius | null {
@@ -22551,6 +22562,10 @@ export class GameLogicSubsystem implements Subsystem {
     const aiContext: SkirmishAIContext<MapEntity> = {
       frameCounter: this.frameCounter,
       spawnedEntities: this.spawnedEntities,
+      aiConfig: {
+        resourcesPoor: this.runtimeAiConfig.resourcesPoor,
+        resourcesWealthy: this.runtimeAiConfig.resourcesWealthy,
+      },
       getSideCredits: (side: string) => this.getSideCredits(side),
       submitCommand: (command) => this.submitCommand(command),
       getRelationship: (sideA: string, sideB: string) =>
@@ -25129,6 +25144,31 @@ export class GameLogicSubsystem implements Subsystem {
 
   // ── Source parity: AIGuardMachine — guard position/object behavior ──
 
+  /* @internal */ getGuardEnemyScanRateFrames(): number {
+    return this.runtimeAiConfig.guardEnemyScanRateFrames;
+  }
+
+  /* @internal */ getGuardEnemyReturnScanRateFrames(): number {
+    return this.runtimeAiConfig.guardEnemyReturnScanRateFrames;
+  }
+
+  /* @internal */ getGuardChaseUnitFrames(): number {
+    return this.runtimeAiConfig.guardChaseUnitFrames;
+  }
+
+  private resolveGuardVisionModifiers(entity: MapEntity): { innerMod: number; outerMod: number } {
+    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
+    return isHuman
+      ? {
+          innerMod: this.runtimeAiConfig.guardInnerModifierHuman,
+          outerMod: this.runtimeAiConfig.guardOuterModifierHuman,
+        }
+      : {
+          innerMod: this.runtimeAiConfig.guardInnerModifierAI,
+          outerMod: this.runtimeAiConfig.guardOuterModifierAI,
+        };
+  }
+
   /**
    * Initialize guard-position mode for an entity. Moves it to the guard point
    * and enters the RETURNING state (mirrors C++ AIGuardState::onEnter → setState(AI_GUARD_RETURN)).
@@ -25139,9 +25179,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
-    const innerMod = isHuman ? GUARD_INNER_MODIFIER_HUMAN : GUARD_INNER_MODIFIER_AI;
-    const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
+    const { innerMod, outerMod } = this.resolveGuardVisionModifiers(entity);
 
     entity.guardState = 'RETURNING';
     entity.guardPositionX = targetX;
@@ -25149,7 +25187,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.guardObjectId = 0;
     entity.guardAreaTriggerIndex = -1;
     entity.guardMode = guardMode;
-    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardNextScanFrame = this.frameCounter + this.getGuardEnemyReturnScanRateFrames();
     entity.guardChaseExpireFrame = 0;
     entity.guardInnerRange = Math.max(0, entity.visionRange * innerMod);
     entity.guardOuterRange = Math.max(0, entity.visionRange * outerMod);
@@ -25172,9 +25210,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
-    const innerMod = isHuman ? GUARD_INNER_MODIFIER_HUMAN : GUARD_INNER_MODIFIER_AI;
-    const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
+    const { innerMod, outerMod } = this.resolveGuardVisionModifiers(entity);
 
     entity.guardState = 'RETURNING';
     entity.guardPositionX = target.x;
@@ -25182,7 +25218,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.guardObjectId = targetObjectId;
     entity.guardAreaTriggerIndex = -1;
     entity.guardMode = guardMode;
-    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardNextScanFrame = this.frameCounter + this.getGuardEnemyReturnScanRateFrames();
     entity.guardChaseExpireFrame = 0;
     entity.guardInnerRange = Math.max(0, entity.visionRange * innerMod);
     entity.guardOuterRange = Math.max(0, entity.visionRange * outerMod);
@@ -25208,8 +25244,7 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    const isHuman = this.getControllingPlayerTypeForEntity(entity) === 'HUMAN';
-    const outerMod = isHuman ? GUARD_OUTER_MODIFIER_HUMAN : GUARD_OUTER_MODIFIER_AI;
+    const { outerMod } = this.resolveGuardVisionModifiers(entity);
 
     entity.guardState = 'RETURNING';
     entity.guardPositionX = centerX;
@@ -25217,7 +25252,7 @@ export class GameLogicSubsystem implements Subsystem {
     entity.guardObjectId = 0;
     entity.guardAreaTriggerIndex = triggerIndex;
     entity.guardMode = guardMode;
-    entity.guardNextScanFrame = this.frameCounter + GUARD_ENEMY_RETURN_SCAN_RATE_FRAMES;
+    entity.guardNextScanFrame = this.frameCounter + this.getGuardEnemyReturnScanRateFrames();
     entity.guardChaseExpireFrame = 0;
     entity.guardInnerRange = Math.max(0, areaRadius);
     entity.guardOuterRange = Math.max(
@@ -30802,7 +30837,7 @@ export class GameLogicSubsystem implements Subsystem {
     this.missileAIProfileByProjectileTemplate.clear();
     this.visualEventBuffer.length = 0;
     this.nextProjectileVisualId = 1;
-    this.skirmishBaseDefenseExtraDistance = SCRIPT_SKIRMISH_BASE_DEFENSE_EXTRA_DISTANCE;
+    this.runtimeAiConfig = { ...DEFAULT_RUNTIME_AI_CONFIG };
     for (const [entityId] of this.overchargeStateByEntityId) {
       const entity = this.spawnedEntities.get(entityId);
       if (entity && !entity.destroyed) {
