@@ -7,6 +7,7 @@ import {
   resolveCampaignMapAssetPath,
   type Campaign,
 } from './campaign-manager.js';
+import { classifyCampaignReference } from './campaign-content-policy.js';
 
 const MINIMAL_CAMPAIGN_INI = `
 Campaign USA
@@ -85,6 +86,38 @@ const RETAIL_CAMPAIGN_INI_PATH = path.join(
   'INI',
   'Campaign.ini',
 );
+const RETAIL_VIDEO_INI_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  '_extracted',
+  'INIZH',
+  'Data',
+  'INI',
+  'Video.ini',
+);
+const RETAIL_SPEECH_INI_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  '_extracted',
+  'INIZH',
+  'Data',
+  'INI',
+  'Speech.ini',
+);
+const RETAIL_SOUND_EFFECTS_INI_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  '_extracted',
+  'INIZH',
+  'Data',
+  'INI',
+  'SoundEffects.ini',
+);
+const RETAIL_MUSIC_INI_PATH = path.join(
+  RETAIL_ASSETS_ROOT,
+  '_extracted',
+  'INIZH',
+  'Data',
+  'INI',
+  'Music.ini',
+);
 const RETAIL_MANIFEST_PATH = path.join(
   RETAIL_ASSETS_ROOT,
   'manifest.json',
@@ -97,6 +130,253 @@ const RETAIL_LOCALIZATION_PATH = path.join(
   'English',
   'generals.json',
 );
+
+interface RetailAssetGap {
+  campaign: string;
+  mission: string | null;
+  assetKind: 'map' | 'introMovie' | 'finalVictoryMovie' | 'briefingVoice';
+  assetName: string;
+  lifecycle: 'shipped' | 'demo' | 'legacy';
+  reason: string;
+  resolvedName?: string;
+  assetPath?: string;
+}
+
+interface RetailCampaignAssetAudit {
+  missingSourceMaps: RetailAssetGap[];
+  missingMapAssets: RetailAssetGap[];
+  unresolvedMovieDefinitions: RetailAssetGap[];
+  unresolvedBriefingVoices: RetailAssetGap[];
+  missingVideoAssets: RetailAssetGap[];
+}
+
+function normalizeCampaignMapSourcePath(mapName: string | null | undefined): string | null {
+  if (!mapName) return null;
+  const normalized = mapName.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || !/\.map$/i.test(normalized)) {
+    return null;
+  }
+  return `_extracted/MapsZH/${normalized}`;
+}
+
+function parseVideoFilenameMap(text: string): Map<string, string> {
+  const entries = new Map<string, string>();
+  const lines = text.split(/\r?\n/);
+  let currentName = '';
+
+  for (const rawLine of lines) {
+    const commentIdx = rawLine.indexOf(';');
+    const line = (commentIdx >= 0 ? rawLine.slice(0, commentIdx) : rawLine).trim();
+    if (!line) continue;
+
+    const tokens = line.split(/\s+/);
+    const keyword = tokens[0]!;
+    if (keyword === 'Video') {
+      currentName = tokens.slice(1).join(' ');
+      continue;
+    }
+    if ((keyword === 'End' || keyword === 'END') && currentName) {
+      currentName = '';
+      continue;
+    }
+    if (keyword === 'Filename' && currentName) {
+      entries.set(currentName, tokens.slice(1).join(' ').replace(/^=\s*/, ''));
+    }
+  }
+
+  return entries;
+}
+
+function parseAudioEventFilenameMap(texts: readonly string[]): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const text of texts) {
+    const lines = text.split(/\r?\n/);
+    let currentName = '';
+    for (const rawLine of lines) {
+      const commentIdx = rawLine.indexOf(';');
+      const line = (commentIdx >= 0 ? rawLine.slice(0, commentIdx) : rawLine).trim();
+      if (!line) continue;
+
+      const tokens = line.split(/\s+/);
+      const keyword = tokens[0]!;
+      if (keyword === 'AudioEvent') {
+        currentName = tokens.slice(1).join(' ');
+        continue;
+      }
+      if ((keyword === 'End' || keyword === 'END') && currentName) {
+        currentName = '';
+        continue;
+      }
+      if (keyword === 'Filename' && currentName) {
+        entries.set(currentName, tokens.slice(1).join(' ').replace(/^=\s*/, ''));
+      }
+    }
+  }
+  return entries;
+}
+
+function sortRetailAssetGaps(gaps: RetailAssetGap[]): RetailAssetGap[] {
+  return [...gaps].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function auditRetailCampaignAssets(): RetailCampaignAssetAudit {
+  const campaigns = parseCampaignIni(fs.readFileSync(RETAIL_CAMPAIGN_INI_PATH, 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(RETAIL_MANIFEST_PATH, 'utf8')) as {
+    entries: Array<{ outputPath: string }>;
+  };
+  const manifestOutputPaths = new Set(manifest.entries.map((entry) => entry.outputPath));
+  const videoFilenameMap = parseVideoFilenameMap(fs.readFileSync(RETAIL_VIDEO_INI_PATH, 'utf8'));
+  const audioEventFilenameMap = parseAudioEventFilenameMap([
+    fs.readFileSync(RETAIL_SPEECH_INI_PATH, 'utf8'),
+    fs.readFileSync(RETAIL_SOUND_EFFECTS_INI_PATH, 'utf8'),
+    fs.readFileSync(RETAIL_MUSIC_INI_PATH, 'utf8'),
+  ]);
+
+  const missingSourceMaps: RetailAssetGap[] = [];
+  const missingMapAssets: RetailAssetGap[] = [];
+  const unresolvedMovieDefinitions: RetailAssetGap[] = [];
+  const unresolvedBriefingVoices: RetailAssetGap[] = [];
+  const missingVideoAssets = new Map<string, RetailAssetGap>();
+
+  for (const campaign of campaigns) {
+    for (const mission of campaign.missions) {
+      const mapClassification = classifyCampaignReference({
+        campaignName: campaign.name,
+        missionName: mission.name,
+        assetKind: 'map',
+        assetName: mission.mapName,
+      });
+      const sourceMapPath = normalizeCampaignMapSourcePath(mission.mapName);
+      if (sourceMapPath && !fs.existsSync(path.join(RETAIL_ASSETS_ROOT, sourceMapPath))) {
+        missingSourceMaps.push({
+          campaign: campaign.name,
+          mission: mission.name,
+          assetKind: 'map',
+          assetName: mission.mapName,
+          lifecycle: mapClassification.lifecycle,
+          reason: mapClassification.reason,
+          assetPath: sourceMapPath,
+        });
+      }
+
+      const runtimeMapPath = resolveCampaignMapAssetPath(mission.mapName);
+      if (
+        runtimeMapPath
+        && (!manifestOutputPaths.has(runtimeMapPath) || !fs.existsSync(path.join(RETAIL_ASSETS_ROOT, runtimeMapPath)))
+      ) {
+        missingMapAssets.push({
+          campaign: campaign.name,
+          mission: mission.name,
+          assetKind: 'map',
+          assetName: mission.mapName,
+          lifecycle: mapClassification.lifecycle,
+          reason: mapClassification.reason,
+          assetPath: runtimeMapPath,
+        });
+      }
+
+      if (mission.movieLabel) {
+        const movieClassification = classifyCampaignReference({
+          campaignName: campaign.name,
+          missionName: mission.name,
+          assetKind: 'introMovie',
+          assetName: mission.movieLabel,
+        });
+        const resolvedName = videoFilenameMap.get(mission.movieLabel);
+        if (!resolvedName) {
+          unresolvedMovieDefinitions.push({
+            campaign: campaign.name,
+            mission: mission.name,
+            assetKind: 'introMovie',
+            assetName: mission.movieLabel,
+            lifecycle: movieClassification.lifecycle,
+            reason: movieClassification.reason,
+          });
+        } else {
+          const assetPath = `videos/${resolvedName}.mp4`;
+          if (!manifestOutputPaths.has(assetPath) || !fs.existsSync(path.join(RETAIL_ASSETS_ROOT, assetPath))) {
+            const key = `${mission.movieLabel}::${resolvedName}`;
+            if (!missingVideoAssets.has(key)) {
+              missingVideoAssets.set(key, {
+                campaign: campaign.name,
+                mission: mission.name,
+                assetKind: 'introMovie',
+                assetName: mission.movieLabel,
+                lifecycle: movieClassification.lifecycle,
+                reason: movieClassification.reason,
+                resolvedName,
+                assetPath,
+              });
+            }
+          }
+        }
+      }
+
+      if (mission.briefingVoice) {
+        const voiceClassification = classifyCampaignReference({
+          campaignName: campaign.name,
+          missionName: mission.name,
+          assetKind: 'briefingVoice',
+          assetName: mission.briefingVoice,
+        });
+        if (!audioEventFilenameMap.has(mission.briefingVoice)) {
+          unresolvedBriefingVoices.push({
+            campaign: campaign.name,
+            mission: mission.name,
+            assetKind: 'briefingVoice',
+            assetName: mission.briefingVoice,
+            lifecycle: voiceClassification.lifecycle,
+            reason: voiceClassification.reason,
+          });
+        }
+      }
+    }
+
+    if (campaign.finalMovieName) {
+      const movieClassification = classifyCampaignReference({
+        campaignName: campaign.name,
+        assetKind: 'finalVictoryMovie',
+        assetName: campaign.finalMovieName,
+      });
+      const resolvedName = videoFilenameMap.get(campaign.finalMovieName);
+      if (!resolvedName) {
+        unresolvedMovieDefinitions.push({
+          campaign: campaign.name,
+          mission: null,
+          assetKind: 'finalVictoryMovie',
+          assetName: campaign.finalMovieName,
+          lifecycle: movieClassification.lifecycle,
+          reason: movieClassification.reason,
+        });
+      } else {
+        const assetPath = `videos/${resolvedName}.mp4`;
+        if (!manifestOutputPaths.has(assetPath) || !fs.existsSync(path.join(RETAIL_ASSETS_ROOT, assetPath))) {
+          const key = `${campaign.finalMovieName}::${resolvedName}`;
+          if (!missingVideoAssets.has(key)) {
+            missingVideoAssets.set(key, {
+              campaign: campaign.name,
+              mission: null,
+              assetKind: 'finalVictoryMovie',
+              assetName: campaign.finalMovieName,
+              lifecycle: movieClassification.lifecycle,
+              reason: movieClassification.reason,
+              resolvedName,
+              assetPath,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    missingSourceMaps: sortRetailAssetGaps(missingSourceMaps),
+    missingMapAssets: sortRetailAssetGaps(missingMapAssets),
+    unresolvedMovieDefinitions: sortRetailAssetGaps(unresolvedMovieDefinitions),
+    unresolvedBriefingVoices: sortRetailAssetGaps(unresolvedBriefingVoices),
+    missingVideoAssets: sortRetailAssetGaps([...missingVideoAssets.values()]),
+  };
+}
 
 describe('parseCampaignIni', () => {
   it('parses campaigns from INI text', () => {
@@ -328,20 +608,20 @@ describe('CampaignManager', () => {
     ]);
   });
 
-  it('certifies retail campaign missions resolve to shipped map assets and valid next-mission links', () => {
-    if (!fs.existsSync(RETAIL_CAMPAIGN_INI_PATH) || !fs.existsSync(RETAIL_MANIFEST_PATH)) {
+  it('certifies retail campaign missions resolve to valid map links and classified asset coverage', () => {
+    if (
+      !fs.existsSync(RETAIL_CAMPAIGN_INI_PATH)
+      || !fs.existsSync(RETAIL_MANIFEST_PATH)
+      || !fs.existsSync(RETAIL_VIDEO_INI_PATH)
+      || !fs.existsSync(RETAIL_SPEECH_INI_PATH)
+      || !fs.existsSync(RETAIL_SOUND_EFFECTS_INI_PATH)
+      || !fs.existsSync(RETAIL_MUSIC_INI_PATH)
+    ) {
       return;
     }
 
     const campaigns = parseCampaignIni(fs.readFileSync(RETAIL_CAMPAIGN_INI_PATH, 'utf8'));
-    const manifest = JSON.parse(fs.readFileSync(RETAIL_MANIFEST_PATH, 'utf8')) as {
-      entries: Array<{ outputPath: string }>;
-    };
-    const manifestOutputPaths = new Set(manifest.entries.map((entry) => entry.outputPath));
-
     expect(campaigns).toHaveLength(17);
-    const missingMapAssets: Array<{ campaign: string; mission: string; mapPath: string }> = [];
-
     for (const campaign of campaigns) {
       expect(campaign.missions.length, `campaign "${campaign.name}" should contain missions`).toBeGreaterThan(0);
       expect(
@@ -353,16 +633,6 @@ describe('CampaignManager', () => {
       for (const mission of campaign.missions) {
         const mapPath = resolveCampaignMapAssetPath(mission.mapName);
         expect(mapPath, `mission "${campaign.name}:${mission.name}" should resolve an asset path`).not.toBeNull();
-        if (
-          !campaign.name.endsWith('_demo')
-          && (!manifestOutputPaths.has(mapPath!) || !fs.existsSync(path.join(RETAIL_ASSETS_ROOT, mapPath!)))
-        ) {
-          missingMapAssets.push({
-            campaign: campaign.name,
-            mission: mission.name,
-            mapPath: mapPath!,
-          });
-        }
 
         if (mission.nextMission) {
           expect(
@@ -373,13 +643,238 @@ describe('CampaignManager', () => {
       }
     }
 
-    expect(missingMapAssets).toEqual([
-      {
-        campaign: 'training',
-        mission: 'mission01',
-        mapPath: 'maps/_extracted/MapsZH/Maps/Training01/Training01.json',
-      },
-    ]);
+    expect(auditRetailCampaignAssets()).toEqual({
+      missingSourceMaps: [
+        {
+          campaign: 'md_campea_demo',
+          mission: 'mission01',
+          assetKind: 'map',
+          assetName: 'Maps\\CampEADemo\\CampEADemo.map',
+          lifecycle: 'demo',
+          reason: 'demo-mission-disk-campaign',
+          assetPath: '_extracted/MapsZH/Maps/CampEADemo/CampEADemo.map',
+        },
+        {
+          campaign: 'training',
+          mission: 'mission01',
+          assetKind: 'map',
+          assetName: 'Maps\\Training01\\Training01.map',
+          lifecycle: 'legacy',
+          reason: 'training-removed-from-zero-hour-menu',
+          assetPath: '_extracted/MapsZH/Maps/Training01/Training01.map',
+        },
+      ],
+      missingMapAssets: [
+        {
+          campaign: 'md_campea_demo',
+          mission: 'mission01',
+          assetKind: 'map',
+          assetName: 'Maps\\CampEADemo\\CampEADemo.map',
+          lifecycle: 'demo',
+          reason: 'demo-mission-disk-campaign',
+          assetPath: 'maps/_extracted/MapsZH/Maps/CampEADemo/CampEADemo.json',
+        },
+        {
+          campaign: 'training',
+          mission: 'mission01',
+          assetKind: 'map',
+          assetName: 'Maps\\Training01\\Training01.map',
+          lifecycle: 'legacy',
+          reason: 'training-removed-from-zero-hour-menu',
+          assetPath: 'maps/_extracted/MapsZH/Maps/Training01/Training01.json',
+        },
+      ],
+      unresolvedMovieDefinitions: [
+        {
+          campaign: 'challenge_0',
+          mission: null,
+          assetKind: 'finalVictoryMovie',
+          assetName: 'USACampaignVictory',
+          lifecycle: 'shipped',
+          reason: 'live-challenge-final-movie-reference',
+        },
+        {
+          campaign: 'training',
+          mission: 'mission01',
+          assetKind: 'introMovie',
+          assetName: 'TrainingCampaign',
+          lifecycle: 'legacy',
+          reason: 'training-removed-from-zero-hour-menu',
+        },
+      ],
+      unresolvedBriefingVoices: [
+        {
+          campaign: 'training',
+          mission: 'mission01',
+          assetKind: 'briefingVoice',
+          assetName: 'BriefingUSATraining',
+          lifecycle: 'legacy',
+          reason: 'training-removed-from-zero-hour-menu',
+        },
+      ],
+      missingVideoAssets: [
+        {
+          campaign: 'challenge_0',
+          mission: 'mission01',
+          assetKind: 'introMovie',
+          assetName: 'GeneralsChallengeBackground',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'GC_Background',
+          assetPath: 'videos/GC_Background.mp4',
+        },
+        {
+          campaign: 'china',
+          mission: 'mission01',
+          assetKind: 'introMovie',
+          assetName: 'MD_China01',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_China01_0',
+          assetPath: 'videos/MD_China01_0.mp4',
+        },
+        {
+          campaign: 'china',
+          mission: 'mission02',
+          assetKind: 'introMovie',
+          assetName: 'MD_China02',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_China02_0',
+          assetPath: 'videos/MD_China02_0.mp4',
+        },
+        {
+          campaign: 'china',
+          mission: 'mission03',
+          assetKind: 'introMovie',
+          assetName: 'MD_China03',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_China03_0',
+          assetPath: 'videos/MD_China03_0.mp4',
+        },
+        {
+          campaign: 'china',
+          mission: 'mission04',
+          assetKind: 'introMovie',
+          assetName: 'MD_China04',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_China04_0',
+          assetPath: 'videos/MD_China04_0.mp4',
+        },
+        {
+          campaign: 'china',
+          mission: 'mission05',
+          assetKind: 'introMovie',
+          assetName: 'MD_China05',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_China05_0',
+          assetPath: 'videos/MD_China05_0.mp4',
+        },
+        {
+          campaign: 'gla',
+          mission: 'mission01',
+          assetKind: 'introMovie',
+          assetName: 'MD_GLA01',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_GLA01_0',
+          assetPath: 'videos/MD_GLA01_0.mp4',
+        },
+        {
+          campaign: 'gla',
+          mission: 'mission02',
+          assetKind: 'introMovie',
+          assetName: 'MD_GLA02',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_GLA02_0',
+          assetPath: 'videos/MD_GLA02_0.mp4',
+        },
+        {
+          campaign: 'gla',
+          mission: 'mission03',
+          assetKind: 'introMovie',
+          assetName: 'MD_GLA03',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_GLA03_0',
+          assetPath: 'videos/MD_GLA03_0.mp4',
+        },
+        {
+          campaign: 'gla',
+          mission: 'mission04',
+          assetKind: 'introMovie',
+          assetName: 'MD_GLA04',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_GLA04_0',
+          assetPath: 'videos/MD_GLA04_0.mp4',
+        },
+        {
+          campaign: 'gla',
+          mission: 'mission05',
+          assetKind: 'introMovie',
+          assetName: 'MD_GLA05',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_GLA05_0',
+          assetPath: 'videos/MD_GLA05_0.mp4',
+        },
+        {
+          campaign: 'usa',
+          mission: 'mission01',
+          assetKind: 'introMovie',
+          assetName: 'MD_USA01',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_USA01_0',
+          assetPath: 'videos/MD_USA01_0.mp4',
+        },
+        {
+          campaign: 'usa',
+          mission: 'mission02',
+          assetKind: 'introMovie',
+          assetName: 'MD_USA02',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_USA02_0',
+          assetPath: 'videos/MD_USA02_0.mp4',
+        },
+        {
+          campaign: 'usa',
+          mission: 'mission03',
+          assetKind: 'introMovie',
+          assetName: 'MD_USA03',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_USA03_0',
+          assetPath: 'videos/MD_USA03_0.mp4',
+        },
+        {
+          campaign: 'usa',
+          mission: 'mission04',
+          assetKind: 'introMovie',
+          assetName: 'MD_USA04',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_USA04_0',
+          assetPath: 'videos/MD_USA04_0.mp4',
+        },
+        {
+          campaign: 'usa',
+          mission: 'mission05',
+          assetKind: 'introMovie',
+          assetName: 'MD_USA05',
+          lifecycle: 'shipped',
+          reason: 'shipped-retail-campaign',
+          resolvedName: 'MD_USA05_0',
+          assetPath: 'videos/MD_USA05_0.mp4',
+        },
+      ],
+    });
   });
 
   it('certifies retail campaign display labels exist for non-demo missions', () => {
