@@ -25,9 +25,11 @@ export class CacheStore {
 
     this.openPromise = new Promise<void>((resolve, reject) => {
       const request = indexedDB.open(this.dbName, 1);
+      let timedOut = false;
 
       // Timeout: if blocked by other tabs for >3s, proceed without cache.
       const timeout = setTimeout(() => {
+        timedOut = true;
         this.openPromise = null;
         reject(new Error('IndexedDB open blocked (other tabs may hold connections)'));
       }, 3000);
@@ -41,18 +43,25 @@ export class CacheStore {
 
       request.onsuccess = () => {
         clearTimeout(timeout);
+        if (timedOut) {
+          // Open completed after we already rejected — close the leaked connection.
+          request.result.close();
+          return;
+        }
         this.db = request.result;
         resolve();
       };
 
       request.onerror = () => {
         clearTimeout(timeout);
+        if (timedOut) return;
         this.openPromise = null;
         reject(request.error);
       };
 
       request.onblocked = () => {
         clearTimeout(timeout);
+        if (timedOut) return;
         this.openPromise = null;
         reject(new Error('IndexedDB open blocked by other connections'));
       };
