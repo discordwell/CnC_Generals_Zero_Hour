@@ -1,5 +1,27 @@
 # Session Summaries
 
+## 2026-03-20T13:45Z — Combat Chase Fix + Team Colors + Ghost Validation + Hotkeys + Perf
+- **CRITICAL FIX — Units stuck when attacking beyond weapon range**: `updateCombat` was calling `issueMoveTo` every frame for out-of-range targets, which reset `pathIndex` to 0. Since `findPath` prepends the entity's current position as path[0], the entity could never advance. Fix: only re-issue `issueMoveTo` when entity has stopped, matching C++ AIAttackState behavior. Also added moving target tracking — re-issues path when target moves >50% of weapon range from original position.
+- **5 new auto-attack tests**: explicit attack in-range, idle auto-targeting, moveTo baseline, walk-to-target-and-fire (the critical regression test), and mutual combat.
+- **Team color tinting**: Units now show faction-based emissive tint (USA=blue, China=red, GLA=green) at 15% intensity. Applied once per model load, reset on model swap.
+- **Animated credits counter**: Credits tick toward actual value at 20%/frame instead of instant jump. Flashes green (gaining) or red (spending). Matches C++ ControlBar behavior.
+- **Building ghost validation**: Ghost now turns RED when placement is invalid (blocked by structures, on cliffs/obstacles). Added `isBuildLocationValid()` public API using existing `isConstructLocationClear` + `isConstructTerrainLegal` checks.
+- **Keyboard shortcuts**: Tab cycles through idle dozers/factories with camera centering. Ctrl+A/Cmd+A selects all own mobile combat units.
+- **Perf optimization**: `syncConditionAnimation` no longer allocates `flags.slice().sort().join('|')` every frame — checks Set membership first, only computes sorted key when flags actually change. Eliminates ~500+ array allocations per frame.
+- **Campaign system verified**: Full campaign flow is already functional — Single Player → Campaign → Faction → Difficulty → Briefing → Play. All 15 campaign maps resolve correctly.
+- **Supply chain verified**: Supply trucks auto-gather for ALL sides (player + AI). The update loop iterates all spawned entities with `supplyTruckProfile`.
+- **Attack cursor**: Shows attack cursor when 'A' key is held with units selected. Added `isAttackMode` parameter to `resolveGameCursor()`.
+- **Double-click select**: Double-clicking a unit selects all visible own units of same template. 350ms timing window.
+- **Campaign camera**: Uses `InitialCameraPosition` waypoint for campaign maps before falling back to `Player_1_Start`.
+- **Shift+click waypoint queuing**: Shift+right-click appends waypoint to existing movement path instead of replacing it.
+- **Ctrl+click force-fire**: Ctrl/Cmd+right-click forces attack-move to ground position, bypassing smart targeting.
+- **Production queue count badge**: Gold "×N" badge on command card buttons when multiple units are queued.
+- **Waypoint path lines**: Selected moving units show green lines through remaining waypoints. Updates per frame, hides when stopped.
+- **Sell countdown fade-out**: Buildings being sold fade out progressively as demolition countdown proceeds.
+- **Exposed movement state**: `moving`/`movePath`/`pathIndex` now available via `getEntityState()`.
+- **Camera-distance sync throttle**: Entities >600 units from camera skip expensive visual sync (animations, health bars, effects). Skips ~70-80% of entities on Tournament Desert.
+- 3323 tests passing (5 new), 15 commits, deployed to generals.discordwell.com.
+
 ## 2026-03-19T18:15Z — Wet Test Parity Sprint: 6 Fixes, Bundle Data Recovery
 - **Debug overlay**: Removed per-frame dump of all 784 entity IDs. Now shows only unresolved count. (commit f2026f6c)
 - **Map dropdown**: Fixed manifest path extraction (`_extracted/MapsZH/Maps/...` → clean basename), `isSkirmishMapName()` filter. 46 skirmish maps match retail. (commit f2026f6c)
