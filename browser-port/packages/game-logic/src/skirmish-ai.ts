@@ -846,13 +846,6 @@ function evaluateStructures<TEntity extends AIEntity>(
       continue;
     }
 
-    // Skip keywords we've already issued build commands for.
-    // The alreadyHave check above already handles completed buildings.
-    // This prevents re-issuing the same build command while the dozer
-    // is walking to the build site or construction is in progress.
-    if (state.builtStructureKeywords.has(keyword)) {
-      continue;
-    }
     if (DEFENSE_KEYWORDS.has(keyword) && credits < 800) {
       continue; // Don't build defenses until we can afford them.
     }
@@ -894,10 +887,13 @@ function issueConstructCommand<TEntity extends AIEntity>(
   dozerId: number,
   templateName: string,
 ): void {
-  const offsetAngle = state.buildOrderPhase * 0.7;
-  const offsetDist = 15 + state.buildOrderPhase * 5;
-  const placeX = state.rallyX + Math.cos(offsetAngle) * offsetDist;
-  const placeZ = state.rallyZ + Math.sin(offsetAngle) * offsetDist;
+  // Place buildings in an expanding spiral around the base.
+  // Use larger spacing to avoid cliffs near spawn points.
+  const phase = state.buildOrderPhase;
+  const angle = phase * (Math.PI * 2 / 7); // ~51° per building
+  const dist = 50 + phase * 15; // expanding outward
+  const placeX = state.rallyX + Math.cos(angle) * dist;
+  const placeZ = state.rallyZ + Math.sin(angle) * dist;
 
   context.submitCommand({
     type: 'constructBuilding',
