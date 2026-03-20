@@ -618,6 +618,7 @@ async function preInit(): Promise<PreInitContext> {
 
   // Initialize registered runtime subsystems before any asset fetches so
   // AssetManager has the manifest and cache ready.
+  setLoadingProgress(35, 'Connecting to asset cache...');
   await subsystems.initAll();
   assertRequiredManifestEntries(assets.getManifest(), ['data/ini-bundle.json']);
 
