@@ -1963,4 +1963,35 @@ describe('condition-state model fallback resolution', () => {
       ObjectVisualManager.MAX_CONCURRENT_MODEL_LOADS = savedMax;
     }
   });
+
+  it('under-construction entities render semi-transparent', async () => {
+    // Source parity: buildings under construction render with partial
+    // opacity that ramps up as construction progresses.
+    const scene = new THREE.Scene();
+    const modelLoader = async () => modelWithAnimationClips();
+    const manager = new ObjectVisualManager(scene, null, { modelLoader });
+
+    const state = makeMeshState({
+      id: 300,
+      constructionPercent: 0, // just started
+    });
+    manager.sync([state]);
+    await flushModelLoadQueue();
+    manager.sync([state]); // second sync applies opacity after model loads
+
+    // Find any mesh in the scene
+    let foundOpacity = -1;
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material) {
+        const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+        if (mat && 'opacity' in mat && mat.opacity < 1) {
+          foundOpacity = mat.opacity;
+        }
+      }
+    });
+
+    // At 0% construction, opacity should be ~0.3
+    expect(foundOpacity).toBeGreaterThanOrEqual(0.2);
+    expect(foundOpacity).toBeLessThanOrEqual(0.4);
+  });
 });

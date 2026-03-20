@@ -1466,8 +1466,16 @@ export class ObjectVisualManager {
   private syncStealthOpacity(visual: VisualAssetState, state: RenderableEntityState): void {
     const isStealthed = state.isStealthed === true;
     const isDetected = state.isDetected === true;
+    // Source parity: under-construction buildings render semi-transparent
+    // and ramp up to full opacity as construction progresses.
+    const constructionPct = state.constructionPercent ?? -1;
+    const isUnderConstruction = constructionPct >= 0 && constructionPct < 100;
+
     let targetOpacity = 1.0;
-    if (isStealthed && !isDetected) {
+    if (isUnderConstruction) {
+      // Ramp from 0.3 (start) to 0.9 (near complete)
+      targetOpacity = 0.3 + (constructionPct / 100) * 0.6;
+    } else if (isStealthed && !isDetected) {
       targetOpacity = 0.35;
     } else if (isStealthed && isDetected) {
       // Pulse between 0.4 and 0.8.
