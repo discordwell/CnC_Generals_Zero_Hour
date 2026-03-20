@@ -1166,6 +1166,7 @@ async function startGame(
   const creditsHud = document.getElementById('credits-hud') as HTMLDivElement;
   creditsHud.style.display = 'block';
   let displayedCredits = 0; // Animated credit counter (ticks toward actual value)
+  let tabCycleIndex = -1; // Tab key cycle index for idle dozer/factory selection
 
   // Power HUD indicator (below credits) — reuse existing element on restart.
   let powerHud = document.getElementById('power-hud') as HTMLDivElement | null;
@@ -2189,16 +2190,13 @@ async function startGame(
     depthWrite: false,
     side: THREE.DoubleSide,
   });
-  // Red material for invalid placement positions (reserved for future
-  // buildability validation).
-  const _ghostInvalidMaterial = new THREE.MeshBasicMaterial({
+  const ghostInvalidMaterial = new THREE.MeshBasicMaterial({
     color: 0xff0000,
     transparent: true,
     opacity: 0.35,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
-  void _ghostInvalidMaterial;
 
   function applyGhostMaterial(obj: THREE.Object3D, material: THREE.Material): void {
     obj.traverse((child) => {
@@ -2324,8 +2322,11 @@ async function startGame(
     const y = heightmap.getInterpolatedHeight(worldTarget.x, worldTarget.z);
     buildingGhostGroup.position.set(worldTarget.x, y + 1, worldTarget.z);
 
-    // Apply valid/invalid placement tint (green = valid placement).
-    const ghostMaterial = ghostValidMaterial;
+    // Source parity: ghost turns red when placement is invalid.
+    const isValid = buildingGhostTemplateName
+      ? gameLogic.isBuildLocationValid(buildingGhostTemplateName, worldTarget.x, worldTarget.z)
+      : true;
+    const ghostMaterial = isValid ? ghostValidMaterial : ghostInvalidMaterial;
     if (buildingGhostModel) {
       applyGhostMaterial(buildingGhostModel, ghostMaterial);
     }
@@ -2845,6 +2846,42 @@ async function startGame(
           gameLogic.submitCommand({ type: 'clearSelection' });
         } else if (!gameEnded) {
           ingameOptionsScreen.show();
+        }
+      }
+
+      // Tab — cycle through idle production structures and dozers.
+      // Source parity: C++ InGameUI::selectNextIdleWorker / selectNextIdleFactory.
+      if (!missionInputLocked && inputState.keysPressed.has('tab')) {
+        const allStates = gameLogic.getRenderableEntityStates();
+        const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
+        const idle = allStates.filter(e =>
+          e.isOwnedByLocalPlayer
+          && e.side?.toLowerCase() === localSide?.toLowerCase()
+          && (e.templateName.includes('Dozer') || e.templateName.includes('CommandCenter')
+            || e.templateName.includes('Barracks') || e.templateName.includes('WarFactory')
+            || e.templateName.includes('ArmsDealer') || e.templateName.includes('AirField')),
+        );
+        if (idle.length > 0) {
+          tabCycleIndex = (tabCycleIndex + 1) % idle.length;
+          const target = idle[tabCycleIndex]!;
+          gameLogic.submitCommand({ type: 'clearSelection' });
+          gameLogic.submitCommand({ type: 'select', entityId: target.id });
+          rtsCamera.panTo(target.x, target.z);
+        }
+      }
+
+      // Ctrl+A / Cmd+A — select all own combat units on screen.
+      if (!missionInputLocked && inputState.keysPressed.has('a')
+        && (inputState.keysDown.has('control') || inputState.keysDown.has('meta'))) {
+        const allStates = gameLogic.getRenderableEntityStates();
+        const ownUnits = allStates.filter(e =>
+          e.isOwnedByLocalPlayer && e.category !== 'building' && e.category !== 'unknown',
+        );
+        if (ownUnits.length > 0) {
+          gameLogic.submitCommand({
+            type: 'selectEntities',
+            entityIds: ownUnits.map(u => u.id),
+          });
         }
       }
 

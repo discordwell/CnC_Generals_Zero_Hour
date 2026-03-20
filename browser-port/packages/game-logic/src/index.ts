@@ -8587,6 +8587,28 @@ export class GameLogicSubsystem implements Subsystem {
     return this.pickObjectByInput(input, camera);
   }
 
+  /**
+   * Check whether a building placement at the given world position is valid.
+   * Used for ghost tint color (green = valid, red = invalid).
+   * Source parity: BuildAssistant::isLocationLegalToBuild.
+   */
+  isBuildLocationValid(templateName: string, worldX: number, worldZ: number, angle = 0): boolean {
+    if (!this.iniDataRegistry) return false;
+    const objectDef = this.iniDataRegistry.getObject(templateName);
+    if (!objectDef) return false;
+
+    // Check terrain legality (cliff, water, out-of-bounds).
+    if (!isConstructTerrainLegalImpl(this, objectDef, worldX, worldZ, angle)) {
+      return false;
+    }
+    // Check collision with existing structures/units.
+    const localSide = this.normalizeSide(this.getPlayerSide(0) ?? '') ?? '';
+    if (!isConstructLocationClearImpl(this, objectDef, worldX, worldZ, angle, localSide, -1)) {
+      return false;
+    }
+    return true;
+  }
+
   getEntityState(entityId: number): {
     id: number;
     templateName: string;
