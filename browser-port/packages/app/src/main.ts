@@ -1513,11 +1513,11 @@ async function startGame(
       const worldX = (px / MINIMAP_SIZE) * heightmap.worldWidth;
       const worldZ = (py / MINIMAP_SIZE) * heightmap.worldDepth;
       const h = heightmap.getInterpolatedHeight(worldX, worldZ);
-      // Map height to green-brown terrain color.
+      // Map height to desert terrain color (matches 3D terrain palette).
       const t = Math.max(0, Math.min(1, h / 30));
-      const r = Math.round(40 + t * 80);
-      const g = Math.round(60 + t * 100);
-      const b = Math.round(30 + t * 40);
+      const r = Math.round(140 + t * 40);
+      const g = Math.round(115 + t * 40);
+      const b = Math.round(75 + t * 50);
       const idx = (py * MINIMAP_SIZE + px) * 4;
       terrainImgData.data[idx] = r;
       terrainImgData.data[idx + 1] = g;
