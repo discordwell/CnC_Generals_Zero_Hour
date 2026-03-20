@@ -592,3 +592,10 @@ Eight parallel agents targeting top feature parity gaps from code review:
 - **TGA textures**: 18-byte header, BGR/BGRA pixel order, optional RLE, bottom-left origin default
 - **DDS textures**: "DDS " magic, 128-byte header, DXT1/3/5 4x4 block compression
 - **MAP files**: "CkMp" magic TOC, DataChunk format (id u32 + version u16 + size i32)
+
+## Known Issue: Long-Distance Pathfinding
+- Rangers get stuck at (1085,765) on Tournament Desert when pathfinding to enemy base at (1011,2103)
+- A* pathfinder can't find route around large cliff formations
+- Short-distance movement works fine (dozer movement, local combat)
+- C++ uses hierarchical pathfinding with region-based pre-computation
+- Fix needed: implement pathfinding region system or increase nav grid resolution
