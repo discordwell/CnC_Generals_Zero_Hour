@@ -1101,6 +1101,10 @@ async function startGame(
         side: skirmishSettings.aiSide,
         amount: skirmishSettings.startingCredits,
       });
+      // Source parity: SkirmishScripts.scb sets team relationships
+      // between all sides. Different sides are enemies (0).
+      gameLogic.setTeamRelationship(skirmishSettings.playerSide, skirmishSettings.aiSide, 0);
+      gameLogic.setTeamRelationship(skirmishSettings.aiSide, skirmishSettings.playerSide, 0);
       gameLogic.enableSkirmishAI(skirmishSettings.aiSide);
     }
   }
