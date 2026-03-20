@@ -1864,9 +1864,11 @@ describe('condition-state model fallback resolution', () => {
     const manager = new ObjectVisualManager(scene, null, { modelLoader });
 
     // Use an unresolvable asset path to force placeholder creation.
+    // renderAssetPath must be non-empty so the entity is treated as
+    // "has a model but it failed to load" rather than "intentionally invisible".
     const state = makeMeshState({
       id: 99,
-      renderAssetPath: '',
+      renderAssetPath: 'missing-model.w3d',
       renderAssetResolved: false,
       selectionCircleRadius: 15,
     });
@@ -1894,7 +1896,7 @@ describe('condition-state model fallback resolution', () => {
     // Tiny entity with radius < 5 should still get a visible placeholder.
     const state = makeMeshState({
       id: 100,
-      renderAssetPath: '',
+      renderAssetPath: 'missing-tiny.w3d',
       renderAssetResolved: false,
       selectionCircleRadius: 1,
     });

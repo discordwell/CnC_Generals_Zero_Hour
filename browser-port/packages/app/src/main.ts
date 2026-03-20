@@ -1113,9 +1113,11 @@ async function startGame(
   // Set map bounds
   rtsCamera.setMapBounds(0, heightmap.worldWidth, 0, heightmap.worldDepth);
 
-  // Source parity: TheWritableGlobalData->m_initialCameraPosition or
-  // the player's start waypoint determines the initial camera position.
-  // Fall back to map center if no waypoint is found.
+  // Source parity: GameLogic.cpp:1790 first checks InitialCameraPosition
+  // waypoint, then overrides to Player_N_Start for multiplayer/skirmish.
+  // We go directly to Player_1_Start (correct for skirmish).
+  // TODO: For campaign maps, also try 'InitialCameraPosition' waypoint
+  // before falling back to map center (see GameLogic.cpp:1790).
   const playerStartPos = gameLogic.getWaypointPosition('Player_1_Start');
   if (playerStartPos) {
     rtsCamera.lookAt(playerStartPos.x, playerStartPos.z);
@@ -3211,7 +3213,7 @@ async function startGame(
         cursorManager.draw(cursorInputState.mouseX, cursorInputState.mouseY);
       }
 
-      const unresolvedCount = objectVisualManager.getUnresolvedEntityIds().length;
+      const unresolvedCount = objectVisualManager.getUnresolvedEntityCount();
       const unresolvedVisualStatus = unresolvedCount > 0
         ? ` | Unresolved: ${unresolvedCount}`
         : '';

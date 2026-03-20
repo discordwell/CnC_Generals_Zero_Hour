@@ -235,7 +235,11 @@ describe('renderer/game-logic integration', () => {
     expect(requestedPaths).toContain('TankMesh.gltf');
     expect(manager.getVisualState(1)?.hasModel).toBe(true);
     expect(manager.getVisualState(1)?.animationState).toBe('IDLE');
-    expect(manager.getUnresolvedEntityIds()).toEqual([2, 3]);
+    // Entities 2 (RenderTarget — no Draw module) and 3 (MissingTemplate
+    // — no INI def) have no renderAssetPath, so they are treated as
+    // intentionally invisible (ambient sounds, waypoints, etc.) rather
+    // than as unresolved models awaiting load.
+    expect(manager.getUnresolvedEntityIds()).toEqual([]);
     expect(manager.getVisualState(3)?.hasModel).toBe(false);
 
     manager.sync(logic.getRenderableEntityStates(), dt);

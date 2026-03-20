@@ -375,6 +375,11 @@ export class ObjectVisualManager {
     return Array.from(this.unresolvedEntityIds.values()).sort((left, right) => left - right);
   }
 
+  /** Fast count without allocating a sorted array — use in per-frame paths. */
+  getUnresolvedEntityCount(): number {
+    return this.unresolvedEntityIds.size;
+  }
+
   /**
    * Source parity bridge: TacticalView::setGuardBandBias.
    * Positive values expand drawable culling margins; this renderer bridge disables
@@ -559,9 +564,18 @@ export class ObjectVisualManager {
         visual.loadToken += 1;
       }
       visual.assetPath = null;
-      this.unresolvedEntityIds.add(entityId);
-      this.updatePlaceholderVisibility(entityId, true);
-      this.scalePlaceholder(visual, state);
+      // Only show placeholder for entities that have a render asset path
+      // but it hasn't loaded yet.  Entities without any render asset
+      // (ambient sounds, waypoints, roads) are intentionally invisible
+      // in the C++ source — don't clutter the scene with magenta boxes.
+      if (state.renderAssetPath) {
+        this.unresolvedEntityIds.add(entityId);
+        this.updatePlaceholderVisibility(entityId, true);
+        this.scalePlaceholder(visual, state);
+      } else {
+        this.unresolvedEntityIds.delete(entityId);
+        this.updatePlaceholderVisibility(entityId, false);
+      }
       return;
     }
 
