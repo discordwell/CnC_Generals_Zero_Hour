@@ -36,7 +36,10 @@
 - **FPS optimizations (profile-guided)**: Disabled shadow map rendering (10-15ms/frame saved), throttled hover raycast to every 3 frames (3-5ms saved), skipped idle AnimationMixer updates, added syncVisualAsset fast path for stable models.
 - **Keyboard shortcuts**: G (guard position), X (scatter/stop), plus existing Space (center), S (stop), Delete (sell), 1-9 (control groups), Ctrl+1-9 (assign groups).
 - **Array allocation optimization**: getRenderableEntityStates uses direct loop instead of Array.from().map() + spread.
-- 28 new tests (3317 total), 22 commits, deployed to generals.discordwell.com.
+- **AI builds multiple structures**: Fixed builtStructureKeywords logic to allow retry when dozer is idle and building doesn't exist. AI now builds power plant → barracks → war factory in sequence. isDozerBusy uses pendingConstructionActions (not entity.moving).
+- **AudioEvent crash fix**: loadBundle and resolveAudioEventDefaults handle missing typeNames/controlNames/soundType fields on raw extracted audio blocks.
+- **Wet test verified**: Fresh load → main menu → skirmish → game loads → 4945 audio events loaded → $8,200 credits after training dozer + building power plant → dozer command card shows all build buttons → AI builds power plant autonomously.
+- 29 new tests (3318 total), 28 commits, deployed to generals.discordwell.com.
 
 ## 2026-03-12T17:55Z — Containment Round 2: HealContain Exit Fix + Overlord Damage Propagation
 - **HealContain bug fix**: Auto-ejected units now use `resolveContainerEvacuationPositions` for scatter exit instead of teleporting to container center
