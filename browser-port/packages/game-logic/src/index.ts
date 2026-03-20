@@ -5391,6 +5391,24 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
 
+/**
+ * Template names that are not game entities — they belong to separate
+ * C++ subsystems (TerrainRoads, WaypointManager) and should not be
+ * spawned via ThingFactory.
+ */
+const NON_ENTITY_TEMPLATE_NAMES = new Set([
+  // Road/path overlay templates — handled by TerrainRoadRenderer
+  'DirtRoad4', 'DirtPath1', 'Sidewalk', 'GravelRoad', 'DirtRoad1',
+  'DirtRoad2', 'DirtRoad3', 'PavedRoad1', 'PavedRoad2', 'BrokenPavedRoad',
+  'AsphaltRoad', 'BrokenAsphaltRoad', 'CobblestoneRoad',
+  // Map-embedded waypoint markers
+  '*Waypoints/Waypoint',
+]);
+
+function isNonEntityMapObject(templateName: string): boolean {
+  return NON_ENTITY_TEMPLATE_NAMES.has(templateName);
+}
+
 interface SideScoreState {
   structuresBuilt: number;
   structuresLost: number;
@@ -7287,6 +7305,14 @@ export class GameLogicSubsystem implements Subsystem {
 
     for (const mapObject of mapData.objects) {
       if ((mapObject.flags & OBJECT_DONT_RENDER_FLAG) !== 0) {
+        this.placementSummary.skippedObjects++;
+        continue;
+      }
+
+      // Source parity: road objects and waypoint markers are handled by
+      // separate C++ subsystems (TerrainRoads, WaypointManager), not
+      // spawned as game entities via ThingFactory.
+      if (isNonEntityMapObject(mapObject.templateName)) {
         this.placementSummary.skippedObjects++;
         continue;
       }

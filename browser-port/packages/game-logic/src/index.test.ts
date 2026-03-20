@@ -14717,6 +14717,33 @@ describe('skirmish starting entities', () => {
     expect(chinaEntities.length).toBe(2);
   });
 
+  it('filters road and waypoint template names from entity spawning', () => {
+    // Source parity: C++ TerrainRoads handles road objects and
+    // WaypointManager handles waypoints — neither goes through
+    // ThingFactory / GameLogic entity spawning.
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('Tree01', '', ['SHRUBBERY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 50, InitialHealth: 50 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    const mapData = makeMap([
+      makeMapObject('Tree01', 10, 10),           // real entity
+      makeMapObject('DirtRoad4', 20, 20),         // road → should be skipped
+      makeMapObject('Sidewalk', 30, 30),          // road → should be skipped
+      makeMapObject('*Waypoints/Waypoint', 40, 40), // waypoint → should be skipped
+      makeMapObject('GravelRoad', 50, 50),        // road → should be skipped
+    ]);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), makeHeightmap(64, 64));
+
+    const entities = logic.getRenderableEntityStates();
+    // Only the Tree01 should be spawned — roads and waypoints are filtered.
+    expect(entities.length).toBe(1);
+    expect(entities[0]!.templateName).toBe('Tree01');
+  });
+
   it('does not trigger immediate defeat when starting entities exist', () => {
     const bundle = makeBundle({
       objects: [
