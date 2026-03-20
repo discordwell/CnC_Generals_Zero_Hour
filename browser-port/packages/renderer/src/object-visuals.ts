@@ -293,6 +293,20 @@ export class ObjectVisualManager {
   }
 
   /**
+   * Set camera position for distance-based sync throttling.
+   * Call once per frame before sync().
+   */
+  setCameraPosition(x: number, z: number): void {
+    this.cameraX = x;
+    this.cameraZ = z;
+  }
+
+  private cameraX = 0;
+  private cameraZ = 0;
+  /** Distance beyond which entities only get position updates, not full sync. */
+  private static readonly FAR_SYNC_DISTANCE_SQR = 600 * 600;
+
+  /**
    * Sync rendered object visuals with latest render-state snapshots.
    */
   sync(states: readonly RenderableEntityState[], dt = 0): void {
@@ -314,6 +328,16 @@ export class ObjectVisualManager {
       // Skip expensive visual updates for hidden (shrouded) entities.
       // This saves ~10 sync operations per hidden entity per frame.
       if (!visual.root.visible) {
+        continue;
+      }
+
+      // Skip expensive sync for entities far from camera.
+      // Position + shroud are already updated above; full visual sync
+      // (animations, health bars, effects) only needed for nearby entities.
+      const dx = state.x - this.cameraX;
+      const dz = state.z - this.cameraZ;
+      if (dx * dx + dz * dz > ObjectVisualManager.FAR_SYNC_DISTANCE_SQR
+        && !state.isSelected) {
         continue;
       }
 

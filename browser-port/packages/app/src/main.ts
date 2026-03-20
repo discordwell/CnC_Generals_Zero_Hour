@@ -3031,6 +3031,7 @@ async function startGame(
       sunLight.target.updateMatrixWorld();
 
       syncScriptViewRuntimeBridge(gameLogic, objectVisualManager, terrainVisual);
+      objectVisualManager.setCameraPosition(camState.targetX, camState.targetZ);
       objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
 
       // Process visual events (explosions, muzzle flashes, etc.) and update particles.
