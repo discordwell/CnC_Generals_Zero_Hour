@@ -171,7 +171,10 @@ function findInvalidPath(
 export async function loadManifest(url: string): Promise<RuntimeManifest | null> {
   let response: Response;
   try {
-    response = await fetch(url);
+    // Source parity: the manifest must always be fresh to detect
+    // asset changes. Without no-cache, deploys don't take effect
+    // until the browser's HTTP cache expires.
+    response = await fetch(url, { cache: 'no-cache' });
   } catch (err) {
     throw new ManifestLoadError(url, err instanceof Error ? err.message : String(err));
   }
