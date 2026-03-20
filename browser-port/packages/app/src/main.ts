@@ -1599,7 +1599,7 @@ async function startGame(
 
     // Draw entity dots (respect fog of war — hide enemy entities in non-visible cells).
     if (showEntityBlips) {
-      const renderStates = gameLogic.getRenderableEntityStates();
+      const renderStates = getCachedRenderStates();
       for (const entity of renderStates) {
         const px = (entity.x / heightmap.worldWidth) * MINIMAP_SIZE;
         const py = (entity.z / heightmap.worldDepth) * MINIMAP_SIZE;
@@ -2461,7 +2461,7 @@ async function startGame(
     const maxY = Math.max(y0, y1);
 
     const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
-    const states = gameLogic.getRenderableEntityStates();
+    const states = getCachedRenderStates();
     const selectedIds: number[] = [];
 
     for (const entity of states) {
@@ -2612,6 +2612,18 @@ async function startGame(
   const trackedShortcutSpecialPowerSourceEntityIds = new Set<number>();
   let currentLogicFrame = 0;
   let missionInputLocked = false;
+
+  // Cache getRenderableEntityStates() per frame to avoid 9+ calls allocating
+  // 580+ objects each. Invalidated at the start of each simulation step.
+  let cachedRenderStates: ReturnType<typeof gameLogic.getRenderableEntityStates> | null = null;
+  let cachedRenderStatesFrame = -1;
+  const getCachedRenderStates = () => {
+    if (cachedRenderStatesFrame !== currentLogicFrame) {
+      cachedRenderStates = gameLogic.getRenderableEntityStates();
+      cachedRenderStatesFrame = currentLogicFrame;
+    }
+    return cachedRenderStates!;
+  };
 
   // Control harness for automated play-testing via browser console.
   const localPlayerId = networkManager.getLocalPlayerID();
@@ -2829,9 +2841,9 @@ async function startGame(
         if (now - lastClickTime < DOUBLE_CLICK_MS) {
           const selIds = gameLogic.getLocalPlayerSelectionIds();
           if (selIds.length === 1) {
-            const clickedState = gameLogic.getRenderableEntityStates().find(e => e.id === selIds[0]);
+            const clickedState = getCachedRenderStates().find(e => e.id === selIds[0]);
             if (clickedState && clickedState.isOwnedByLocalPlayer) {
-              const sameType = gameLogic.getRenderableEntityStates().filter(e =>
+              const sameType = getCachedRenderStates().filter(e =>
                 e.isOwnedByLocalPlayer
                 && e.templateName === clickedState.templateName
                 && e.category !== 'building',
@@ -2968,7 +2980,7 @@ async function startGame(
       // Tab — cycle through idle production structures and dozers.
       // Source parity: C++ InGameUI::selectNextIdleWorker / selectNextIdleFactory.
       if (!missionInputLocked && inputState.keysPressed.has('tab')) {
-        const allStates = gameLogic.getRenderableEntityStates();
+        const allStates = getCachedRenderStates();
         const localSide = gameLogic.getPlayerSide(networkManager.getLocalPlayerID());
         const idle = allStates.filter(e =>
           e.isOwnedByLocalPlayer
@@ -2993,7 +3005,7 @@ async function startGame(
       // Ctrl+A / Cmd+A — select all own combat units on screen.
       if (!missionInputLocked && inputState.keysPressed.has('a')
         && (inputState.keysDown.has('control') || inputState.keysDown.has('meta'))) {
-        const allStates = gameLogic.getRenderableEntityStates();
+        const allStates = getCachedRenderStates();
         const ownUnits = allStates.filter(e =>
           e.isOwnedByLocalPlayer && e.category !== 'building' && e.category !== 'unknown',
         );
@@ -3032,7 +3044,7 @@ async function startGame(
 
       syncScriptViewRuntimeBridge(gameLogic, objectVisualManager, terrainVisual);
       objectVisualManager.setCameraPosition(camState.targetX, camState.targetZ);
-      objectVisualManager.sync(gameLogic.getRenderableEntityStates(), dt);
+      objectVisualManager.sync(getCachedRenderStates(), dt);
 
       // Process visual events (explosions, muzzle flashes, etc.) and update particles.
       processVisualEvents();
@@ -3500,7 +3512,7 @@ async function startGame(
     submitCommand: (command: unknown): void =>
       gameLogic.submitCommand(command as Parameters<GameLogicSubsystem['submitCommand']>[0]),
     getRenderableEntityStates: (): ReturnType<GameLogicSubsystem['getRenderableEntityStates']> =>
-      gameLogic.getRenderableEntityStates(),
+      getCachedRenderStates(),
     getGameEndState: (): ReturnType<GameLogicSubsystem['getGameEndState']> =>
       gameLogic.getGameEndState(),
     setScriptTeamMembers: (teamName: string, entityIds: readonly number[]): boolean =>
