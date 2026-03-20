@@ -1677,13 +1677,21 @@ export class ObjectVisualManager {
       return;
     }
 
-    // Rebuild the cached Set only when the serialised key changes.
-    const flagsKey = flags.slice().sort().join('|');
-    if (flagsKey !== visual.cachedActiveFlagsKey) {
+    // Rebuild the cached Set only when the flag count or contents change.
+    // Fast check avoids per-frame slice+sort+join allocation for the common case
+    // where flags haven't changed between frames.
+    let flagsChanged = flags.length !== visual.cachedActiveFlags.size;
+    if (!flagsChanged) {
+      for (const f of flags) {
+        if (!visual.cachedActiveFlags.has(f)) { flagsChanged = true; break; }
+      }
+    }
+    if (flagsChanged) {
+      visual.cachedActiveFlagsKey = flags.slice().sort().join('|');
       visual.cachedActiveFlags.clear();
       for (const f of flags) visual.cachedActiveFlags.add(f);
-      visual.cachedActiveFlagsKey = flagsKey;
     }
+    const flagsKey = visual.cachedActiveFlagsKey;
 
     // Source parity: strip IgnoreConditionStates before matching.
     // Cached to avoid per-frame Set allocation.
