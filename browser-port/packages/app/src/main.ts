@@ -3153,7 +3153,7 @@ async function startGame(
       radarInteractionEnabled = radarInteractionAllowed;
       minimapCanvas.style.display = radarVisible ? 'block' : 'none';
       minimapCanvas.style.pointerEvents = radarInteractionAllowed ? 'auto' : 'none';
-      if (radarVisible) {
+      if (radarVisible && (currentLogicFrame % 3 === 0)) {
         updateMinimap(radarEntityBlipsVisible);
       }
       updateProductionPanel();
