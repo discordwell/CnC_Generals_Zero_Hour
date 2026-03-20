@@ -7643,6 +7643,30 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
 
+        // Try entering transport if right-clicking on a friendly transport.
+        // Source parity: C++ InGameUI::rightClickOnObject — enter transport/contain.
+        if (
+          pickedEntityId !== null
+          && pickedEntityId !== selEntity.id
+        ) {
+          const targetEntity = this.spawnedEntities.get(pickedEntityId);
+          if (
+            targetEntity
+            && !targetEntity.destroyed
+            && targetEntity.containProfile
+            && targetEntity.containProfile.moduleType === 'TRANSPORT'
+            && this.getTeamRelationship(selEntity, targetEntity) !== RELATIONSHIP_ENEMIES
+          ) {
+            this.submitCommand({
+              type: 'enterTransport',
+              entityId: selEntity.id,
+              targetTransportId: pickedEntityId,
+              commandSource: 'PLAYER',
+            });
+            continue;
+          }
+        }
+
         // Try repair if dozer right-clicks on a damaged friendly building.
         if (
           pickedEntityId !== null
