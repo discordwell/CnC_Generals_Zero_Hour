@@ -2988,6 +2988,24 @@ async function startGame(
         updateMinimap(radarEntityBlipsVisible);
       }
       updateProductionPanel();
+      // Show production progress on command card buttons
+      {
+        const selIds = gameLogic.getLocalPlayerSelectionIds();
+        if (selIds.length === 1) {
+          const prodState = gameLogic.getProductionState(selIds[0]!);
+          if (prodState && prodState.queue.length > 0) {
+            const entry = prodState.queue[0]!;
+            // Find which command card slot matches the producing item
+            commandCardRenderer.setOverlayData(1, {
+              productionProgress: entry.percentComplete / 100,
+            });
+          } else {
+            commandCardRenderer.setOverlayData(1, null);
+          }
+        } else {
+          commandCardRenderer.setOverlayData(1, null);
+        }
+      }
       commandCardRenderer.sync();
       updateRallyPointVisual();
       updateMoveIndicators();
