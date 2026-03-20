@@ -44,7 +44,9 @@
   - The AI follows the correct build order: Power Plant → Barracks → train infantry
   - This is the first time the AI has been observed building multiple structures AND training combat units in the live game
 - **Additional fixes**: Desert terrain colors, minimap desert palette, production progress overlay on command card, ESC deselect before options, loading screen MB counter, shroud entity sync skip, optimized raycast for picking.
-- 29 new tests (3318 total), 38 commits, deployed to generals.discordwell.com.
+- **CRITICAL FIX — Team relationships**: Skirmish setup never called setTeamRelationship, so all sides were NEUTRAL (not ENEMIES). AI couldn't discover enemy base, combat didn't work. Fixed by setting relationships in both directions during skirmish setup.
+- **AI scout confirmed**: After relationship fix, AI sent a ChinaInfantryTankHunter within 500 units of player base — first confirmed AI offensive action.
+- 29 new tests (3318 total), 40 commits, deployed to generals.discordwell.com.
 
 ## 2026-03-12T17:55Z — Containment Round 2: HealContain Exit Fix + Overlord Damage Propagation
 - **HealContain bug fix**: Auto-ejected units now use `resolveContainerEvacuationPositions` for scatter exit instead of teleporting to container center
