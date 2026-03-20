@@ -106,7 +106,7 @@ Three.js-based rendering with source parity to W3D engine:
 cd browser-port
 npm install
 tsc --build              # Type check
-npx vitest run           # Unit tests (2461 tests)
+npx vitest run           # Unit tests (3317 tests)
 vite build packages/app  # Production build
 npx playwright test      # E2E tests
 ```
