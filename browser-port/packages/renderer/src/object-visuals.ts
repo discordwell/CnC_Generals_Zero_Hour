@@ -304,8 +304,16 @@ export class ObjectVisualManager {
       }
       visual.requestedAnimationState = state.animationState;
 
+      // Always update position and shroud visibility.
       this.syncVisualTransform(visual, state);
       this.syncShroudVisibility(visual, state);
+
+      // Skip expensive visual updates for hidden (shrouded) entities.
+      // This saves ~10 sync operations per hidden entity per frame.
+      if (!visual.root.visible) {
+        continue;
+      }
+
       this.syncVisualAsset(visual, state);
       this.syncHealthBar(visual, state);
       this.syncSelectionRing(visual, state);
@@ -534,7 +542,13 @@ export class ObjectVisualManager {
     }
 
     this.raycaster.setFromCamera(ndc, camera);
-    const hit = this.raycaster.intersectObjects(this.scene.children, true).at(0);
+    // Only raycast against entity visual roots (not terrain, water,
+    // particles, etc.) to avoid checking all 11K+ scene meshes.
+    const entityRoots: THREE.Object3D[] = [];
+    for (const visual of this.visuals.values()) {
+      if (visual.root.visible) entityRoots.push(visual.root);
+    }
+    const hit = this.raycaster.intersectObjects(entityRoots, true).at(0);
     if (!hit) {
       return null;
     }
