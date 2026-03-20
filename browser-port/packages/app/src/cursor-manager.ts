@@ -280,7 +280,7 @@ export { parseSpriteSheet, JIFFY_MS };
  */
 export function resolveGameCursor(opts: {
   hasSelection: boolean;
-  hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground';
+  hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' | 'garrisonable';
   edgeScrollDir: number | null;
   pendingAbility: boolean;
   isAttackMode?: boolean;
@@ -305,6 +305,8 @@ export function resolveGameCursor(opts: {
         return 'SCCAttack';
       case 'own-unit':
         return 'SCCSelect';
+      case 'garrisonable':
+        return 'SCCSelect'; // Enter garrison cursor
       case 'ground':
         return 'SCCMove';
       default:

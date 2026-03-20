@@ -8664,6 +8664,9 @@ export class GameLogicSubsystem implements Subsystem {
     shroudRange: number;
     modelConditionFlags: string[];
     battlePlanDamageScalar: number;
+    moving: boolean;
+    movePath: ReadonlyArray<{ x: number; z: number }>;
+    pathIndex: number;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -8711,6 +8714,9 @@ export class GameLogicSubsystem implements Subsystem {
       modelConditionFlags: Array.from(entity.modelConditionFlags),
       shroudRange: entity.shroudRange,
       battlePlanDamageScalar: entity.battlePlanDamageScalar,
+      moving: entity.moving,
+      movePath: entity.movePath,
+      pathIndex: entity.pathIndex,
     };
   }
 

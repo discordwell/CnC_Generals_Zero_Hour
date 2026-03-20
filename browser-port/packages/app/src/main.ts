@@ -1938,6 +1938,85 @@ async function startGame(
   };
 
   // ========================================================================
+  // Waypoint path visualization (green lines showing selected unit's route)
+  // ========================================================================
+
+  const waypointPathMaterial = new THREE.LineBasicMaterial({
+    color: 0x44ff44,
+    linewidth: 1,
+    transparent: true,
+    opacity: 0.6,
+    depthTest: false,
+  });
+  const waypointPathLine = new THREE.Line(
+    new THREE.BufferGeometry(),
+    waypointPathMaterial,
+  );
+  waypointPathLine.name = 'waypoint-path';
+  waypointPathLine.visible = false;
+  waypointPathLine.renderOrder = 699;
+  scene.add(waypointPathLine);
+
+  // Reusable Float32Array for waypoint line vertices (grows as needed).
+  let waypointPathBuffer = new Float32Array(3 * 32); // Start with 32 vertices
+
+  const updateWaypointPathVisual = (): void => {
+    const selectedIds = gameLogic.getLocalPlayerSelectionIds();
+    if (selectedIds.length !== 1) {
+      waypointPathLine.visible = false;
+      return;
+    }
+
+    const entityState = gameLogic.getEntityState(selectedIds[0]!);
+    if (!entityState || !entityState.moving || !entityState.movePath || entityState.movePath.length === 0) {
+      waypointPathLine.visible = false;
+      return;
+    }
+
+    const pathIndex = entityState.pathIndex ?? 0;
+    const remaining = entityState.movePath.length - pathIndex;
+    if (remaining <= 0) {
+      waypointPathLine.visible = false;
+      return;
+    }
+
+    // Build vertex array: entity position + remaining waypoints
+    const vertexCount = 1 + remaining;
+    const floatCount = vertexCount * 3;
+    if (waypointPathBuffer.length < floatCount) {
+      waypointPathBuffer = new Float32Array(floatCount);
+    }
+
+    // First vertex: current entity position
+    waypointPathBuffer[0] = entityState.x;
+    waypointPathBuffer[1] = entityState.y + 0.5;
+    waypointPathBuffer[2] = entityState.z;
+
+    // Remaining vertices: waypoints from current path index onward
+    for (let i = 0; i < remaining; i++) {
+      const wp = entityState.movePath[pathIndex + i]!;
+      const wpY = heightmap.getInterpolatedHeight(wp.x, wp.z) + 0.5;
+      waypointPathBuffer[(i + 1) * 3] = wp.x;
+      waypointPathBuffer[(i + 1) * 3 + 1] = wpY;
+      waypointPathBuffer[(i + 1) * 3 + 2] = wp.z;
+    }
+
+    const geom = waypointPathLine.geometry;
+    const posAttr = geom.getAttribute('position') as THREE.BufferAttribute | null;
+    if (!posAttr || posAttr.count < vertexCount) {
+      geom.setAttribute('position', new THREE.BufferAttribute(
+        waypointPathBuffer.slice(0, floatCount), 3,
+      ));
+    } else {
+      (posAttr.array as Float32Array).set(waypointPathBuffer.subarray(0, floatCount));
+      posAttr.needsUpdate = true;
+    }
+    geom.setDrawRange(0, vertexCount);
+    geom.computeBoundingSphere();
+    waypointPathLine.visible = true;
+  };
+
+  // ========================================================================
   // Data-driven particle & FX system (replaces inline particle effects)
   // ========================================================================
 
@@ -2980,7 +3059,7 @@ async function startGame(
               20,
             )
           : null;
-        let hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' = 'none';
+        let hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' | 'garrisonable' = 'none';
         // Throttle hover raycast to every 3 frames — raycasting against
         // all scene meshes is expensive and cursor hover tolerates latency.
         if (inputState.pointerInCanvas && (currentLogicFrame % 3 === 0)) {
@@ -3097,6 +3176,7 @@ async function startGame(
       }
       commandCardRenderer.sync();
       updateRallyPointVisual();
+      updateWaypointPathVisual();
       updateMoveIndicators();
       updateProjectileVisuals();
       updateEntityInfoPanel();

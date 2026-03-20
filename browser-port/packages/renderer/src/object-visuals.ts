@@ -1563,9 +1563,15 @@ export class ObjectVisualManager {
     // and ramp up to full opacity as construction progresses.
     const constructionPct = state.constructionPercent ?? -1;
     const isUnderConstruction = constructionPct >= 0 && constructionPct < 100;
+    // Source parity: selling buildings (SOLD flag) count down to demolition.
+    // constructionPercent goes from 100 → -50 during sell. Show fade-out.
+    const isSelling = state.modelConditionFlags?.includes('SOLD') ?? false;
 
     let targetOpacity = 1.0;
-    if (isUnderConstruction) {
+    if (isSelling) {
+      // Fade out as sell countdown progresses (100 → 0 → -50)
+      targetOpacity = Math.max(0.1, Math.min(0.9, constructionPct / 100));
+    } else if (isUnderConstruction) {
       // Ramp from 0.3 (start) to 0.9 (near complete)
       targetOpacity = 0.3 + (constructionPct / 100) * 0.6;
     } else if (isStealthed && !isDetected) {
