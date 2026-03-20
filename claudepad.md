@@ -31,7 +31,9 @@
 - **Manifest no-cache fetch**: `loadManifest()` uses `{ cache: 'no-cache' }` to prevent stale hashes.
 - **Caddy no-cache**: Applied to index.html, manifest.json, ini-bundle.json; immutable on hashed JS/CSS.
 - **Known issue**: Multiple open generals.discordwell.com tabs can lock IDB, causing stuck "Initializing engine..." on reload. Fix: close all tabs and open fresh.
-- 28 new tests (3317 total), 15 commits, deployed to generals.discordwell.com.
+- **Audio pipeline complete**: 3530 WAV files added to manifest. Full pipeline: 4045 INI AudioEvents → AudioManager → AudioBufferLoader → Web Audio. Will play on fresh visit.
+- **AI build order expanded**: Added keywords for all 3 factions (GLA ArmsDealer/SupplyStash/Palace, China InternetCenter/PropagandaCenter, fixed StrategyCenter match).
+- 28 new tests (3317 total), 17 commits, deployed to generals.discordwell.com.
 
 ## 2026-03-12T17:55Z — Containment Round 2: HealContain Exit Fix + Overlord Damage Propagation
 - **HealContain bug fix**: Auto-ejected units now use `resolveContainerEvacuationPositions` for scatter exit instead of teleporting to container center
