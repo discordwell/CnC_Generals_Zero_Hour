@@ -7439,13 +7439,14 @@ export class GameLogicSubsystem implements Subsystem {
   getRenderableEntityStates(): RenderableEntityState[] {
     // Cache local player side once per frame to avoid O(n²) from per-entity resolution.
     const localSide = this.resolveLocalPlayerSide();
-    const renderableStates = Array.from(this.spawnedEntities.values()).map((entity) =>
-      this.makeRenderableEntityState(entity, localSide),
-    );
-    const pendingDyingStates = Array.from(this.pendingDyingRenderableStates.values())
-      .map((pending) => pending.state);
-
-    return [...renderableStates, ...pendingDyingStates];
+    const result: RenderableEntityState[] = [];
+    for (const entity of this.spawnedEntities.values()) {
+      result.push(this.makeRenderableEntityState(entity, localSide));
+    }
+    for (const pending of this.pendingDyingRenderableStates.values()) {
+      result.push(pending.state);
+    }
+    return result;
   }
 
   getScriptObjectAmbientSoundStates(): ScriptObjectAmbientSoundState[] {
