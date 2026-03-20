@@ -20,7 +20,10 @@
 - **Sell countdown fade-out**: Buildings being sold fade out progressively as demolition countdown proceeds.
 - **Exposed movement state**: `moving`/`movePath`/`pathIndex` now available via `getEntityState()`.
 - **Camera-distance sync throttle**: Entities >600 units from camera skip expensive visual sync (animations, health bars, effects). Skips ~70-80% of entities on Tournament Desert.
-- 3323 tests passing (5 new), 15 commits, deployed to generals.discordwell.com.
+- **Slope-based terrain coloring**: Cliff faces now blend toward darker rocky color for visual variety.
+- **Minimap throttle**: Minimap renders every 3rd frame instead of every frame.
+- **Cached render states**: `getRenderableEntityStates()` cached per frame — 9 calls reduced to 1 (eliminates ~4600 object allocations/frame).
+- 3323 tests passing (5 new), 19 commits, deployed to generals.discordwell.com.
 
 ## 2026-03-19T18:15Z — Wet Test Parity Sprint: 6 Fixes, Bundle Data Recovery
 - **Debug overlay**: Removed per-frame dump of all 784 entity IDs. Now shows only unresolved count. (commit f2026f6c)
