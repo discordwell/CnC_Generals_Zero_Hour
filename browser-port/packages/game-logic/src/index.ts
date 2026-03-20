@@ -7582,6 +7582,8 @@ export class GameLogicSubsystem implements Subsystem {
     if (input.rightMouseClick && this.selectedEntityIds.length > 0) {
       const pickedEntityId = this.pickObjectByInput(input, camera);
       const moveTarget = this.getMoveTargetFromMouse(input, camera);
+      // Source parity: Shift+right-click queues waypoints instead of replacing.
+      const shiftHeld = input.keysDown.has('shift');
 
       // Compute group centroid for formation offsets.
       const movableEntities: MapEntity[] = [];
@@ -7601,8 +7603,24 @@ export class GameLogicSubsystem implements Subsystem {
       }
       const useFormation = groupSize > 1;
 
+      // Source parity: Ctrl+right-click forces attack at ground position.
+      const ctrlHeld = input.keysDown.has('control') || input.keysDown.has('meta');
+
       // Issue commands to all selected entities.
       for (const selEntity of movableEntities) {
+        // Force-fire at ground position when Ctrl is held.
+        if (ctrlHeld && selEntity.attackWeapon && moveTarget) {
+          this.submitCommand({
+            type: 'attackMoveTo',
+            entityId: selEntity.id,
+            targetX: moveTarget.x,
+            targetZ: moveTarget.z,
+            attackDistance: 0,
+            commandSource: 'PLAYER',
+          });
+          continue;
+        }
+
         // Try garrison if infantry right-clicks on a garrisonable building.
         if (
           pickedEntityId !== null
@@ -7708,24 +7726,29 @@ export class GameLogicSubsystem implements Subsystem {
             destZ += offZ;
           }
 
-          const attackDistance = this.resolveAttackMoveDistance(selEntity);
-          if (this.isAttackMoveToMode) {
-            this.submitCommand({
-              type: 'attackMoveTo',
-              entityId: selEntity.id,
-              targetX: destX,
-              targetZ: destZ,
-              attackDistance,
-              commandSource: 'PLAYER',
-            });
+          if (shiftHeld && selEntity.moving && selEntity.movePath.length > 0) {
+            // Source parity: Shift+right-click appends waypoint to existing path.
+            selEntity.movePath.push({ x: destX, z: destZ });
           } else {
-            this.submitCommand({
-              type: 'moveTo',
-              entityId: selEntity.id,
-              targetX: destX,
-              targetZ: destZ,
-              commandSource: 'PLAYER',
-            });
+            const attackDistance = this.resolveAttackMoveDistance(selEntity);
+            if (this.isAttackMoveToMode) {
+              this.submitCommand({
+                type: 'attackMoveTo',
+                entityId: selEntity.id,
+                targetX: destX,
+                targetZ: destZ,
+                attackDistance,
+                commandSource: 'PLAYER',
+              });
+            } else {
+              this.submitCommand({
+                type: 'moveTo',
+                entityId: selEntity.id,
+                targetX: destX,
+                targetZ: destZ,
+                commandSource: 'PLAYER',
+              });
+            }
           }
         }
       }
