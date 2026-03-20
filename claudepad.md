@@ -599,3 +599,11 @@ Eight parallel agents targeting top feature parity gaps from code review:
 - Short-distance movement works fine (dozer movement, local combat)
 - C++ uses hierarchical pathfinding with region-based pre-computation
 - Fix needed: implement pathfinding region system or increase nav grid resolution
+
+## AI Attack Confirmed (Session Wet Test)
+- Frame 8161: Enemy infantry at (1065,1544) — marching south toward player CC at (1005,584)
+- Frame 11161: Enemy Tank Hunter at (1131,599) — 127 units from player CC
+- AI sent 8 infantry across the map after discovering player base
+- Cross-map pathfinding works with CLIFF_HEIGHT_DELTA=25.0
+- Auto-attack at close range needs guard state trigger — infantry arrive but don't fire automatically yet
+- This is the first confirmed AI offensive across the full map in the browser port
