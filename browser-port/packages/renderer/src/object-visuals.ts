@@ -166,6 +166,9 @@ interface VisualAssetState {
   // --- Animation speed factor ---
   /** Per-entity randomised speed factor applied on condition change. */
   conditionAnimSpeedFactor: number;
+  // --- Team color ---
+  /** Side string last applied for team color tinting (null = never applied). */
+  appliedTeamColorSide: string | null;
 }
 
 export interface ObjectVisualManagerConfig {
@@ -315,6 +318,7 @@ export class ObjectVisualManager {
       }
 
       this.syncVisualAsset(visual, state);
+      this.syncTeamColor(visual, state);
       this.syncHealthBar(visual, state);
       this.syncSelectionRing(visual, state);
       this.syncScriptFlashRing(visual, state);
@@ -494,6 +498,7 @@ export class ObjectVisualManager {
       currentModelName: null,
       modelSwapLoadToken: 0,
       conditionAnimSpeedFactor: 1.0,
+      appliedTeamColorSide: null,
     };
   }
 
@@ -852,6 +857,7 @@ export class ObjectVisualManager {
       visual.root.remove(visual.currentModel);
       this.disposeObject3D(visual.currentModel);
       visual.currentModel = null;
+      visual.appliedTeamColorSide = null;
     }
   }
 
@@ -1484,6 +1490,50 @@ export class ObjectVisualManager {
     visual.statusEffectGroup.visible = true;
     // Billboard effect.
     visual.statusEffectGroup.rotation.y = -visual.root.rotation.y;
+  }
+
+  // ---- Team color mapping ----
+  // Source parity: C++ MultiplayerColor.ini defines per-player colors.
+  // In the original game, "house color" texture regions are recolored.
+  // Here we tint the model's emissive to give a subtle team color.
+  private static readonly TEAM_COLORS: Record<string, number> = {
+    america: 0x3366cc,   // Blue (USA)
+    china: 0xcc3333,     // Red (China)
+    gla: 0x33aa33,       // Green (GLA)
+  };
+
+  /**
+   * Apply team color tint to model meshes based on entity side.
+   * Uses emissive color for a subtle tint that doesn't wash out
+   * the model's base color.
+   */
+  private syncTeamColor(visual: VisualAssetState, state: RenderableEntityState): void {
+    const side = state.side?.toLowerCase() ?? null;
+    if (!visual.currentModel || side === visual.appliedTeamColorSide) {
+      return;
+    }
+    visual.appliedTeamColorSide = side;
+
+    const colorHex = side ? (ObjectVisualManager.TEAM_COLORS[side] ?? null) : null;
+    if (colorHex === null) {
+      return;
+    }
+
+    const tintColor = new THREE.Color(colorHex);
+    const tintIntensity = 0.15; // Subtle tint
+
+    visual.currentModel.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const mat of materials) {
+        const stdMat = mat as THREE.MeshStandardMaterial;
+        if (stdMat.isMeshStandardMaterial) {
+          stdMat.emissive.copy(tintColor);
+          stdMat.emissiveIntensity = tintIntensity;
+        }
+      }
+    });
   }
 
   /**

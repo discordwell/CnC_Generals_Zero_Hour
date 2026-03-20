@@ -1165,6 +1165,7 @@ async function startGame(
   const debugInfo = document.getElementById('debug-info') as HTMLDivElement;
   const creditsHud = document.getElementById('credits-hud') as HTMLDivElement;
   creditsHud.style.display = 'block';
+  let displayedCredits = 0; // Animated credit counter (ticks toward actual value)
 
   // Power HUD indicator (below credits) — reuse existing element on restart.
   let powerHud = document.getElementById('power-hud') as HTMLDivElement | null;
@@ -3134,12 +3135,26 @@ async function startGame(
       });
       uiRuntime.setControlBarButtons(controlBarButtons);
 
-      // Update credits HUD
+      // Update credits HUD with animated counter
       const localPlayerId = networkManager.getLocalPlayerID();
       const localPlayerSide = gameLogic.getPlayerSide(localPlayerId);
       if (localPlayerSide) {
         const credits = gameLogic.getSideCredits(localPlayerSide);
-        creditsHud.textContent = `$${credits.toLocaleString()}`;
+        // Source parity: C++ ControlBar credit counter ticks toward target value.
+        if (displayedCredits !== credits) {
+          const diff = credits - displayedCredits;
+          const step = Math.max(1, Math.abs(Math.floor(diff * 0.2)));
+          if (Math.abs(diff) <= step) {
+            displayedCredits = credits;
+          } else {
+            displayedCredits += diff > 0 ? step : -step;
+          }
+          creditsHud.textContent = `$${displayedCredits.toLocaleString()}`;
+          // Flash color on credit change
+          creditsHud.style.color = diff > 0 ? '#44ff44' : '#ff4444';
+        } else {
+          creditsHud.style.color = '#d4af37';
+        }
 
         // Update power HUD
         const powerState = gameLogic.getSidePowerState(localPlayerSide);
