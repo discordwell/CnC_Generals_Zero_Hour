@@ -155,23 +155,18 @@ describe('crush velocity direction check (SquishCollide.cpp:97-131)', () => {
 
 describe('stealth RevealDistanceFromTarget (StealthUpdate.cpp:438-456)', () => {
   /**
-   * C++ parity: StealthUpdate::update checks if the stealthed unit has an
-   * attack target and is within RevealDistanceFromTarget of that target.
-   * If so, it auto-reveals (clears STEALTHED status) so the unit can fire.
+   * C++ parity: StealthUpdate::update checks if the unit has an attack target
+   * and is within RevealDistanceFromTarget of that target. If so, it calls
+   * markAsDetected() which sets DETECTED status for stealthDelay frames.
    *
-   * TS gap: stealth-detection.ts has no equivalent of RevealDistanceFromTarget.
-   * The INI field is not parsed by extractStealthProfile(). Stealthed units
-   * rely on StealthForbiddenConditions (ATTACKING/FIRING_PRIMARY) to break
-   * stealth, which happens at attack initiation rather than at approach distance.
-   *
-   * This test documents the gap by checking whether a stealthed attacker
-   * auto-reveals when approaching its target within 40 units (with
-   * RevealDistanceFromTarget=50).
+   * Source: StealthUpdate.cpp:699-714 — runs before allowedToStealth(), early
+   * returns when triggered. This means the STEALTHED check and forbidden
+   * conditions are skipped, but DETECTED is set so enemies can see the unit.
    */
-  it('stealthed attacker does NOT auto-reveal based on distance to target (gap)', () => {
+  it('stealthed attacker auto-reveals when within RevealDistanceFromTarget of target', () => {
     // Create a stealthed unit with attack capability and a target far away.
-    // The StealthUpdate module has a custom field RevealDistanceFromTarget=50
-    // which is NOT parsed by the TS code.
+    // The StealthUpdate module has RevealDistanceFromTarget=50, so the unit
+    // should auto-reveal (become DETECTED) when within 50 units of its attack target.
     const bundle = makeBundle({
       objects: [
         makeObjectDef('StealthAttacker', 'America', ['INFANTRY'], [
@@ -179,7 +174,6 @@ describe('stealth RevealDistanceFromTarget (StealthUpdate.cpp:438-456)', () => {
           makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', {
             StealthDelay: 100,
             InnateStealth: 'Yes',
-            // C++ field — not parsed by TS extractStealthProfile
             RevealDistanceFromTarget: 50,
           }),
           makeWeaponBlock('StealthGun'),
@@ -255,34 +249,21 @@ describe('stealth RevealDistanceFromTarget (StealthUpdate.cpp:438-456)', () => {
     const dz = attackerState!.z - targetState!.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
 
-    // Document whether the attacker auto-revealed based on RevealDistanceFromTarget.
-    // In C++: if distance < RevealDistanceFromTarget (50), stealth is broken.
-    // In TS: RevealDistanceFromTarget is not parsed; stealth breaks via
-    // StealthForbiddenConditions when the unit starts attacking/firing.
-    //
-    // The attacker may or may not still be stealthed depending on whether it
-    // reached attack range and triggered the ATTACKING forbidden condition.
-    // The key gap is: C++ would reveal at distance=50 even before firing.
-    // TS only reveals when ATTACKING/FIRING conditions trigger.
-
-    if (distance < 50 && distance > 30) {
-      // Attacker is within RevealDistanceFromTarget but outside attack range.
-      // C++ would auto-reveal here. TS should still be stealthed (gap).
-      // This documents the parity gap.
-      const isStealthed = attackerState!.statusFlags.includes('STEALTHED');
-      // TS does NOT implement RevealDistanceFromTarget, so unit stays stealthed
-      // until it actually starts attacking (when StealthForbiddenConditions kick in).
-      expect(isStealthed).toBe(true);
-    }
-
-    // Regardless of exact position, document that RevealDistanceFromTarget
-    // is not parsed from INI.
+    // Verify RevealDistanceFromTarget is parsed from INI.
     const privateApi = logic as unknown as { spawnedEntities: Map<number, any> };
     const attackerEntity = privateApi.spawnedEntities.get(1)!;
     const stealthProfile = attackerEntity.stealthProfile;
     expect(stealthProfile).not.toBeNull();
-    // Verify RevealDistanceFromTarget is NOT in the parsed profile (gap confirmation).
-    expect((stealthProfile as any).revealDistanceFromTarget).toBeUndefined();
+    expect((stealthProfile as any).revealDistanceFromTarget).toBe(50);
+
+    // Source parity: StealthUpdate.cpp:699-714 — if within RevealDistanceFromTarget (50),
+    // the entity should be marked DETECTED (auto-revealed) while remaining STEALTHED.
+    // C++ calls markAsDetected() which sets DETECTED for stealthDelay frames.
+    if (distance < 50) {
+      // Attacker is within RevealDistanceFromTarget — should be auto-revealed (DETECTED).
+      const isDetected = attackerState!.statusFlags.includes('DETECTED');
+      expect(isDetected).toBe(true);
+    }
   });
 });
 

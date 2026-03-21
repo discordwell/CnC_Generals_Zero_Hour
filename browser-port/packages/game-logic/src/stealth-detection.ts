@@ -90,11 +90,15 @@ export function extractStealthProfile(self: GL, objectDef: ObjectDef | undefined
           forbiddenConditions = STEALTH_FORBIDDEN_DEFAULT;
         }
 
+        // Source parity: StealthUpdate.cpp:112 — RevealDistanceFromTarget parsed as Real.
+        const revealDistanceFromTarget = readNumericField(block.fields, ['RevealDistanceFromTarget']) ?? 0;
+
         profile = {
           stealthDelayFrames,
           innateStealth,
           forbiddenConditions,
           moveThresholdSpeed,
+          revealDistanceFromTarget,
         };
       }
     }
@@ -237,6 +241,26 @@ export function updateStealth(self: GL): void {
       }
     }
 
+    // Source parity: StealthUpdate.cpp:699-714 — RevealDistanceFromTarget auto-reveal.
+    // This check runs BEFORE allowedToStealth. If the entity has an attack target
+    // and is within revealDistanceFromTarget, mark as DETECTED and skip the rest (early return
+    // in C++). The C++ code does not check STEALTHED status — it always runs.
+    if (profile && profile.revealDistanceFromTarget > 0
+        && entity.attackTargetEntityId !== null) {
+      const revealTarget = self.spawnedEntities.get(entity.attackTargetEntityId);
+      if (revealTarget && !revealTarget.destroyed) {
+        const rdx = revealTarget.x - entity.x;
+        const rdz = revealTarget.z - entity.z;
+        const distSq = rdx * rdx + rdz * rdz;
+        const revealDistSq = profile.revealDistanceFromTarget * profile.revealDistanceFromTarget;
+        if (distSq <= revealDistSq) {
+          entity.objectStatusFlags.add('DETECTED');
+          entity.detectedUntilFrame = self.frameCounter + delayFrames;
+          continue; // C++ returns early — skip allowedToStealth check.
+        }
+      }
+    }
+
     // Source parity: StealthUpdate::allowedToStealth — check forbidden conditions.
     let breakStealth = false;
 
@@ -298,6 +322,7 @@ export function updateStealth(self: GL): void {
     if (!entity.objectStatusFlags.has('STEALTHED')) {
       entity.objectStatusFlags.add('STEALTHED');
     }
+
   }
 }
 

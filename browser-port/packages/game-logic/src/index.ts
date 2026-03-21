@@ -3832,6 +3832,9 @@ interface StealthProfile {
   forbiddenConditions: number;
   /** Speed threshold — stealth breaks when velocity > this. 0 = any movement breaks stealth. */
   moveThresholdSpeed: number;
+  /** Distance at which a stealthed unit auto-reveals when approaching its attack target.
+   *  Source parity: StealthUpdate.cpp:699-714 — markAsDetected() when within this range of getCurrentVictim(). */
+  revealDistanceFromTarget: number;
 }
 
 /** StealthForbiddenConditions bitmask values — matches C++ TheStealthLevelNames array ordering. */
