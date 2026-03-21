@@ -6800,6 +6800,8 @@ export class GameLogicSubsystem implements Subsystem {
   private globalWeaponBonusTable: WeaponBonusTable = { entries: new Map() };
   private readonly commandQueue: GameLogicCommand[] = [];
   private frameCounter = 0;
+  /** Guard flag: true while applying poison tick damage to prevent re-infection via onDamage. */
+  /* @internal */ _poisonTickInProgress = false;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
   /** Source parity bridge: per-cell bridge layer membership for overlapping bridge segments. */
@@ -26805,7 +26807,9 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: PoisonedBehavior.onDamage — POISON damage starts/refreshes poison DoT.
-    if (normalizedDamageType === 'POISON') {
+    // Skip re-infection during poison tick damage (C++ uses DAMAGE_UNRESISTABLE to avoid this;
+    // we use POISON for armor application but guard against the re-trigger here).
+    if (normalizedDamageType === 'POISON' && !this._poisonTickInProgress) {
       this.applyPoisonToEntity(target, adjustedDamage);
     }
 

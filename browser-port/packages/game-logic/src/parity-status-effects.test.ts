@@ -21,15 +21,16 @@ import {
 } from './test-helpers.js';
 
 // ---------------------------------------------------------------------------
-// Test 1: Poison Damage Uses POISON Type, Not UNRESISTABLE
+// Test 1: Poison Tick Damage Uses POISON Type (Armor Applies)
 // ---------------------------------------------------------------------------
-// C++ source: PoisonedBehavior.cpp — poison tick damage uses the original
-// weapon's damage type (POISON) through the standard damage pipeline, so
-// armor reduces each tick.
+// C++ source: PoisonedBehavior.cpp:126 — poison tick damage uses
+// DAMAGE_UNRESISTABLE (to avoid re-triggering onDamage) with
+// m_damageFXOverride = DAMAGE_POISON for visual effects.
 //
-// TS: status-effects.ts:198 — updatePoisonedEntities calls
-//   applyWeaponDamageAmount(null, entity, amount, 'UNRESISTABLE')
-// which bypasses all armor.
+// TS: status-effects.ts — updatePoisonedEntities calls
+//   applyWeaponDamageAmount(null, entity, amount, 'POISON')
+// with a guard flag (_poisonTickInProgress) to prevent re-infection,
+// so armor reduces each tick.
 
 describe('Poison damage type parity', () => {
   function makePoisonSetup(opts: {
@@ -54,12 +55,13 @@ describe('Poison damage type parity', () => {
         PoisonDamageInterval: opts.poisonIntervalMs ?? 333,
         PoisonDuration: opts.poisonDurationMs ?? 3000,
       }),
+      makeBlock('ArmorSet', 'ArmorSet', { Conditions: 'NONE', Armor: 'PoisonResistArmor' }),
     ]);
 
     // Armor that reduces POISON damage to armorPercent% pass-through.
     const armor = makeArmorDef('PoisonResistArmor', {
-      'Armor': `DEFAULT ${armorPercent}%`,
-      'Armor POISON': `${armorPercent}%`,
+      Default: 1,
+      POISON: `${armorPercent}%`,
     });
 
     const attackerDef = makeObjectDef('PoisonAttacker', 'China', ['VEHICLE'], [
@@ -102,15 +104,14 @@ describe('Poison damage type parity', () => {
     return { logic };
   }
 
-  it('documents that TS poison ticks use UNRESISTABLE, bypassing armor (C++ uses POISON)', () => {
+  it('poison ticks use POISON damage type, so armor reduces each tick', () => {
     // Setup: target with 500 HP, armor that reduces POISON to 10% pass-through,
     // poisoned by a weapon dealing 10 POISON damage.
     //
-    // C++ expected behavior:
-    //   Each poison tick deals 10 * 0.10 = 1 damage (armor reduces POISON).
-    //
-    // TS actual behavior:
-    //   Each poison tick deals 10 damage as UNRESISTABLE (bypasses all armor).
+    // Each poison tick deals 10 * 0.10 = 1 damage (armor reduces POISON).
+    // Note: C++ PoisonedBehavior.cpp:126 uses DAMAGE_UNRESISTABLE to avoid
+    // re-triggering onDamage, but we use POISON with a guard flag instead,
+    // so armor applies to poison ticks.
     const { logic } = makePoisonSetup({
       poisonDamage: 10,
       poisonArmorPercent: 10,
@@ -135,17 +136,11 @@ describe('Poison damage type parity', () => {
     const healthAfterPoisonTicks = logic.getEntityState(1)!.health;
     const poisonDamageDealt = healthAfterHit - healthAfterPoisonTicks;
 
-    // PARITY DIVERGENCE:
-    // In C++, poison ticks use POISON damage type -> armor coefficient 0.10
-    //   -> each tick deals 10 * 0.10 = 1 damage. Over ~1 tick: 1 damage.
-    // In TS, poison ticks use UNRESISTABLE -> armor coefficient 1.0
-    //   -> each tick deals 10 damage. Over ~1 tick: 10 damage.
-    //
-    // We verify the TS behavior: poison ticks deal full unmitigated damage.
+    // Poison ticks use POISON damage type, so armor coefficient 0.10 applies.
+    // Each tick deals 10 * 0.10 = 1 damage (not 10 as it was with UNRESISTABLE).
     expect(poisonDamageDealt).toBeGreaterThan(0);
-    // If armor were applied (C++ parity), damage per tick would be 1.
-    // Since TS uses UNRESISTABLE, damage per tick is 10 — much higher.
-    expect(poisonDamageDealt).toBeGreaterThanOrEqual(10);
+    // With armor, damage per tick is 1. Even with multiple ticks, total should be << 10.
+    expect(poisonDamageDealt).toBeLessThan(10);
   });
 
   it('verifies the initial POISON hit IS reduced by armor', () => {

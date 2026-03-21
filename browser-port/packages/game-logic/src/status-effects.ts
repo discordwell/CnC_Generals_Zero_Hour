@@ -194,8 +194,13 @@ export function updatePoisonedEntities(self: GL): void {
     }
 
     // Apply poison damage tick
+    // Source parity: PoisonedBehavior.cpp:122-131 — C++ uses DAMAGE_UNRESISTABLE to avoid
+    // re-triggering onDamage (which would restart poison). We use 'POISON' so armor applies,
+    // but set a guard flag to prevent the applyPoisonToEntity re-infection path.
     if (self.frameCounter >= entity.poisonNextDamageFrame) {
-      self.applyWeaponDamageAmount(null, entity, entity.poisonDamageAmount, 'UNRESISTABLE');
+      self._poisonTickInProgress = true;
+      self.applyWeaponDamageAmount(null, entity, entity.poisonDamageAmount, 'POISON');
+      self._poisonTickInProgress = false;
       const interval = entity.poisonedBehaviorProfile?.poisonDamageIntervalFrames ?? DEFAULT_POISON_DAMAGE_INTERVAL_FRAMES;
       entity.poisonNextDamageFrame = self.frameCounter + interval;
     }
