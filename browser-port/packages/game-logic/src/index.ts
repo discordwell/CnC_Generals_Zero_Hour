@@ -142,7 +142,6 @@ import {
 import {
   addExperiencePoints as addExperiencePointsImpl,
   applyHealthBonusForLevelChange as applyHealthBonusForLevelChangeImpl,
-  DEFAULT_VETERANCY_CONFIG,
   LEVEL_ELITE,
   LEVEL_HEROIC,
   LEVEL_REGULAR,
@@ -6800,6 +6799,8 @@ export class GameLogicSubsystem implements Subsystem {
   /* @internal */ scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
   /** Source parity: TheGlobalData->m_weaponBonusSet — global weapon bonus table from GameData.ini. */
   private globalWeaponBonusTable: WeaponBonusTable = { entries: new Map() };
+  /** Source parity: TheGlobalData->m_healthBonus[] — veterancy health bonus multipliers from GameData.ini. */
+  private globalHealthBonuses: readonly [number, number, number, number] = [1.0, 1.0, 1.0, 1.0];
   private readonly commandQueue: GameLogicCommand[] = [];
   private frameCounter = 0;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
@@ -7288,6 +7289,7 @@ export class GameLogicSubsystem implements Subsystem {
     const gameDataConfig = iniDataRegistry.getGameData();
     if (gameDataConfig) {
       this.globalWeaponBonusTable = buildWeaponBonusTable(gameDataConfig.weaponBonusEntries);
+      this.globalHealthBonuses = gameDataConfig.healthBonuses;
     }
     const aiConfig = iniDataRegistry.getAiConfig();
     this.runtimeAiConfig = {
@@ -30738,7 +30740,8 @@ export class GameLogicSubsystem implements Subsystem {
 
   private onEntityLevelUp(entity: MapEntity, oldLevel: VeterancyLevel, newLevel: VeterancyLevel): void {
     // Source parity: apply health bonus (ActiveBody.cpp:1126-1134).
-    const config = DEFAULT_VETERANCY_CONFIG;
+    // Uses TheGlobalData->m_healthBonus[] loaded from GameData.ini.
+    const config = { healthBonuses: this.globalHealthBonuses };
     const { newHealth, newMaxHealth } = applyHealthBonusForLevelChangeImpl(
       oldLevel,
       newLevel,
