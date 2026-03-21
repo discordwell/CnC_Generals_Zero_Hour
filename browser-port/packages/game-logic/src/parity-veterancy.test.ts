@@ -219,14 +219,11 @@ describe('parity veterancy: XP for killing under-construction buildings', () => 
    * things under construction.
    *
    * TS source: entity-lifecycle.ts:1777-1788
-   * The TS code awards unit-level XP with NO check for UNDER_CONSTRUCTION status.
-   * It only checks UNDER_CONSTRUCTION for player skill points (line 1798).
-   *
-   * PARITY GAP: Unit-level XP is awarded for killing under-construction buildings
-   * in the TS port, but NOT in the C++ original.
+   * The TS code now checks UNDER_CONSTRUCTION before awarding any XP or skill points,
+   * matching the C++ behavior.
    */
 
-  it('should not award unit-level XP for killing an under-construction building (C++ parity gap)', () => {
+  it('should not award unit-level XP for killing an under-construction building', () => {
     // Set up: a dozer to build, a building to be built, and an enemy attacker.
     const agent = createParityAgent({
       bundles: {
@@ -303,20 +300,9 @@ describe('parity veterancy: XP for killing under-construction buildings', () => 
     const attackerAfter = agent.gameLogic.getEntityState(3);
     expect(attackerAfter).not.toBeNull();
 
-    /**
-     * C++ EXPECTED: currentExperience should be 0 (no XP for under-construction kills).
-     * TS ACTUAL: currentExperience will be 50 (XP is awarded — parity gap).
-     *
-     * This test documents the gap. When the gap is fixed, change the assertion below
-     * from `.toBe(50)` to `.toBe(0)` and the veterancy from `LEVEL_VETERAN` to `LEVEL_REGULAR`.
-     */
-    // Current TS behavior (parity gap): XP IS awarded for under-construction kills
-    expect(attackerAfter!.currentExperience).toBe(50);
-    expect(attackerAfter!.veterancyLevel).toBe(LEVEL_VETERAN);
-
-    // When the parity gap is fixed, these should pass instead:
-    // expect(attackerAfter!.currentExperience).toBe(0);
-    // expect(attackerAfter!.veterancyLevel).toBe(LEVEL_REGULAR);
+    // Source parity: Object.cpp:2661 — no XP for killing under-construction entities.
+    expect(attackerAfter!.currentExperience).toBe(0);
+    expect(attackerAfter!.veterancyLevel).toBe(LEVEL_REGULAR);
   });
 
   it('correctly blocks player skill points for under-construction kills (already implemented)', () => {

@@ -1774,6 +1774,11 @@ export function awardExperienceOnKill(self: GL, victimId: number, attackerId: nu
     return;
   }
 
+  // Source parity: Object.cpp:2661 — no XP or skill points for killing things under construction.
+  if (victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
+    return;
+  }
+
   const xpGain = getExperienceValueImpl(victimProfile, victim.experienceState.currentLevel);
   if (xpGain <= 0) {
     return;
@@ -1794,10 +1799,7 @@ export function awardExperienceOnKill(self: GL, victimId: number, attackerId: nu
   // Source parity: Player::addSkillPointsForKill — also award player-level rank points.
   // SkillPointValue defaults to ExperienceValue when not set in INI (USE_EXP_VALUE_FOR_SKILL_VALUE sentinel).
   if (attackerSide) {
-    // No skill points for killing units under construction.
-    if (!victim.objectStatusFlags.has('UNDER_CONSTRUCTION')) {
-      self.addPlayerSkillPoints(attackerSide, xpGain);
-    }
+    self.addPlayerSkillPoints(attackerSide, xpGain);
   }
 }
 
