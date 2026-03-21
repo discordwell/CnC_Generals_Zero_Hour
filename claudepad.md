@@ -38,8 +38,9 @@
 - **Round 5**: 10 areas audited, 30 tests. Verified: range fudge, pre-attack delay, leech range, scatter reset, secondary radius, continuous fire, guard pursuit, capture transfer. Gaps: reload time sharing (per-entity vs per-slot).
 - **Round 6**: 10 areas audited, 27 tests. ALL correct: armor default coeff, sell refund, DAMAGE stacking, death type filtering, Overlord propagation, spawn offset, ConflictsWith, slave respawn, dozer idle, fire events.
 - **Round 7**: 10 areas audited, 45 tests. Verified: HeightDie, FireSpread, Lifetime, Physics gravity/friction/bounce, DynamicShroudClearing 6-state, FloatUpdate, ProjectileStream, OCLUpdate periodic spawn. Gaps: stealth disguise not implemented, FireOCL consecutiveShots stuck at 1.
-- **Grand Total**: 84 C++ divergence areas audited, 265 parity tests, 9 fixes applied, 65 areas verified correct, 19 gaps documented.
-- 1975 game-logic tests passing across 66 test files.
+- **Round 8**: 10 areas audited, 30 tests. ALL correct: XP last-hitter, auto-target closest, upgrade cost timing, construction health ramp, rally pathfinding, terrain snap, auto-reload idle, victory grace, missile lock proximity, spawn shroud.
+- **Grand Total**: 94 C++ divergence areas audited, 295 parity tests, 9 fixes applied, 75 areas verified correct, 19 gaps documented.
+- 2005 game-logic tests passing across 71 test files.
 
 ## 2026-03-19T18:15Z — Wet Test Parity Sprint: 6 Fixes, Bundle Data Recovery
 - **Debug overlay**: Removed per-frame dump of all 784 entity IDs. Now shows only unresolved count. (commit f2026f6c)
