@@ -142,6 +142,7 @@ import {
 import {
   addExperiencePoints as addExperiencePointsImpl,
   applyHealthBonusForLevelChange as applyHealthBonusForLevelChangeImpl,
+  DEFAULT_VETERANCY_CONFIG,
   LEVEL_ELITE,
   LEVEL_HEROIC,
   LEVEL_REGULAR,
@@ -5390,6 +5391,8 @@ const DEFAULT_GAME_LOGIC_CONFIG: Readonly<GameLogicConfig> = {
   superweaponRestriction: 0,
   maxTunnelCapacity: 10,
   partitionCellSize: PATHFIND_CELL_SIZE,
+  multipleFactory: 0, // C++ default: 0.0 (GlobalData.cpp:842), retail INI: 0.85
+  maxLowEnergyProductionSpeed: 0, // C++ default: 0.0 (GlobalData.cpp), retail INI: ~0.5
 };
 
 const OBJECT_DONT_RENDER_FLAG = 0x100;
@@ -6797,12 +6800,8 @@ export class GameLogicSubsystem implements Subsystem {
   /* @internal */ scriptKindOfNameToBit = SCRIPT_KIND_OF_NAME_TO_BIT;
   /** Source parity: TheGlobalData->m_weaponBonusSet — global weapon bonus table from GameData.ini. */
   private globalWeaponBonusTable: WeaponBonusTable = { entries: new Map() };
-  /** Source parity: TheGlobalData->m_healthBonus[] — veterancy health bonus multipliers from GameData.ini. */
-  private globalHealthBonuses: readonly [number, number, number, number] = [1.0, 1.0, 1.0, 1.0];
   private readonly commandQueue: GameLogicCommand[] = [];
   private frameCounter = 0;
-  /** Guard flag: true while applying poison tick damage to prevent re-infection via onDamage. */
-  /* @internal */ _poisonTickInProgress = false;
   private readonly bridgeSegments = new Map<number, BridgeSegmentState>();
   private readonly bridgeSegmentByControlEntity = new Map<number, number>();
   /** Source parity bridge: per-cell bridge layer membership for overlapping bridge segments. */
@@ -7286,11 +7285,9 @@ export class GameLogicSubsystem implements Subsystem {
     this.configureScriptKindOfBitLayout(iniDataRegistry);
 
     // Source parity: TheGlobalData->m_weaponBonusSet — build from GameData.ini entries.
-    // Source parity: TheGlobalData->m_healthBonus[] — veterancy health multipliers from GameData.ini.
     const gameDataConfig = iniDataRegistry.getGameData();
     if (gameDataConfig) {
       this.globalWeaponBonusTable = buildWeaponBonusTable(gameDataConfig.weaponBonusEntries);
-      this.globalHealthBonuses = gameDataConfig.healthBonuses;
     }
     const aiConfig = iniDataRegistry.getAiConfig();
     this.runtimeAiConfig = {
@@ -23891,14 +23888,21 @@ export class GameLogicSubsystem implements Subsystem {
           const energyShort = Math.min(1, 1 - energyPercent);
           // m_LowEnergyPenaltyModifier = 0.4 from GlobalData
           productionRate = Math.max(0.2, 1 - energyShort * 0.4);
+          // Source parity: ThingTemplate.cpp:1409 — cap rate to MaxLowEnergyProductionSpeed
+          // when energy supply < 100%. C++ default 0.0 disables the cap; retail INI ~0.5.
+          if (this.config.maxLowEnergyProductionSpeed > 0) {
+            productionRate = Math.min(productionRate, this.config.maxLowEnergyProductionSpeed);
+          }
         }
       }
 
       // Source parity: ThingTemplate::calcTimeToBuild — multiple factories of the same
       // type speed up production. Computed per-frame so building/losing factories mid-
       // production immediately adjusts the rate (matching C++ ProductionUpdate behavior).
-      // MultipleFactory multiplier = 0.85 per extra factory (from GlobalData).
-      if (production.type === 'UNIT') {
+      // C++ (ThingTemplate.cpp:1421): only applies when m_MultipleFactory > 0.0f.
+      // C++ default is 0.0 (no bonus); retail GameData.ini sets 0.85.
+      const factoryMult = this.config.multipleFactory;
+      if (factoryMult > 0 && production.type === 'UNIT') {
         let sameTypeCount = 0;
         for (const entity of this.spawnedEntities.values()) {
           if (
@@ -23911,9 +23915,9 @@ export class GameLogicSubsystem implements Subsystem {
             sameTypeCount++;
           }
         }
-        // Each extra factory divides the effective build time by 0.85, i.e. multiplies rate.
+        // Each extra factory divides the effective build time by the multiplier.
         for (let i = 0; i < sameTypeCount; i++) {
-          productionRate /= 0.85;
+          productionRate /= factoryMult;
         }
       }
 
@@ -26810,9 +26814,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     // Source parity: PoisonedBehavior.onDamage — POISON damage starts/refreshes poison DoT.
-    // Skip re-infection during poison tick damage (C++ uses DAMAGE_UNRESISTABLE to avoid this;
-    // we use POISON for armor application but guard against the re-trigger here).
-    if (normalizedDamageType === 'POISON' && !this._poisonTickInProgress) {
+    if (normalizedDamageType === 'POISON') {
       this.applyPoisonToEntity(target, adjustedDamage);
     }
 
@@ -30736,8 +30738,7 @@ export class GameLogicSubsystem implements Subsystem {
 
   private onEntityLevelUp(entity: MapEntity, oldLevel: VeterancyLevel, newLevel: VeterancyLevel): void {
     // Source parity: apply health bonus (ActiveBody.cpp:1126-1134).
-    // Uses TheGlobalData->m_healthBonus[] loaded from GameData.ini.
-    const config = { healthBonuses: this.globalHealthBonuses };
+    const config = DEFAULT_VETERANCY_CONFIG;
     const { newHealth, newMaxHealth } = applyHealthBonusForLevelChangeImpl(
       oldLevel,
       newLevel,

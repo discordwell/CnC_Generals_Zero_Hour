@@ -632,4 +632,18 @@ export interface GameLogicConfig {
    * cell-space queries (for example getNearestGroupWithValue).
    */
   partitionCellSize: number;
+  /**
+   * Source parity: TheGlobalData::m_MultipleFactory — multiplier applied to
+   * build time per additional factory of the same type.
+   * C++ default is 0.0 (no bonus). Retail GameData.ini sets 0.85.
+   * When <= 0, extra factories do not speed up production.
+   */
+  multipleFactory: number;
+  /**
+   * Source parity: TheGlobalData::m_MaxLowEnergyProductionSpeed — upper cap
+   * on production rate when energy supply is below 100%.
+   * C++ default is 0.0 (disabled). Retail GameData.ini sets ~0.5.
+   * When <= 0 the cap is not applied.
+   */
+  maxLowEnergyProductionSpeed: number;
 }

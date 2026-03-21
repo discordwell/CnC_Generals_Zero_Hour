@@ -132,13 +132,6 @@ describe('parity production: MultipleFactory build speed bonus', () => {
    *
    * GlobalData.cpp:842 — m_MultipleFactory defaults to 0.0.
    * GameData.ini overrides it to 0.85 in retail.
-   *
-   * When MultipleFactory=0 (C++ default), having extra factories should NOT
-   * speed up production at all.
-   *
-   * TS deviation: index.ts:23911 hardcodes `productionRate /= 0.85` always,
-   * regardless of any config value. This means the TS code always applies the
-   * bonus even when the C++ code would not (MultipleFactory=0).
    */
 
   it('with 1 factory, unit production takes the expected number of frames', () => {
@@ -160,18 +153,15 @@ describe('parity production: MultipleFactory build speed bonus', () => {
     expect(frames).toBeLessThanOrEqual(155);
   });
 
-  it('with 2 factories, TS applies 0.85 multiplier bonus (faster production)', () => {
+  it('with MultipleFactory=0 (C++ default), extra factories give NO bonus', () => {
     /**
-     * TS behavior: productionRate /= 0.85 per extra factory.
-     * With 1 extra factory: rate = 1/0.85 = ~1.176
-     * BuildTime=5s = 150 frames; effective = 150 / 1.176 = ~127.5 frames.
-     *
-     * C++ behavior with MultipleFactory=0: no bonus, still 150 frames.
-     * C++ behavior with MultipleFactory=0.85: buildTime *= 0.85 = 4.25s = 127.5 frames.
+     * C++ default: m_MultipleFactory = 0.0 (GlobalData.cpp:842).
+     * The bonus guard checks factoryMult > 0.0f (ThingTemplate.cpp:1422).
+     * With default 0, extra factories have zero effect on build time.
      */
     const bundle = makeProductionBundle({ factoryCount: 2, unitBuildTimeSec: 5 });
+    // Default config has multipleFactory: 0
     const logic = new GameLogicSubsystem(new THREE.Scene());
-    // Place two factories
     const mapData = makeMap([
       makeMapObject('USABarracks', 50, 50),
       makeMapObject('USABarracks', 80, 50),
@@ -187,30 +177,46 @@ describe('parity production: MultipleFactory build speed bonus', () => {
     const factoryId = factories[0]!.id;
     const frames = measureProductionFrames(logic, factoryId);
 
-    // TS hardcodes 0.85 divisor, so with 2 factories: ~128 frames (vs 150 for 1 factory).
-    // This documents the TS deviation from C++ when MultipleFactory=0 (should be no bonus).
-    expect(frames).toBeLessThan(145); // Should be faster with 2 factories in TS
+    // No bonus: should still be ~150 frames, same as 1 factory.
+    expect(frames).toBeGreaterThanOrEqual(148);
+    expect(frames).toBeLessThanOrEqual(155);
+  });
+
+  it('with MultipleFactory=0.85 (retail INI), 2 factories speed up production', () => {
+    /**
+     * Retail GameData.ini: MultipleFactory = 0.85
+     * With 1 extra factory: rate = 1/0.85 = ~1.176
+     * BuildTime=5s = 150 frames; effective = 150 / 1.176 = ~127.5 frames.
+     */
+    const bundle = makeProductionBundle({ factoryCount: 2, unitBuildTimeSec: 5 });
+    const logic = new GameLogicSubsystem(new THREE.Scene(), { multipleFactory: 0.85 });
+    const mapData = makeMap([
+      makeMapObject('USABarracks', 50, 50),
+      makeMapObject('USABarracks', 80, 50),
+    ], 128, 128);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setPlayerSide(0, 'America');
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 10000 });
+    logic.update(1 / 30);
+
+    const factories = logic.getRenderableEntityStates().filter(e => e.templateName === 'USABarracks');
+    expect(factories.length).toBe(2);
+
+    const factoryId = factories[0]!.id;
+    const frames = measureProductionFrames(logic, factoryId);
+
+    // With multipleFactory=0.85 and 2 factories: ~128 frames.
     expect(frames).toBeGreaterThanOrEqual(125);
     expect(frames).toBeLessThanOrEqual(135);
   });
 
-  it('documents C++ vs TS divergence: C++ with MultipleFactory=0 gives NO bonus', () => {
+  it('verifies speedup ratio with MultipleFactory=0.85 matches 1/0.85', () => {
     /**
-     * C++ source parity gap:
-     *
-     * In C++, m_MultipleFactory defaults to 0.0 (GlobalData.cpp:842).
-     * The bonus only activates when factoryMult > 0.0f (ThingTemplate.cpp:1422).
-     * With default 0.0, extra factories have zero effect on build time.
-     *
-     * In TS (index.ts:23911), `productionRate /= 0.85` is applied unconditionally
-     * whenever sameTypeCount > 0, with no check for a MultipleFactory config value.
-     *
-     * This test measures the 1-factory vs 2-factory delta to document that the TS
-     * code DOES apply a bonus (deviating from C++ default behavior), and that the
-     * bonus amount matches the 0.85 divisor.
+     * Measure 1-factory vs 2-factory delta with multipleFactory=0.85 to confirm
+     * the speedup ratio is ~1/0.85 = ~1.176.
      */
     const bundle1 = makeProductionBundle({ factoryCount: 1, unitBuildTimeSec: 5 });
-    const logic1 = new GameLogicSubsystem(new THREE.Scene());
+    const logic1 = new GameLogicSubsystem(new THREE.Scene(), { multipleFactory: 0.85 });
     const map1 = makeMap([makeMapObject('USABarracks', 50, 50)], 128, 128);
     logic1.loadMapObjects(map1, makeRegistry(bundle1), makeHeightmap(128, 128));
     logic1.setPlayerSide(0, 'America');
@@ -222,7 +228,7 @@ describe('parity production: MultipleFactory build speed bonus', () => {
     );
 
     const bundle2 = makeProductionBundle({ factoryCount: 2, unitBuildTimeSec: 5 });
-    const logic2 = new GameLogicSubsystem(new THREE.Scene());
+    const logic2 = new GameLogicSubsystem(new THREE.Scene(), { multipleFactory: 0.85 });
     const map2 = makeMap([
       makeMapObject('USABarracks', 50, 50),
       makeMapObject('USABarracks', 80, 50),
@@ -236,12 +242,8 @@ describe('parity production: MultipleFactory build speed bonus', () => {
       logic2.getRenderableEntityStates().filter(e => e.templateName === 'USABarracks')[0]!.id,
     );
 
-    // Document the speedup: TS always applies the bonus.
-    // With C++ MultipleFactory=0, these should be equal (no bonus).
-    // With C++ MultipleFactory=0.85 (or TS hardcoded), dual should be faster.
+    // Speedup ratio should be ~1/0.85 = ~1.176
     const speedupRatio = singleFactoryFrames / dualFactoryFrames;
-
-    // TS deviation: speedup ratio should be ~1.176 (= 1/0.85)
     expect(speedupRatio).toBeGreaterThan(1.1);
     expect(speedupRatio).toBeLessThan(1.25);
   });
@@ -267,7 +269,7 @@ describe('parity production: low energy production penalty', () => {
    *   productionRate = Math.max(0.2, 1 - energyShort * 0.4);
    *   - Hardcodes m_LowEnergyPenaltyModifier = 0.4
    *   - Hardcodes m_MinLowEnergyProductionSpeed = 0.2
-   *   - Does NOT apply m_MaxLowEnergyProductionSpeed cap
+   *   - Applies m_MaxLowEnergyProductionSpeed cap via config.maxLowEnergyProductionSpeed
    */
 
   it('with sufficient power, production runs at normal speed', () => {
@@ -352,8 +354,8 @@ describe('parity production: low energy production penalty', () => {
      * The 0.2 minimum only activates when energyShort * modifier > 0.8,
      * which would require modifier > 0.8 — not possible with 0.4.
      *
-     * C++ also clamps to MinLowEnergyProductionSpeed, but additionally
-     * applies MaxLowEnergyProductionSpeed cap which TS does not implement.
+     * C++ also clamps to MinLowEnergyProductionSpeed, and additionally
+     * applies MaxLowEnergyProductionSpeed cap (now also implemented in TS).
      */
     const bundle = makeProductionBundle({
       factoryCount: 1,
@@ -388,19 +390,17 @@ describe('parity production: low energy production penalty', () => {
     expect(frames).toBeLessThanOrEqual(255);
   });
 
-  it('documents TS deviation: no MaxLowEnergyProductionSpeed cap', () => {
+  it('with MaxLowEnergyProductionSpeed=0.5, production rate is capped at 50%', () => {
     /**
      * C++ applies MaxLowEnergyProductionSpeed to cap the production rate when
      * EnergyPercent < 1.0, ensuring even slightly low power causes a noticeable
-     * slowdown. The TS code does not implement this cap.
+     * slowdown.
      *
      * C++ (GameData.ini retail): MaxLowEnergyProductionSpeed = 0.5 (50%)
      * With 90% power:
      *   EnergyShort = 0.1, penalty = 0.1 * 0.4 = 0.04, rate = 0.96
-     *   C++: rate = min(0.96, 0.5) = 0.5 — capped!
-     *   TS:  rate = max(0.2, 0.96) = 0.96 — no cap
-     *
-     * This test verifies the TS behavior (near-full-speed at 90% power).
+     *   rate = min(0.96, 0.5) = 0.5 — capped!
+     *   150 / 0.5 = 300 frames.
      */
     const bundle = makeProductionBundle({
       factoryCount: 1,
@@ -410,6 +410,41 @@ describe('parity production: low energy production penalty', () => {
         { name: 'PowerConsumer', energyBonus: -10 },
       ],
     });
+    const logic = new GameLogicSubsystem(new THREE.Scene(), { maxLowEnergyProductionSpeed: 0.5 });
+    const mapData = makeMap([
+      makeMapObject('USABarracks', 50, 50),
+      makeMapObject('USAPowerPlant', 80, 50),
+      makeMapObject('PowerConsumer', 110, 50),
+    ], 128, 128);
+    logic.loadMapObjects(mapData, makeRegistry(bundle), makeHeightmap(128, 128));
+    logic.setPlayerSide(0, 'America');
+    logic.submitCommand({ type: 'setSideCredits', side: 'America', amount: 10000 });
+    logic.update(1 / 30);
+
+    const factoryId = logic.getRenderableEntityStates().find(e => e.templateName === 'USABarracks')!.id;
+    const frames = measureProductionFrames(logic, factoryId);
+
+    // At 90% power with MaxLowEnergyProductionSpeed=0.5: rate capped to 0.5
+    // 150 / 0.5 = 300 frames.
+    expect(frames).toBeGreaterThanOrEqual(295);
+    expect(frames).toBeLessThanOrEqual(305);
+  });
+
+  it('without MaxLowEnergyProductionSpeed (default 0), no cap is applied', () => {
+    /**
+     * With maxLowEnergyProductionSpeed=0 (C++ default, disabled),
+     * the cap is not applied and the rate stays at 0.96.
+     * 150 / 0.96 = ~156 frames — nearly full speed.
+     */
+    const bundle = makeProductionBundle({
+      factoryCount: 1,
+      unitBuildTimeSec: 5,
+      powerPlantEnergyBonus: 9,
+      powerConsumers: [
+        { name: 'PowerConsumer', energyBonus: -10 },
+      ],
+    });
+    // Default config: maxLowEnergyProductionSpeed = 0 (disabled)
     const logic = new GameLogicSubsystem(new THREE.Scene());
     const mapData = makeMap([
       makeMapObject('USABarracks', 50, 50),
@@ -424,11 +459,8 @@ describe('parity production: low energy production penalty', () => {
     const factoryId = logic.getRenderableEntityStates().find(e => e.templateName === 'USABarracks')!.id;
     const frames = measureProductionFrames(logic, factoryId);
 
-    // At 90% power with TS: rate = max(0.2, 1 - 0.1*0.4) = 0.96
-    // 150 / 0.96 = ~156 frames — nearly full speed.
-    // C++ with MaxLowEnergyProductionSpeed=0.5 would cap to 0.5, giving 300 frames.
-    // TS deviation: much faster than C++ would allow.
-    expect(frames).toBeLessThan(165); // TS: near full speed
+    // No cap: rate = max(0.2, 1 - 0.1*0.4) = 0.96, frames = 150/0.96 = ~156
+    expect(frames).toBeLessThan(165);
     expect(frames).toBeGreaterThanOrEqual(153);
   });
 });
