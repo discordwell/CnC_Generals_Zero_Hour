@@ -280,7 +280,7 @@ export { parseSpriteSheet, JIFFY_MS };
  */
 export function resolveGameCursor(opts: {
   hasSelection: boolean;
-  hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' | 'garrisonable';
+  hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' | 'garrisonable' | 'repair';
   edgeScrollDir: number | null;
   pendingAbility: boolean;
   isAttackMode?: boolean;
@@ -303,6 +303,11 @@ export function resolveGameCursor(opts: {
     switch (opts.hoverTarget) {
       case 'enemy':
         return 'SCCAttack';
+      case 'repair':
+        // Source parity: dozer hovering over damaged friendly building shows
+        // wrench cursor. No dedicated SCCRepair ANI cursor asset exists yet,
+        // so fall back to SCCSelect.
+        return 'SCCSelect';
       case 'own-unit':
         return 'SCCSelect';
       case 'garrisonable':

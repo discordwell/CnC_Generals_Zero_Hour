@@ -207,6 +207,25 @@ describe('resolveGameCursor', () => {
       pendingAbility: true,
     })).toBe('SCCTarget');
   });
+
+  it('returns SCCSelect when dozer hovers over damaged friendly building (repair)', () => {
+    expect(resolveGameCursor({
+      hasSelection: true,
+      hoverTarget: 'repair',
+      edgeScrollDir: null,
+      pendingAbility: false,
+    })).toBe('SCCSelect');
+  });
+
+  it('returns SCCAttack when in attack mode even over repair target', () => {
+    expect(resolveGameCursor({
+      hasSelection: true,
+      hoverTarget: 'repair',
+      edgeScrollDir: null,
+      pendingAbility: false,
+      isAttackMode: true,
+    })).toBe('SCCAttack');
+  });
 });
 
 describe('detectEdgeScrollDir', () => {

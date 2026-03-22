@@ -1622,8 +1622,12 @@ async function startGame(
   }
   minimapTerrainCtx.putImageData(terrainImgData, 0, 0);
 
-  // Click on minimap to move camera.
+  // Click on minimap to move camera (left-click) or issue move command (right-click).
   let radarInteractionEnabled = true;
+
+  // Suppress browser context menu on minimap so right-click works as a game command.
+  minimapCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+
   minimapCanvas.addEventListener('mousedown', (e) => {
     if (!radarInteractionEnabled) {
       return;
@@ -1633,12 +1637,34 @@ async function startGame(
     const my = (e.clientY - rect.top) / rect.height;
     const worldX = mx * heightmap.worldWidth;
     const worldZ = my * heightmap.worldDepth;
-    rtsCamera.lookAt(worldX, worldZ);
+
+    if (e.button === 0) {
+      // Left-click: pan camera to position.
+      rtsCamera.lookAt(worldX, worldZ);
+    } else if (e.button === 2) {
+      // Right-click: move selected units to position.
+      const selIds = gameLogic.getLocalPlayerSelectionIds();
+      if (selIds.length > 0) {
+        for (const id of selIds) {
+          gameLogic.submitCommand({
+            type: 'moveTo',
+            entityId: id,
+            targetX: worldX,
+            targetZ: worldZ,
+            commandSource: 'PLAYER',
+          });
+        }
+        spawnMoveIndicator(worldX, worldZ, false);
+        voiceBridge.playGroupVoice(selIds, 'move');
+      }
+    }
   });
 
   let minimapDragging = false;
-  minimapCanvas.addEventListener('mousedown', () => {
-    minimapDragging = radarInteractionEnabled;
+  minimapCanvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) {
+      minimapDragging = radarInteractionEnabled;
+    }
   });
   window.addEventListener('mouseup', () => { minimapDragging = false; });
   minimapCanvas.addEventListener('mousemove', (e) => {
@@ -3330,7 +3356,7 @@ async function startGame(
               20,
             )
           : null;
-        let hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' | 'garrisonable' = 'none';
+        let hoverTarget: 'none' | 'own-unit' | 'enemy' | 'ground' | 'garrisonable' | 'repair' = 'none';
         // Throttle hover raycast to every 3 frames — raycasting against
         // all scene meshes is expensive and cursor hover tolerates latency.
         if (inputState.pointerInCanvas && (currentLogicFrame % 3 === 0)) {
@@ -3347,12 +3373,33 @@ async function startGame(
             hoverTarget = 'ground';
           }
 
+          // Source parity: InGameUI — dozer hovering over a damaged friendly building
+          // shows repair cursor context. Check if any selected entity is a dozer and the
+          // hovered object is a friendly building with health < maxHealth.
+          let isRepairHover = false;
+          if (hoverObjectId !== null && hoverTarget === 'own-unit' && selIds.length > 0) {
+            const hoverEntityState = gameLogic.getEntityState(hoverObjectId);
+            if (hoverEntityState
+              && hoverEntityState.category === 'building'
+              && hoverEntityState.maxHealth > 0
+              && hoverEntityState.health < hoverEntityState.maxHealth) {
+              const selectedInfos = gameLogic.getSelectedEntityInfos(selIds);
+              if (selectedInfos.some(info => info.isDozer)) {
+                hoverTarget = 'repair';
+                isRepairHover = true;
+              }
+            }
+          }
+
           // Update hover tooltip content.
           if (hoverObjectId !== null) {
             const hoverState = gameLogic.getEntityState(hoverObjectId);
             if (hoverState) {
               // Clean template name: remove faction prefix (e.g. "AmericaTankCrusader" -> "Tank Crusader")
-              hoverTooltipName.textContent = formatTemplateName(hoverState.templateName);
+              const displayName = formatTemplateName(hoverState.templateName);
+              hoverTooltipName.textContent = isRepairHover
+                ? `${displayName} — Click to repair`
+                : displayName;
 
               // Health bar.
               const healthPct = hoverState.maxHealth > 0 ? hoverState.health / hoverState.maxHealth : 0;
