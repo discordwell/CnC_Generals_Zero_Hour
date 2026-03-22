@@ -59,6 +59,8 @@ export interface RenderableEntityState {
   veterancyLevel?: number;
   isStealthed?: boolean;
   isDetected?: boolean;
+  /** Source parity: StealthUpdate.h:86 — per-module friendly opacity for stealthed ally rendering. */
+  stealthFriendlyOpacity?: number;
   scriptFlashCount?: number;
   scriptFlashColor?: number;
   shroudStatus?: 'CLEAR' | 'FOGGED' | 'SHROUDED';
@@ -1546,7 +1548,7 @@ export class ObjectVisualManager {
     }
 
     const tintColor = new THREE.Color(colorHex);
-    const tintIntensity = 0.15; // Subtle tint
+    const tintIntensity = 0.4; // Clearly visible team coloring
 
     visual.currentModel.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -1557,6 +1559,8 @@ export class ObjectVisualManager {
         if (stdMat.isMeshStandardMaterial) {
           stdMat.emissive.copy(tintColor);
           stdMat.emissiveIntensity = tintIntensity;
+          // Subtle base color blend on top of emissive for richer team tint
+          stdMat.color.lerp(tintColor, 0.12);
         }
       }
     });
@@ -1598,6 +1602,9 @@ export class ObjectVisualManager {
     } else if (isUnderConstruction) {
       // Ramp from 0.3 (start) to 0.9 (near complete)
       targetOpacity = 0.3 + (constructionPct / 100) * 0.6;
+    } else if (isStealthed && !isDetected && state.stealthFriendlyOpacity != null && state.stealthFriendlyOpacity < 1.0) {
+      // Source parity: friendly stealthed units render at per-module friendlyOpacityMin
+      targetOpacity = state.stealthFriendlyOpacity;
     } else if (isStealthed && !isDetected) {
       targetOpacity = 0.35;
     } else if (isStealthed && isDetected) {
@@ -1616,9 +1623,15 @@ export class ObjectVisualManager {
       // Clone materials on first stealth mutation to avoid mutating shared GLTF cache.
       if (!visual.stealthMaterialClones.has(mesh)) {
         if (Array.isArray(mesh.material)) {
-          mesh.material = mesh.material.map((m) => m.clone());
+          mesh.material = mesh.material.map((m) => {
+            const clonedMat = m.clone();
+            clonedMat.transparent = true;
+            return clonedMat;
+          });
         } else {
-          mesh.material = mesh.material.clone();
+          const clonedMat = mesh.material.clone();
+          clonedMat.transparent = true;
+          mesh.material = clonedMat;
         }
         visual.stealthMaterialClones.set(mesh, mesh.material);
       }
@@ -1626,11 +1639,13 @@ export class ObjectVisualManager {
       const clonedMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const mat of clonedMaterials) {
         if ('opacity' in mat) {
-          const wantTransparent = targetOpacity < 1.0;
+          const wantTransparent = targetOpacity < 0.99;
           if (mat.transparent !== wantTransparent) {
             mat.transparent = wantTransparent;
             mat.needsUpdate = true;
           }
+          // Avoid sorting artifacts when fully opaque
+          mat.depthWrite = !wantTransparent;
           mat.opacity = targetOpacity;
         }
       }
