@@ -1425,7 +1425,7 @@ export function markEntityDestroyed(self: GL, entityId: number, attackerId: numb
   entity.objectStatusFlags.delete('CONTINUOUS_FIRE_FAST');
   self.pendingDyingRenderableStates.set(entityId, {
     state: self.makeRenderableEntityState(entity),
-    expireFrame: self.frameCounter + 1,
+    expireFrame: self.frameCounter + LOGIC_FRAME_RATE * 3, // ~3 seconds corpse persistence
   });
   onObjectDestroyed(self, entityId);
 }

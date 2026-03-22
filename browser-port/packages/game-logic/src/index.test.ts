@@ -4478,6 +4478,9 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(logic.getRenderableEntityStates().some((entity) => entity.id === 1)).toBe(true);
     expect(logic.getRenderableEntityStates().find((entity) => entity.id === 1)?.animationState).toBe('DIE');
 
+    // Corpse persists for ~3 seconds (90 frames at 30fps) before cleanup.
+    for (let i = 0; i < 89; i++) logic.update(1 / 30);
+    expect(logic.getRenderableEntityStates().some((entity) => entity.id === 1)).toBe(true);
     logic.update(1 / 30);
     expect(logic.getRenderableEntityStates().some((entity) => entity.id === 1)).toBe(false);
   });

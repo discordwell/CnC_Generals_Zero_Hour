@@ -1402,7 +1402,11 @@ export class ObjectVisualManager {
   private syncHealthBar(visual: VisualAssetState, state: RenderableEntityState): void {
     const maxHealth = state.maxHealth ?? 0;
     const health = state.health ?? 0;
-    const showBar = maxHealth > 0 && health > 0 && health < maxHealth;
+    const constructionPct = state.constructionPercent ?? -1;
+    const isUnderConstruction = constructionPct >= 0 && constructionPct < 100;
+    const showBar = isUnderConstruction
+      ? maxHealth > 0
+      : maxHealth > 0 && health > 0 && health < maxHealth;
 
     if (!showBar) {
       if (visual.healthBarGroup) {
@@ -1443,7 +1447,9 @@ export class ObjectVisualManager {
       this.applyGuardBandFrustumPolicy(group);
     }
 
-    const ratio = Math.max(0, Math.min(1, health / maxHealth));
+    const ratio = isUnderConstruction
+      ? Math.max(0, Math.min(1, constructionPct / 100))
+      : Math.max(0, Math.min(1, health / maxHealth));
     const barWidth = ObjectVisualManager.HEALTH_BAR_WIDTH;
     const barHeight = ObjectVisualManager.HEALTH_BAR_HEIGHT;
     const fillWidth = barWidth * ratio;
@@ -1458,7 +1464,7 @@ export class ObjectVisualManager {
       visual.healthBarFill.scale.set(fillWidth, barHeight, 1);
       visual.healthBarFill.position.set((fillWidth - barWidth) / 2, 0, 0.001);
       const mat = visual.healthBarFill.material as THREE.MeshBasicMaterial;
-      mat.color.setHex(ObjectVisualManager.healthColorForRatio(ratio));
+      mat.color.setHex(isUnderConstruction ? 0xffcc00 : ObjectVisualManager.healthColorForRatio(ratio));
     }
   }
 
