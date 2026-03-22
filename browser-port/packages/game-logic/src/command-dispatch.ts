@@ -1655,19 +1655,22 @@ export function moveObjectsForConstruction(self: GL,
     }
 
     const relationship = getConstructingRelationship(self, owningSide, blocker.side);
-    if (relationship === RELATIONSHIP_ENEMIES || isDisabledForConstruction(self, blocker) || blocker.canMove === false) {
+    if (relationship === RELATIONSHIP_ENEMIES || isDisabledForConstruction(self, blocker)) {
+      // Source parity: enemy and disabled entities are always unmovable blockers.
       anyUnmovables = true;
       continue;
     }
 
+    // Source parity: BuildAssistant::moveObjectsForConstruction — for ALLIES/NEUTRAL,
+    // issue a move command. In C++ all game objects have an AIUpdateInterface; structures
+    // receive the move command (which they silently ignore since they lack locomotors)
+    // but are NOT treated as unmovable blockers. The separate isConstructLocationClear
+    // check handles IMMOBILE overlap rejection via isImmobileForConstruction.
     const variedRadius = (0.5 + self.gameRandom.nextFloat()) * clearanceRadius;
     const direction = (self.gameRandom.nextFloat() * Math.PI * 2) - Math.PI;
     const destinationX = worldX + Math.cos(direction) * variedRadius;
     const destinationZ = worldZ + Math.sin(direction) * variedRadius;
     self.issueMoveTo(blocker.id, destinationX, destinationZ, NO_ATTACK_DISTANCE, true);
-    if (!blocker.canMove) {
-      anyUnmovables = true;
-    }
   }
 
   return !anyUnmovables;
