@@ -40,6 +40,7 @@ export {
   parseObjectShadowType,
   shouldCastShadowMap,
   shouldCreateShadowDecal,
+  shouldCreateBlobShadowFallback,
 } from './shadow-decal.js';
 export type { ObjectShadowType, ShadowDecalConfig } from './shadow-decal.js';
 export { DecalRenderer } from './decal-renderer.js';

@@ -120,3 +120,13 @@ export function shouldCreateShadowDecal(shadowType: ObjectShadowType): boolean {
     shadowType === 'SHADOW_ALPHA_DECAL' ||
     shadowType === 'SHADOW_ADDITIVE_DECAL';
 }
+
+/**
+ * Whether this shadow type should use a blob shadow decal as a fallback
+ * when shadow maps are disabled. SHADOW_VOLUME and SHADOW_PROJECTION
+ * normally use shadow maps, but when those are off we render a blob shadow
+ * instead for visual grounding.
+ */
+export function shouldCreateBlobShadowFallback(shadowType: ObjectShadowType): boolean {
+  return shadowType === 'SHADOW_VOLUME' || shadowType === 'SHADOW_PROJECTION';
+}

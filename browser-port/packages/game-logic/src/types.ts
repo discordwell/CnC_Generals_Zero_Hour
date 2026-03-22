@@ -83,6 +83,12 @@ export interface RenderableEntityState {
   radiusDecals?: RenderableRadiusDecal[];
   /** Source parity: BoneFXUpdate — pending bone FX/OCL/ParticleSystem visual events. */
   boneFXEvents?: BoneFXVisualEvent[];
+  /** Source parity: ThingTemplate::m_shadowType — INI Shadow field (e.g. SHADOW_DECAL, SHADOW_VOLUME). */
+  shadowType?: string;
+  /** Source parity: ThingTemplate::m_shadowSizeX — shadow decal X extent. */
+  shadowSizeX?: number;
+  /** Source parity: ThingTemplate::m_shadowSizeY — shadow decal Y extent. */
+  shadowSizeY?: number;
 }
 
 /**

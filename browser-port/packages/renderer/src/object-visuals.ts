@@ -21,6 +21,7 @@ import {
   parseObjectShadowType,
   shouldCastShadowMap,
   shouldCreateShadowDecal,
+  shouldCreateBlobShadowFallback,
   createShadowDecalMesh,
 } from './shadow-decal.js';
 
@@ -45,6 +46,7 @@ export interface RenderableEntityState {
    */
   ignoreConditionStates?: readonly string[];
   modelConditionFlags?: readonly string[];
+  category?: string;
   currentSpeed?: number;
   maxSpeed?: number;
   x: number;
@@ -333,6 +335,20 @@ export class ObjectVisualManager {
   private cameraZ = 0;
   /** Distance beyond which entities only get position updates, not full sync. */
   private static readonly FAR_SYNC_DISTANCE_SQR = 600 * 600;
+
+  /**
+   * Nominal height by category — mirrors game-logic nominalHeightForCategory.
+   * Used to compute shadow decal Y offset (terrain level relative to entity root).
+   */
+  static nominalHeightForCategory(category?: string): number {
+    switch (category) {
+      case 'air': return 2.4;
+      case 'building': return 8;
+      case 'infantry': return 2;
+      case 'vehicle': return 3;
+      default: return 2;
+    }
+  }
 
   /**
    * Sync rendered object visuals with latest render-state snapshots.
@@ -725,12 +741,27 @@ export class ObjectVisualManager {
           });
           currentVisual.shadowType = state.shadowType ?? null;
 
-          // Create shadow decal for SHADOW_DECAL types
-          if (shouldCreateShadowDecal(shadowType) && !currentVisual.shadowDecal) {
+          // Create shadow decal for entities that need blob shadows.
+          // SHADOW_DECAL types get one directly; SHADOW_VOLUME/SHADOW_PROJECTION
+          // types also get a blob shadow as a lightweight fallback since shadow
+          // map rendering is disabled for performance.
+          // Air units are excluded — they fly above the ground.
+          const isAirUnit = state.category === 'air';
+          const wantsBlobShadow = !isAirUnit && shadowType !== 'SHADOW_NONE' &&
+            (shouldCreateShadowDecal(shadowType) || shouldCreateBlobShadowFallback(shadowType));
+          if (wantsBlobShadow && !currentVisual.shadowDecal) {
+            // Use INI ShadowSizeX/Y when available; fall back to geometry-based size.
+            const fallbackSize = (state.selectionCircleRadius ?? 1.5) * 2;
             const decal = createShadowDecalMesh({
-              sizeX: state.shadowSizeX,
-              sizeY: state.shadowSizeY,
+              sizeX: state.shadowSizeX ?? fallbackSize,
+              sizeY: state.shadowSizeY ?? fallbackSize,
             });
+            // Position the decal at terrain level. The entity root is at
+            // terrainY + baseHeight, so offset the decal by -baseHeight + epsilon
+            // to sit flat on the ground.
+            const baseHeight = ObjectVisualManager.nominalHeightForCategory(state.category) / 2;
+            decal.position.y = -baseHeight + 0.1;
+            this.applyGuardBandFrustumPolicy(decal);
             currentVisual.shadowDecal = decal;
             currentVisual.root.add(decal);
           }

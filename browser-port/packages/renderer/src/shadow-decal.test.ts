@@ -6,6 +6,7 @@ import {
   parseObjectShadowType,
   shouldCastShadowMap,
   shouldCreateShadowDecal,
+  shouldCreateBlobShadowFallback,
 } from './shadow-decal.js';
 
 describe('shadow-decal', () => {
@@ -54,6 +55,23 @@ describe('shadow-decal', () => {
     it('returns false for non-decal types', () => {
       expect(shouldCreateShadowDecal('SHADOW_VOLUME')).toBe(false);
       expect(shouldCreateShadowDecal('SHADOW_NONE')).toBe(false);
+    });
+  });
+
+  describe('shouldCreateBlobShadowFallback', () => {
+    it('returns true for shadow-map types used as blob fallback', () => {
+      expect(shouldCreateBlobShadowFallback('SHADOW_VOLUME')).toBe(true);
+      expect(shouldCreateBlobShadowFallback('SHADOW_PROJECTION')).toBe(true);
+    });
+
+    it('returns false for decal types (handled by shouldCreateShadowDecal)', () => {
+      expect(shouldCreateBlobShadowFallback('SHADOW_DECAL')).toBe(false);
+      expect(shouldCreateBlobShadowFallback('SHADOW_ALPHA_DECAL')).toBe(false);
+      expect(shouldCreateBlobShadowFallback('SHADOW_ADDITIVE_DECAL')).toBe(false);
+    });
+
+    it('returns false for SHADOW_NONE', () => {
+      expect(shouldCreateBlobShadowFallback('SHADOW_NONE')).toBe(false);
     });
   });
 

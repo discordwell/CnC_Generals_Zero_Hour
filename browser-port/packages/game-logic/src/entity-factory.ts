@@ -154,6 +154,10 @@ export function createMapEntity(self: GL,
       ?? obstacleGeometry?.majorRadius
       ?? MAP_XY_FACTOR / 2)
     : MAP_XY_FACTOR / 2;
+  // Source parity: ThingTemplate shadow fields — drive blob shadow decal rendering.
+  const shadowType = readStringField(objectDef?.fields ?? {}, ['Shadow']) ?? null;
+  const shadowSizeX = readNumericField(objectDef?.fields ?? {}, ['ShadowSizeX']) ?? 0;
+  const shadowSizeY = readNumericField(objectDef?.fields ?? {}, ['ShadowSizeY']) ?? 0;
   const [worldX, worldY, worldZ] = self.objectToWorldPosition(mapObject, heightmap);
   const baseHeight = nominalHeight / 2;
   const x = worldX;
@@ -308,6 +312,9 @@ export function createMapEntity(self: GL,
     pathfindCenterInCell,
     blocksPath,
     geometryMajorRadius,
+    shadowType,
+    shadowSizeX,
+    shadowSizeY,
     obstacleGeometry,
     obstacleFootprint,
     largestWeaponRange,

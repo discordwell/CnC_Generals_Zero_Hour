@@ -674,6 +674,9 @@ export function makeRenderableEntityState(self: GL, entity: MapEntity, localSide
       boneFXEvents: entity.boneFXState?.pendingVisualEvents.length
         ? entity.boneFXState.pendingVisualEvents.slice()
         : undefined,
+      shadowType: entity.shadowType ?? undefined,
+      shadowSizeX: entity.shadowSizeX > 0 ? entity.shadowSizeX : undefined,
+      shadowSizeY: entity.shadowSizeY > 0 ? entity.shadowSizeY : undefined,
     };
 }
 

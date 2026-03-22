@@ -2926,6 +2926,12 @@ export interface MapEntity {
   blocksPath: boolean;
   /** Source parity: Object geometry major radius (world units) used by crush/collision logic. */
   geometryMajorRadius: number;
+  /** Source parity: ThingTemplate::m_shadowType — INI "Shadow" field. */
+  shadowType: string | null;
+  /** Source parity: ThingTemplate::m_shadowSizeX — shadow decal X extent. */
+  shadowSizeX: number;
+  /** Source parity: ThingTemplate::m_shadowSizeY — shadow decal Y extent. */
+  shadowSizeY: number;
   obstacleGeometry: ObstacleGeometry | null;
   obstacleFootprint: number;
   ignoredMovementObstacleId: number | null;
