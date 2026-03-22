@@ -2223,7 +2223,7 @@ async function startGame(
     commandCardContainer,
     uiRuntime.getControlBarModel(),
     {
-      onSlotActivated: (slot) => activateControlBarSlot(slot - 1),
+      onSlotActivated: (slot, count) => { for (let i = 0; i < count; i++) activateControlBarSlot(slot - 1); },
       onSlotRightClicked: (slot) => cancelProductionAtSlot(slot),
     },
   );
@@ -2425,6 +2425,14 @@ async function startGame(
     opacity: 0.6,
     depthTest: false,
   });
+  // Source parity: attack-move waypoint lines shown in red instead of green
+  const waypointPathMaterialRed = new THREE.LineBasicMaterial({
+    color: 0xff4444,
+    linewidth: 1,
+    transparent: true,
+    opacity: 0.6,
+    depthTest: false,
+  });
   const waypointPathLine = new THREE.Line(
     new THREE.BufferGeometry(),
     waypointPathMaterial,
@@ -2490,6 +2498,9 @@ async function startGame(
     }
     geom.setDrawRange(0, vertexCount);
     geom.computeBoundingSphere();
+    // Red line when entity is actively attacking; green for normal movement
+    waypointPathLine.material = entityState.attackTargetEntityId !== null
+      ? waypointPathMaterialRed : waypointPathMaterial;
     waypointPathLine.visible = true;
   };
 

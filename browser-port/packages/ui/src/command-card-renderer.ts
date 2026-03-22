@@ -178,8 +178,8 @@ export interface CommandCardOverlayData {
 // ---------------------------------------------------------------------------
 
 export interface CommandCardRendererOptions {
-  /** Called when a slot button is clicked (1-based slot index). */
-  onSlotActivated?: (slot: number) => void;
+  /** Called when a slot button is clicked (1-based slot index, count=5 when Ctrl/Cmd held). */
+  onSlotActivated?: (slot: number, count: number) => void;
   /** Called when a slot button is right-clicked (1-based slot index). */
   onSlotRightClicked?: (slot: number) => void;
 }
@@ -192,7 +192,7 @@ export class CommandCardRenderer {
   private readonly overlayData: (CommandCardOverlayData | null)[] = new Array(
     SLOT_COUNT,
   ).fill(null);
-  private readonly onSlotActivated?: (slot: number) => void;
+  private readonly onSlotActivated?: (slot: number, count: number) => void;
   private readonly onSlotRightClicked?: (slot: number) => void;
   private disposed = false;
 
@@ -222,7 +222,7 @@ export class CommandCardRenderer {
 
       // Capture slot index for click handler
       const slotIndex = i;
-      slotEl.button.addEventListener('click', () => {
+      slotEl.button.addEventListener('click', (e: MouseEvent) => {
         if (this.disposed) {
           return;
         }
@@ -230,10 +230,12 @@ export class CommandCardRenderer {
         const hudSlots = this.controlBar.getHudSlots();
         const hudSlot = hudSlots[slotIndex - 1];
         if (hudSlot && (hudSlot.state === 'ready' || hudSlot.state === 'pending')) {
+          // Source parity: Ctrl+click queues 5 units at once (C++ ControlBar batch production)
+          const count = (e.ctrlKey || e.metaKey) ? 5 : 1;
           if (this.onSlotActivated) {
-            this.onSlotActivated(slotIndex);
+            this.onSlotActivated(slotIndex, count);
           } else {
-            this.controlBar.activateSlot(slotIndex);
+            for (let i = 0; i < count; i++) this.controlBar.activateSlot(slotIndex);
           }
         }
       });
