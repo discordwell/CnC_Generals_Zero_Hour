@@ -2059,7 +2059,7 @@ async function startGame(
       const pos = new THREE.Vector3(event.x, event.y, event.z);
 
       // Combat events trigger battle music.
-      if (event.type === 'WEAPON_IMPACT' || event.type === 'ENTITY_DESTROYED') {
+      if (event.type === 'WEAPON_FIRED' || event.type === 'WEAPON_IMPACT' || event.type === 'ENTITY_DESTROYED') {
         musicManager.notifyCombat();
       }
 

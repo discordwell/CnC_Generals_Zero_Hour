@@ -70,6 +70,58 @@ describe('planCombatVisualEffects', () => {
     ]);
   });
 
+  it('uses weapon-specific fireSoundEvent when provided on WEAPON_FIRED', () => {
+    const actions = planCombatVisualEffects({
+      type: 'WEAPON_FIRED',
+      x: 10,
+      y: 2,
+      z: 30,
+      radius: 0,
+      sourceEntityId: 5,
+      projectileType: 'BULLET',
+      fireSoundEvent: 'AmericaTankMachineGun',
+    });
+
+    expect(actions).toEqual([
+      { type: 'spawnMuzzleFlash' },
+      { type: 'playAudio', eventName: 'AmericaTankMachineGun' },
+    ]);
+  });
+
+  it('falls back to CombatGunshot for bullet WEAPON_FIRED without fireSoundEvent', () => {
+    const actions = planCombatVisualEffects({
+      type: 'WEAPON_FIRED',
+      x: 0,
+      y: 0,
+      z: 0,
+      radius: 0,
+      sourceEntityId: 3,
+      projectileType: 'BULLET',
+    });
+
+    expect(actions).toEqual([
+      { type: 'spawnMuzzleFlash' },
+      { type: 'playAudio', eventName: 'CombatGunshot' },
+    ]);
+  });
+
+  it('falls back to CombatMissileLaunch for missile WEAPON_FIRED without fireSoundEvent', () => {
+    const actions = planCombatVisualEffects({
+      type: 'WEAPON_FIRED',
+      x: 0,
+      y: 0,
+      z: 0,
+      radius: 0,
+      sourceEntityId: 4,
+      projectileType: 'MISSILE',
+    });
+
+    expect(actions).toEqual([
+      { type: 'spawnMuzzleFlash' },
+      { type: 'playAudio', eventName: 'CombatMissileLaunch' },
+    ]);
+  });
+
   it('suppresses rubble/smoke for small destruction events', () => {
     const actions = planCombatVisualEffects({
       type: 'ENTITY_DESTROYED',
