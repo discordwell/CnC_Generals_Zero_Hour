@@ -19676,11 +19676,15 @@ export class GameLogicSubsystem implements Subsystem {
     mapObject: MapObjectJSON,
     heightmap: HeightmapGrid | null,
   ): [number, number, number] {
-    const worldX = mapObject.position.x;
+    // Guard: replace NaN/Infinity coordinates with 0 to prevent position corruption.
+    // Intentionally does NOT clamp to map bounds — off-map positions are valid
+    // (used for off-map entity targeting semantics).
+    const worldX = Number.isFinite(mapObject.position.x) ? mapObject.position.x : 0;
     // Original C&C coordinates: x->ThreeX, y->ThreeZ, z->ThreeY.
-    const worldZ = mapObject.position.y;
+    const worldZ = Number.isFinite(mapObject.position.y) ? mapObject.position.y : 0;
+    const rawElevation = Number.isFinite(mapObject.position.z) ? mapObject.position.z : 0;
     const terrainHeight = heightmap ? heightmap.getInterpolatedHeight(worldX, worldZ) : 0;
-    const worldY = terrainHeight + mapObject.position.z;
+    const worldY = terrainHeight + rawElevation;
 
     return [worldX, worldY, worldZ];
   }

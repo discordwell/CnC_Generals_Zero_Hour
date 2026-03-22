@@ -167,10 +167,13 @@ export function createMapEntity(self: GL,
   const x = worldX;
   const y = worldY + baseHeight;
   const z = worldZ;
-  const rotationY = THREE.MathUtils.degToRad(mapObject.angle);
+  const rawAngle = Number.isFinite(mapObject.angle) ? mapObject.angle : 0;
+  const rotationY = THREE.MathUtils.degToRad(rawAngle);
   const bridgeFlags = mapObject.flags & (OBJECT_FLAG_BRIDGE_POINT1 | OBJECT_FLAG_BRIDGE_POINT2);
-  const mapCellX = Math.floor(mapObject.position.x / MAP_XY_FACTOR);
-  const mapCellZ = Math.floor(mapObject.position.y / MAP_XY_FACTOR);
+  const rawPosX = Number.isFinite(mapObject.position.x) ? mapObject.position.x : 0;
+  const rawPosY = Number.isFinite(mapObject.position.y) ? mapObject.position.y : 0;
+  const mapCellX = Math.floor(rawPosX / MAP_XY_FACTOR);
+  const mapCellZ = Math.floor(rawPosY / MAP_XY_FACTOR);
 
   const [posCellX, posCellZ] = self.worldToGrid(x, z);
   const initialClipAmmo = attackWeapon && attackWeapon.clipSize > 0 ? attackWeapon.clipSize : 0;
