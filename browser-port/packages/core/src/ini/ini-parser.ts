@@ -253,8 +253,9 @@ function parseBlock(
   let parent: string | undefined;
 
   const colonIndex = tokens.indexOf(':');
-  // Handle ObjectReskin NewObject ParentObject (parent without colon syntax).
-  if (type === 'ObjectReskin' && tokens.length >= 3) {
+  // Handle ChildObject/ObjectReskin NewObject ParentObject (parent without colon syntax).
+  // Source parity: both ChildObject and ObjectReskin use "Type ChildName ParentName" syntax.
+  if ((type === 'ObjectReskin' || type === 'ChildObject') && tokens.length >= 3) {
     name = tokens[1]!;
     parent = tokens[2]!;
   } else if (colonIndex !== -1 && colonIndex + 1 < tokens.length) {

@@ -8087,7 +8087,7 @@ export class GameLogicSubsystem implements Subsystem {
       isUnmanned: selected.isUnmanned,
       isDozer: normalizedKindOf.has('DOZER'),
       isMoving: selected.moving,
-      appliedUpgradeNames: Array.from(selected.completedUpgrades.values()).sort(),
+      appliedUpgradeNames: Array.from(this.buildEntityUpgradeMask(selected)).sort(),
       objectStatusFlags: Array.from(selected.objectStatusFlags.values()).sort(),
       modelConditionFlags: Array.from(selected.modelConditionFlags.values()).sort(),
     };
@@ -23504,7 +23504,11 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const commandSetName = this.resolveEntityCommandSetName(producer, producerObjectDef);
     if (!commandSetName) {
-      return false;
+      // Source parity: ChildObject / ObjectReskin definitions inherit their parent's
+      // CommandSet. When the INI bundle lacks the inherited CommandSet (unresolved
+      // ChildObject data), fall back to permissive — the entity has a production
+      // profile so it is a valid factory.
+      return true;
     }
     const commandSetDef = findCommandSetDefByName(registry, commandSetName);
     if (!commandSetDef) {
