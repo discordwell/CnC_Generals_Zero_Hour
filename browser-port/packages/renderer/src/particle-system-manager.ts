@@ -12,6 +12,7 @@ import type { GameLODManager } from './game-lod-manager.js';
 import {
   parseParticleSystemTemplate,
   type ParticleSystemTemplate,
+  type ParticleShaderType,
   type RandomRange,
   type AlphaKeyframe,
   type ColorKeyframe,
@@ -112,6 +113,59 @@ function createBillboardGeometry(): THREE.PlaneGeometry {
   return new THREE.PlaneGeometry(1, 1);
 }
 
+// ---------------------------------------------------------------------------
+// Procedural radial gradient texture — soft circular falloff
+// Used as a universal particle texture when real .tga assets are not available.
+// Source parity: the original game uses TGA textures for particles; this is
+// a procedural stand-in that gives particles a rounded, soft-edged look.
+// ---------------------------------------------------------------------------
+
+/** Cached procedural texture (shared by all particle systems). */
+let proceduralGradientTexture: THREE.DataTexture | null = null;
+
+/**
+ * Create (or return cached) a 64x64 RGBA radial gradient texture.
+ * The center is fully opaque white, fading smoothly to fully transparent at
+ * the edges with a quadratic falloff for a natural particle look.
+ */
+export function getProceduralGradientTexture(): THREE.DataTexture {
+  if (proceduralGradientTexture) return proceduralGradientTexture;
+
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  const center = (size - 1) / 2;
+  const maxRadius = center;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - center;
+      const dy = y - center;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const t = Math.min(dist / maxRadius, 1.0);
+      // Quadratic falloff: bright center → transparent edge
+      const alpha = Math.max(0, 1 - t * t);
+
+      const idx = (y * size + x) * 4;
+      data[idx] = 255;     // R
+      data[idx + 1] = 255; // G
+      data[idx + 2] = 255; // B
+      data[idx + 3] = Math.round(alpha * 255); // A
+    }
+  }
+
+  proceduralGradientTexture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  proceduralGradientTexture.needsUpdate = true;
+  return proceduralGradientTexture;
+}
+
+/** Reset cached procedural texture — used in tests. */
+export function _resetProceduralTexture(): void {
+  if (proceduralGradientTexture) {
+    proceduralGradientTexture.dispose();
+    proceduralGradientTexture = null;
+  }
+}
+
 export class ParticleSystemManager implements Subsystem {
   readonly name = 'ParticleSystemManager';
 
@@ -168,6 +222,7 @@ export class ParticleSystemManager implements Subsystem {
     }
     this.materialCache.clear();
     this.templates.clear();
+    _resetProceduralTexture();
   }
 
   // -------------------------------------------------------------------------
@@ -785,7 +840,7 @@ export class ParticleSystemManager implements Subsystem {
         this.scene.remove(system.mesh);
         this.disposeMesh(system.mesh);
       }
-      const material = this.getMaterial(system.template.shader);
+      const material = this.getMaterial(system.template.shader, system.template.particleName || undefined);
       const capacity = Math.max(count, 32);
       const mesh = new THREE.InstancedMesh(BILLBOARD_QUAD, material, capacity);
       mesh.frustumCulled = false;
@@ -932,15 +987,24 @@ export class ParticleSystemManager implements Subsystem {
     }
   }
 
-  private getMaterial(shaderType: string): THREE.Material {
-    const cached = this.materialCache.get(shaderType);
+  private getMaterial(shaderType: ParticleShaderType, textureName?: string): THREE.Material {
+    // Cache key incorporates both shader type and texture path so systems
+    // with different textures (or no texture) get distinct materials.
+    const cacheKey = textureName ? `${shaderType}:${textureName}` : shaderType;
+    const cached = this.materialCache.get(cacheKey);
     if (cached) return cached;
+
+    // Use the procedural radial gradient as a universal texture fallback.
+    // Once real TGA asset loading is wired up, this is where we'd load
+    // the actual texture by textureName instead.
+    const texture = getProceduralGradientTexture();
 
     let material: THREE.Material;
     switch (shaderType) {
       case 'ADDITIVE':
         material = new THREE.MeshBasicMaterial({
           color: 0xffffff,
+          map: texture,
           transparent: true,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
@@ -950,6 +1014,8 @@ export class ParticleSystemManager implements Subsystem {
       case 'ALPHA_TEST':
         material = new THREE.MeshBasicMaterial({
           color: 0xffffff,
+          map: texture,
+          transparent: true,
           alphaTest: 0.5,
           side: THREE.DoubleSide,
         });
@@ -957,6 +1023,7 @@ export class ParticleSystemManager implements Subsystem {
       case 'MULTIPLY':
         material = new THREE.MeshBasicMaterial({
           color: 0xffffff,
+          map: texture,
           transparent: true,
           blending: THREE.MultiplyBlending,
           depthWrite: false,
@@ -967,6 +1034,7 @@ export class ParticleSystemManager implements Subsystem {
       default:
         material = new THREE.MeshBasicMaterial({
           color: 0xffffff,
+          map: texture,
           transparent: true,
           depthWrite: false,
           side: THREE.DoubleSide,
@@ -974,7 +1042,7 @@ export class ParticleSystemManager implements Subsystem {
         break;
     }
 
-    this.materialCache.set(shaderType, material);
+    this.materialCache.set(cacheKey, material);
     return material;
   }
 

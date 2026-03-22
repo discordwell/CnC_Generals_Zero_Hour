@@ -12,6 +12,8 @@ import {
   VEL_DAMP,
   ANG_DAMP,
   ALPHA_FACTOR,
+  getProceduralGradientTexture,
+  _resetProceduralTexture,
 } from './particle-system-manager.js';
 import { IniDataRegistry } from '@generals/ini-data';
 import type { IniBlock, IniValue } from '@generals/core';
@@ -662,5 +664,141 @@ describe('ParticleSystemManager', () => {
     const id = manager.createSystem('SmokePuff', new THREE.Vector3(0, 0, 0))!;
     const info = manager._getSystemInfo(id)!;
     expect(info.prevPositions).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Particle Texture Support
+  // -------------------------------------------------------------------------
+
+  it('particle material has a map (texture) when template specifies ParticleName', () => {
+    // The default SmokePuff template has ParticleName: 'EXSmokNew1.tga'
+    manager.createSystem('SmokePuff', new THREE.Vector3(0, 0, 0));
+    manager.update(1 / 30);
+
+    // Find the instanced mesh in the scene
+    const instancedMeshes = scene.children.filter((c) => c instanceof THREE.InstancedMesh);
+    expect(instancedMeshes.length).toBeGreaterThan(0);
+
+    const mesh = instancedMeshes[0] as THREE.InstancedMesh;
+    const material = mesh.material as THREE.MeshBasicMaterial;
+    expect(material.map).not.toBeNull();
+    expect(material.map).toBeDefined();
+    // The texture should be a DataTexture (procedural gradient fallback)
+    expect(material.map).toBeInstanceOf(THREE.DataTexture);
+  });
+
+  it('ADDITIVE shader applies AdditiveBlending with texture', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'AdditiveTest', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ADDITIVE',
+        Type: 'PARTICLE',
+        ParticleName: 'EXFlash1.tga',
+        Lifetime: '30 30',
+        SystemLifetime: '5',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '3 3',
+        VelocityType: 'SPHERICAL',
+        VelSpherical: '0.5 1.0',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    mgr.createSystem('AdditiveTest', new THREE.Vector3(0, 0, 0));
+    mgr.update(1 / 30);
+
+    const instancedMeshes = scene2.children.filter((c) => c instanceof THREE.InstancedMesh);
+    expect(instancedMeshes.length).toBeGreaterThan(0);
+
+    const mesh = instancedMeshes[0] as THREE.InstancedMesh;
+    const material = mesh.material as THREE.MeshBasicMaterial;
+
+    // Has texture
+    expect(material.map).not.toBeNull();
+    // Uses additive blending
+    expect(material.blending).toBe(THREE.AdditiveBlending);
+    // Transparent
+    expect(material.transparent).toBe(true);
+    // No depth write (so additive particles don't occlude each other)
+    expect(material.depthWrite).toBe(false);
+  });
+
+  it('ALPHA_TEST shader applies alphaTest threshold with texture', () => {
+    const registry = new IniDataRegistry();
+    registry.loadBlocks([
+      makeBlock('ParticleSystem', 'AlphaTestSys', {
+        Priority: 'WEAPON_EXPLOSION',
+        IsOneShot: 'Yes',
+        Shader: 'ALPHA_TEST',
+        Type: 'PARTICLE',
+        ParticleName: 'Debris.tga',
+        Lifetime: '30 30',
+        SystemLifetime: '5',
+        Size: '1 1',
+        BurstDelay: '1 1',
+        BurstCount: '2 2',
+        VelocityType: 'ORTHO',
+        VolumeType: 'POINT',
+      }),
+    ]);
+
+    const scene2 = new THREE.Scene();
+    const mgr = new ParticleSystemManager(scene2);
+    mgr.loadFromRegistry(registry);
+    mgr.init();
+
+    mgr.createSystem('AlphaTestSys', new THREE.Vector3(0, 0, 0));
+    mgr.update(1 / 30);
+
+    const instancedMeshes = scene2.children.filter((c) => c instanceof THREE.InstancedMesh);
+    expect(instancedMeshes.length).toBeGreaterThan(0);
+
+    const mesh = instancedMeshes[0] as THREE.InstancedMesh;
+    const material = mesh.material as THREE.MeshBasicMaterial;
+
+    // Has texture
+    expect(material.map).not.toBeNull();
+    // Uses alpha test
+    expect(material.alphaTest).toBe(0.5);
+  });
+
+  it('procedural gradient texture is a valid 64x64 RGBA DataTexture', () => {
+    _resetProceduralTexture(); // Start fresh
+    const texture = getProceduralGradientTexture();
+
+    expect(texture).toBeInstanceOf(THREE.DataTexture);
+    expect(texture.image.width).toBe(64);
+    expect(texture.image.height).toBe(64);
+
+    const data = texture.image.data as Uint8Array;
+    expect(data.length).toBe(64 * 64 * 4);
+
+    // Center pixel should be fully opaque white
+    const centerX = 31;
+    const centerY = 31;
+    const centerIdx = (centerY * 64 + centerX) * 4;
+    expect(data[centerIdx]).toBe(255);     // R
+    expect(data[centerIdx + 1]).toBe(255); // G
+    expect(data[centerIdx + 2]).toBe(255); // B
+    expect(data[centerIdx + 3]).toBeGreaterThan(200); // A — near-opaque at center
+
+    // Corner pixel should be fully transparent
+    const cornerIdx = 0; // top-left (0, 0)
+    expect(data[cornerIdx + 3]).toBe(0); // A — transparent at edge
+  });
+
+  it('procedural gradient texture is cached across calls', () => {
+    _resetProceduralTexture();
+    const tex1 = getProceduralGradientTexture();
+    const tex2 = getProceduralGradientTexture();
+    expect(tex1).toBe(tex2); // Same instance
   });
 });
