@@ -96,6 +96,20 @@ export function extractStealthProfile(self: GL, objectDef: ObjectDef | undefined
         // Source parity: StealthUpdate.cpp:881 — m_orderIdleEnemiesToAttackMeUponReveal parsed as Bool.
         const orderIdleEnemiesToAttackMeUponReveal = readBooleanField(block.fields, ['OrderIdleEnemiesToAttackMeUponReveal']) ?? false;
 
+        // Source parity: StealthUpdate.h:86 — m_friendlyOpacityMin parsed as percent-to-real (default 0.5).
+        // C++ getFriendlyOpacity() returns m_friendlyOpacityMin only (Max is unused in retail).
+        // INI uses parsePercentToReal — values like "50%" become 0.5. Raw numeric also accepted.
+        const friendlyOpacityMinRaw = readNumericField(block.fields, ['FriendlyOpacityMin']);
+        const friendlyOpacityMin = friendlyOpacityMinRaw ?? 0.5;
+
+        // Source parity: StealthUpdate.h:80 — m_hintDetectableStates is an ObjectStatusMaskType
+        // parsed from HintDetectableConditions. Purely visual — no gameplay cascade.
+        const hintDetectableStr = readStringField(block.fields, ['HintDetectableConditions']) ?? '';
+        const hintDetectableConditions: string[] = [];
+        for (const token of hintDetectableStr.split(/\s+/)) {
+          if (token) hintDetectableConditions.push(token.toUpperCase());
+        }
+
         profile = {
           stealthDelayFrames,
           innateStealth,
@@ -103,6 +117,8 @@ export function extractStealthProfile(self: GL, objectDef: ObjectDef | undefined
           moveThresholdSpeed,
           revealDistanceFromTarget,
           orderIdleEnemiesToAttackMeUponReveal,
+          friendlyOpacityMin,
+          hintDetectableConditions,
         };
       }
     }

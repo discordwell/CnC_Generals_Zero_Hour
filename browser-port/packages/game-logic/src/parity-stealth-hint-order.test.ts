@@ -76,12 +76,9 @@ describe('Parity: HintDetectableConditions cascade', () => {
    * hintDetectableStates field.
    */
 
-  it('HintDetectableConditions field is not parsed from INI in TS', () => {
-    // In C++, HintDetectableConditions is parsed into m_hintDetectableStates
-    // (StealthUpdate.cpp:105). In TS, extractStealthProfile does not read
-    // this field — the stealthProfile only contains stealthDelayFrames,
-    // innateStealth, forbiddenConditions, moveThresholdSpeed, and
-    // revealDistanceFromTarget.
+  it('HintDetectableConditions is parsed from INI into stealth profile', () => {
+    // Source parity: StealthUpdate.cpp:105 — HintDetectableConditions is parsed
+    // into m_hintDetectableStates (ObjectStatusMaskType). Now parsed in TS too.
     const bundle = makeBundle({
       objects: [
         makeObjectDef('StealthUnit', 'GLA', ['INFANTRY'], [
@@ -111,7 +108,7 @@ describe('Parity: HintDetectableConditions cascade', () => {
           forbiddenConditions: number;
           moveThresholdSpeed: number;
           revealDistanceFromTarget: number;
-          hintDetectableStates?: unknown;
+          hintDetectableConditions: string[];
         } | null;
       }>;
     };
@@ -119,10 +116,8 @@ describe('Parity: HintDetectableConditions cascade', () => {
     expect(entity).not.toBeUndefined();
     expect(entity!.stealthProfile).not.toBeNull();
 
-    // PARITY GAP: hintDetectableStates is not present in the TS stealth profile.
-    // C++ parses HintDetectableConditions into m_hintDetectableStates (ObjectStatusMaskType).
-    // TS ignores this field entirely.
-    expect(entity!.stealthProfile!).not.toHaveProperty('hintDetectableStates');
+    // Source parity: hintDetectableConditions is now parsed and stored.
+    expect(entity!.stealthProfile!.hintDetectableConditions).toEqual(['IS_FIRING_WEAPON']);
   });
 
   it('two nearby stealthed units — detecting one does NOT cascade-detect the other', () => {

@@ -625,6 +625,24 @@ export function makeRenderableEntityState(self: GL, entity: MapEntity, localSide
       veterancyLevel: entity.experienceState.currentLevel,
       isStealthed: entity.objectStatusFlags.has('STEALTHED'),
       isDetected: entity.objectStatusFlags.has('DETECTED'),
+      stealthFriendlyOpacity: (() => {
+        // Source parity: StealthUpdate.h:86 / Drawable.cpp:2567-2588 — stealthed allies render at
+        // per-module friendlyOpacityMin. Applies when stealthed and allied to local player (includes self).
+        if (!entity.objectStatusFlags.has('STEALTHED')) return 1.0;
+        const resolvedLocalSide = localSide ?? self.resolveLocalPlayerSide();
+        if (!resolvedLocalSide) return 1.0;
+        const entitySide = self.normalizeSide(entity.side);
+        if (!entitySide) return 1.0;
+        // Source parity: C++ uses r == ALLIES which includes self and allied players.
+        if (entitySide === resolvedLocalSide) {
+          return entity.stealthProfile?.friendlyOpacityMin ?? 0.5;
+        }
+        const rel = self.getTeamRelationshipBySides(resolvedLocalSide, entitySide);
+        if (rel === RELATIONSHIP_ALLIES) {
+          return entity.stealthProfile?.friendlyOpacityMin ?? 0.5;
+        }
+        return 1.0;
+      })(),
       scriptFlashCount: entity.scriptFlashCount,
       scriptFlashColor: entity.scriptFlashColor,
       ambientSoundEventName: self.resolveEntityAmbientSoundEventName(entity),

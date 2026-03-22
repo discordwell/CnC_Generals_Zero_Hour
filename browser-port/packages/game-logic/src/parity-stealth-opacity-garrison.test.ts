@@ -67,7 +67,7 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
    * configurable partial opacity (default: global value, overridable per-module).
    */
 
-  it('documents that RenderableEntityState has isStealthed but no opacity value', () => {
+  it('stealthFriendlyOpacity appears in renderable state for stealthed local-player units', () => {
     const bundle = makeBundle({
       objects: [
         makeObjectDef('StealthUnit', 'America', ['INFANTRY'], [
@@ -95,32 +95,22 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
     expect(entityState).not.toBeNull();
     expect(entityState!.statusFlags).toContain('STEALTHED');
 
-    // Verify the renderable state has boolean stealth flags.
+    // Verify the renderable state has boolean stealth flags and opacity.
     const renderableStates = logic.getRenderableEntityStates();
     const renderState = renderableStates.find(s => s.id === 1);
     expect(renderState).toBeDefined();
     expect(renderState!.isStealthed).toBe(true);
     expect(renderState!.isDetected).toBe(false);
 
-    // PARITY GAP DOCUMENTATION:
-    // C++ Drawable.cpp:2567-2588 — when an allied player views this unit, it renders
-    // at partial opacity (StealthUpdate::getFriendlyOpacity() or global default).
-    // The C++ StealthUpdateModuleData stores m_friendlyOpacityMin and m_friendlyOpacityMax.
-    //
-    // TS RenderableEntityState has NO opacity field. The renderer must decide how to
-    // visualize stealthed allies based solely on the isStealthed boolean.
-    // The renderer could use a hardcoded opacity, but per-module opacity configuration
-    // (FriendlyOpacityMin/Max INI fields) is not parsed or forwarded.
-    const hasOpacityField = 'opacity' in renderState!
-      || 'stealthOpacity' in renderState!
-      || 'friendlyOpacity' in renderState!;
-    expect(hasOpacityField).toBe(false);
+    // Source parity: stealthFriendlyOpacity should be present.
+    // Default m_friendlyOpacityMin is 0.5 (StealthUpdate.cpp:79).
+    expect(renderState!).toHaveProperty('stealthFriendlyOpacity');
+    expect(renderState!.stealthFriendlyOpacity).toBe(0.5);
   });
 
-  it('documents that extractStealthProfile does not parse FriendlyOpacityMin/Max', () => {
-    // Create a stealth unit with FriendlyOpacityMin/Max INI fields.
-    // In C++, these would be parsed into StealthUpdateModuleData.
-    // In TS, extractStealthProfile should ignore them.
+  it('extractStealthProfile parses FriendlyOpacityMin from INI', () => {
+    // Source parity: StealthUpdate.h:86 — m_friendlyOpacityMin is parsed from INI.
+    // C++ getFriendlyOpacity() returns m_friendlyOpacityMin (Max is unused in retail).
     const bundle = makeBundle({
       objects: [
         makeObjectDef('OpacityStealthUnit', 'America', ['INFANTRY'], [
@@ -141,7 +131,7 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
       makeHeightmap(128, 128),
     );
 
-    // Access the internal stealth profile to verify opacity fields are not parsed.
+    // Access the internal stealth profile to verify FriendlyOpacityMin is parsed.
     const priv = logic as unknown as {
       spawnedEntities: Map<number, {
         stealthProfile: {
@@ -150,8 +140,7 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
           forbiddenConditions: number;
           moveThresholdSpeed: number;
           revealDistanceFromTarget: number;
-          friendlyOpacityMin?: number;
-          friendlyOpacityMax?: number;
+          friendlyOpacityMin: number;
         } | null;
       }>;
     };
@@ -160,38 +149,28 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
     const profile = entity.stealthProfile;
     expect(profile).not.toBeNull();
 
-    // PARITY GAP DOCUMENTATION:
-    // C++ StealthUpdateModuleData (StealthUpdate.h:86-87) stores:
-    //   Real m_friendlyOpacityMin;
-    //   Real m_friendlyOpacityMax;
-    // C++ getFriendlyOpacity() (StealthUpdate.cpp:452-455) returns m_friendlyOpacityMin.
-    //
-    // TS extractStealthProfile (stealth-detection.ts) does NOT parse these fields.
-    // The StealthProfile type has no friendlyOpacityMin/Max properties.
-    // If FriendlyOpacityMin/Max were present in INI, they would be silently ignored.
-    const hasFriendlyOpacityMin = 'friendlyOpacityMin' in (profile as object);
-    const hasFriendlyOpacityMax = 'friendlyOpacityMax' in (profile as object);
-    expect(hasFriendlyOpacityMin).toBe(false);
-    expect(hasFriendlyOpacityMax).toBe(false);
+    // Source parity: FriendlyOpacityMin is now parsed from INI into the stealth profile.
+    expect(profile!.friendlyOpacityMin).toBe(0.3);
 
-    // Stealth itself still works despite missing opacity fields.
+    // Verify the renderable state uses the per-module opacity.
     for (let i = 0; i < 10; i++) logic.update(1 / 30);
     const flags = logic.getEntityState(1)?.statusFlags ?? [];
     expect(flags).toContain('STEALTHED');
+
+    const renderables = logic.getRenderableEntityStates();
+    const renderState = renderables.find(s => s.id === 1);
+    expect(renderState).toBeDefined();
+    expect(renderState!.stealthFriendlyOpacity).toBe(0.3);
   });
 
-  it('documents that stealthed allies show same isStealthed flag as stealthed enemies', () => {
-    // In C++, the rendering differs for allied vs enemy stealthed units:
-    //   - Allied stealthed: STEALTHLOOK_VISIBLE_FRIENDLY — rendered at partial opacity
+  it('stealthed allies get per-module friendlyOpacity, stealthed enemies get 1.0', () => {
+    // Source parity: C++ Drawable.cpp:2567-2588 — when the local player views:
+    //   - Allied stealthed: STEALTHLOOK_VISIBLE_FRIENDLY — rendered at friendlyOpacityMin
     //   - Enemy stealthed+detected: STEALTHLOOK_VISIBLE_DETECTED — rendered with shimmer
     //   - Enemy stealthed+undetected: STEALTHLOOK_NOT_VISIBLE — not rendered at all
-    //
-    // In TS, the renderable state has the same isStealthed boolean regardless of
-    // relationship. The renderer must use isOwnedByLocalPlayer + isStealthed + isDetected
-    // to derive the appropriate visual.
     const bundle = makeBundle({
       objects: [
-        // Allied stealthed unit.
+        // Local player's stealthed unit.
         makeObjectDef('AllyStealthUnit', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
           makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', {
@@ -218,6 +197,8 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
       makeRegistry(bundle),
       makeHeightmap(128, 128),
     );
+    // Configure local player as America (player index 0).
+    logic.setPlayerSide(0, 'America');
     setupEnemyRelationships(logic, 'America', 'China');
 
     // Wait for both units to stealth.
@@ -235,11 +216,11 @@ describe('Parity: stealth friendly opacity range (StealthUpdate.h:86-87)', () =>
     expect(allyRenderable!.isStealthed).toBe(true);
     expect(enemyRenderable!.isStealthed).toBe(true);
 
-    // The TS renderable state provides isOwnedByLocalPlayer to let the renderer
-    // differentiate rendering (partial opacity for allies, invisible/shimmer for enemies).
-    // But there is no per-module opacity override — all allies use the same visual.
-    expect(allyRenderable).toHaveProperty('isOwnedByLocalPlayer');
-    expect(enemyRenderable).toHaveProperty('isOwnedByLocalPlayer');
+    // Source parity: ally stealthed units now have stealthFriendlyOpacity from the
+    // per-module FriendlyOpacityMin (default 0.5). Enemy stealthed units get 1.0
+    // (not owned by local player).
+    expect(allyRenderable!.stealthFriendlyOpacity).toBe(0.5);
+    expect(enemyRenderable!.stealthFriendlyOpacity).toBe(1.0);
   });
 });
 

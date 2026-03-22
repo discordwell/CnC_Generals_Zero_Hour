@@ -43,6 +43,9 @@ export interface RenderableEntityState {
   veterancyLevel: number;
   isStealthed: boolean;
   isDetected: boolean;
+  /** Source parity: StealthUpdate.h:86 — per-module friendly opacity for stealthed ally rendering.
+   *  Set when entity is stealthed and owned by local player. 0 = fully transparent, 1 = fully opaque. */
+  stealthFriendlyOpacity: number;
   /** Source parity bridge: Drawable::setFlash count remaining. */
   scriptFlashCount?: number;
   /** Source parity bridge: Drawable indicator flash color (0xRRGGBB). */
