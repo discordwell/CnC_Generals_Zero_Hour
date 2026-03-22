@@ -399,6 +399,10 @@ export function isCrateCollideEligible(self: GL, crate: MapEntity, collector: Ma
     if (collector.health <= 0 || collector.destroyed) return false;
     // Source parity: neutral units cannot collect crates.
     if (!collector.side) return false;
+    // Source parity: CrateCollide.cpp:166-168 — crates cannot be claimed while in the air,
+    // except by buildings with BuildingPickup flag.
+    const validBuildingAttempt = prof.buildingPickup && collector.kindOf.has('STRUCTURE');
+    if (self.entityHasObjectStatus(crate, 'AIRBORNE_TARGET') && !validBuildingAttempt) return false;
     // Source parity: must have KindOf requirements.
     if (prof.requiredKindOf.length > 0) {
       if (!prof.requiredKindOf.every(k => collector.kindOf.has(k))) return false;
