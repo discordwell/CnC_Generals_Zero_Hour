@@ -388,4 +388,48 @@ describe('parity sell: partial construction refund ignores construction percenta
       expect(logic.getSideCredits('America')).toBe(expectedRefund);
     }
   });
+
+  it('getEntityState exposes sellPercent while building is being sold', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('TestHQ', 'America', ['STRUCTURE'], [
+          makeBlock('Body', 'StructureBody ModuleTag_Body', { MaxHealth: 2000, InitialHealth: 2000 }),
+        ], { BuildCost: 1000 }),
+      ],
+    });
+
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene, { sellPercentage: 0.5 });
+    logic.loadMapObjects(
+      makeMap([makeMapObject('TestHQ', 8, 8)], 64, 64),
+      makeRegistry(bundle),
+      makeHeightmap(64, 64),
+    );
+    logic.setPlayerSide(0, 'America');
+    logic.setSideCredits('America', 0);
+    logic.update(1 / 30);
+
+    // Before sell: sellPercent should be null.
+    const stateBefore = logic.getEntityState(1);
+    expect(stateBefore).not.toBeNull();
+    expect(stateBefore!.sellPercent).toBeNull();
+
+    // Issue sell command.
+    logic.submitCommand({ type: 'sell', entityId: 1 });
+    logic.update(1 / 30);
+
+    // During sell: sellPercent should be a number between -50 and 100.
+    const stateDuring = logic.getEntityState(1);
+    expect(stateDuring).not.toBeNull();
+    expect(stateDuring!.sellPercent).not.toBeNull();
+    expect(stateDuring!.sellPercent!).toBeLessThanOrEqual(100);
+    expect(stateDuring!.sellPercent!).toBeGreaterThan(-50);
+    expect(stateDuring!.statusFlags).toContain('SOLD');
+
+    // Advance until sell completes.
+    for (let frame = 0; frame < 200; frame++) logic.update(1 / 30);
+
+    // After sell: entity should be destroyed.
+    expect(logic.getEntityState(1)).toBeNull();
+  });
 });

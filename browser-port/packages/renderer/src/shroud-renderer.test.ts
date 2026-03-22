@@ -80,7 +80,7 @@ describe('ShroudRenderer', () => {
 
   it('encodes FOGGED cells as semi-transparent black', () => {
     const scene = createScene();
-    const renderer = new ShroudRenderer(scene, { worldWidth: 40, worldDepth: 40 });
+    const renderer = new ShroudRenderer(scene, { worldWidth: 40, worldDepth: 40, edgeBorderCells: 0 });
 
     const fogData = makeFogData(4, 4, CELL_FOGGED);
     renderer.forceUpdate(fogData);
@@ -94,7 +94,7 @@ describe('ShroudRenderer', () => {
 
   it('encodes CLEAR cells as fully transparent', () => {
     const scene = createScene();
-    const renderer = new ShroudRenderer(scene, { worldWidth: 40, worldDepth: 40 });
+    const renderer = new ShroudRenderer(scene, { worldWidth: 40, worldDepth: 40, edgeBorderCells: 0 });
 
     const fogData = makeFogData(4, 4, CELL_CLEAR);
     renderer.forceUpdate(fogData);
@@ -108,7 +108,7 @@ describe('ShroudRenderer', () => {
 
   it('handles mixed visibility states in a single update', () => {
     const scene = createScene();
-    const renderer = new ShroudRenderer(scene, { worldWidth: 30, worldDepth: 10 });
+    const renderer = new ShroudRenderer(scene, { worldWidth: 30, worldDepth: 10, edgeBorderCells: 0 });
 
     const fogData: FogOfWarData = {
       cellsWide: 3,
@@ -196,7 +196,7 @@ describe('ShroudRenderer', () => {
 
   it('box blur feathers a clear cell surrounded by shrouded cells', () => {
     const scene = createScene();
-    const renderer = new ShroudRenderer(scene, { worldWidth: 30, worldDepth: 30 });
+    const renderer = new ShroudRenderer(scene, { worldWidth: 30, worldDepth: 30, edgeBorderCells: 0 });
 
     // 3x3 grid: all shrouded except center cell is clear.
     // S S S
@@ -242,7 +242,7 @@ describe('ShroudRenderer', () => {
 
   it('subsequent updates modify existing texture without recreating mesh', () => {
     const scene = createScene();
-    const renderer = new ShroudRenderer(scene, { worldWidth: 20, worldDepth: 20 });
+    const renderer = new ShroudRenderer(scene, { worldWidth: 20, worldDepth: 20, edgeBorderCells: 0 });
 
     renderer.forceUpdate(makeFogData(2, 2, CELL_SHROUDED));
     const meshAfterFirst = renderer.getMesh();
@@ -258,5 +258,62 @@ describe('ShroudRenderer', () => {
     const texData = (meshAfterSecond!.material as THREE.MeshBasicMaterial).map!.image
       .data as Uint8Array;
     expect(texData[3]).toBe(0);
+  });
+
+  it('edge border darkens CLEAR cells near map edges', () => {
+    const scene = createScene();
+    // 10x10 grid with edgeBorderCells=2.  Center cells (2..7) should be unaffected;
+    // cells at distance 0 from edge should be fully SHROUDED_ALPHA; distance 1 should
+    // be halfway between SHROUDED_ALPHA and CLEAR_ALPHA.
+    const renderer = new ShroudRenderer(scene, {
+      worldWidth: 100,
+      worldDepth: 100,
+      edgeBorderCells: 2,
+    });
+
+    const fogData = makeFogData(10, 10, CELL_CLEAR);
+    renderer.forceUpdate(fogData);
+
+    const mesh = renderer.getMesh()!;
+    const texData = (mesh.material as THREE.MeshBasicMaterial).map!.image.data as Uint8Array;
+
+    // Corner cell (0,0): distFromEdge=0, t=0 → raw = 230 (SHROUDED_ALPHA).
+    // After 3x3 blur, corner is surrounded by other edge cells that are also ≥ 230,
+    // so the blurred alpha should be >= 200.
+    const cornerAlpha = texData[(0 * 10 + 0) * 4 + 3]!;
+    expect(cornerAlpha).toBeGreaterThanOrEqual(200);
+
+    // Center cell (5,5): distFromEdge=min(5,5,4,4)=4 >= border(2), unaffected by border.
+    // Raw value = CLEAR_ALPHA(0). After blur, it remains 0 because all 3x3 neighbors
+    // are also interior CLEAR cells.
+    const centerAlpha = texData[(5 * 10 + 5) * 4 + 3]!;
+    expect(centerAlpha).toBe(0);
+
+    // Edge cell at distance 1 from edge (1,5): distFromEdge=1, t=0.5.
+    // Raw = round(230 + 0.5*(0-230)) = 115.
+    // After blur, value is smoothed with neighbors (some 230, some 115, some 0).
+    const midBorderAlpha = texData[(1 * 10 + 5) * 4 + 3]!;
+    expect(midBorderAlpha).toBeGreaterThan(0);
+    expect(midBorderAlpha).toBeLessThan(230);
+  });
+
+  it('edgeBorderCells=0 disables edge darkening', () => {
+    const scene = createScene();
+    const renderer = new ShroudRenderer(scene, {
+      worldWidth: 40,
+      worldDepth: 40,
+      edgeBorderCells: 0,
+    });
+
+    const fogData = makeFogData(4, 4, CELL_CLEAR);
+    renderer.forceUpdate(fogData);
+
+    const mesh = renderer.getMesh()!;
+    const texData = (mesh.material as THREE.MeshBasicMaterial).map!.image.data as Uint8Array;
+
+    // All cells should be fully transparent — no edge darkening.
+    for (let i = 0; i < 4 * 4; i++) {
+      expect(texData[i * 4 + 3]).toBe(0);
+    }
   });
 });

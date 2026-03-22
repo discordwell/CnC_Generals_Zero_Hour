@@ -37,6 +37,12 @@ export interface ShroudRendererConfig {
   updateInterval?: number;
   /** Render order for the overlay mesh. */
   renderOrder?: number;
+  /**
+   * Number of cells from the map edge that are darkened to hide the abrupt
+   * terrain boundary.  Cells within this border are forced to SHROUDED_ALPHA.
+   * Defaults to 3.
+   */
+  edgeBorderCells?: number;
 }
 
 export interface FogOfWarData {
@@ -62,6 +68,7 @@ export class ShroudRenderer {
       heightOffset: 0.5,
       updateInterval: DEFAULT_UPDATE_INTERVAL,
       renderOrder: 500,
+      edgeBorderCells: 3,
       ...config,
     };
   }
@@ -107,6 +114,24 @@ export class ShroudRenderer {
           : vis === CELL_FOGGED
             ? FOGGED_ALPHA
             : SHROUDED_ALPHA;
+    }
+
+    // Edge border: darken cells near map edges to hide the abrupt terrain boundary.
+    // Uses a linear gradient from SHROUDED_ALPHA at the outermost cell to the
+    // existing value at the inner edge of the border.
+    const border = this.config.edgeBorderCells;
+    if (border > 0) {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const distFromEdge = Math.min(x, y, w - 1 - x, h - 1 - y);
+          if (distFromEdge < border) {
+            // t=0 at outermost edge → fully shrouded; t=1 at inner boundary → keep original.
+            const t = distFromEdge / border;
+            const idx = y * w + x;
+            raw[idx] = Math.round(SHROUDED_ALPHA + t * (raw[idx]! - SHROUDED_ALPHA));
+          }
+        }
+      }
     }
 
     // Second pass: 3x3 box blur on alpha to feather fog edges.

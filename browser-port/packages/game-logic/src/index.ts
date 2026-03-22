@@ -8863,6 +8863,8 @@ export class GameLogicSubsystem implements Subsystem {
     supplyBoxes: number | null;
     /** Supply truck cargo: max boxes the truck can carry. null when not a supply truck. */
     supplyMaxBoxes: number | null;
+    /** Sell countdown: remaining percentage (100→-50) while being sold. null when not selling. */
+    sellPercent: number | null;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -8925,6 +8927,9 @@ export class GameLogicSubsystem implements Subsystem {
         : null,
       supplyMaxBoxes: entity.supplyTruckProfile
         ? entity.supplyTruckProfile.maxBoxes
+        : null,
+      sellPercent: this.sellingEntities.has(entity.id)
+        ? this.sellingEntities.get(entity.id)!.constructionPercent
         : null,
     };
   }
