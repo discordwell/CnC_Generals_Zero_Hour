@@ -12625,7 +12625,7 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     expect(after).toBeGreaterThan(before);
   });
 
-  it('rejects bridge tower targets for dozer repair commands', () => {
+  it('accepts player bridge tower repair commands from dozers', () => {
     const logic = new GameLogicSubsystem(new THREE.Scene());
 
     const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
@@ -12659,12 +12659,13 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     logic.update(0);
     const before = logic.getEntityState(2)!.health;
 
+    // Player-issued repair command for bridge tower should now be accepted.
     logic.submitCommand({ type: 'repairBuilding', entityId: 1, targetBuildingId: 2 });
     logic.update(1 / 30);
 
     const after = logic.getEntityState(2)!.health;
-    expect(after).toBe(before);
-    expect(priv.pendingRepairActions.has(1)).toBe(false);
+    expect(after).toBeGreaterThan(before);
+    expect(priv.pendingRepairActions.has(1)).toBe(true);
   });
 
   it('allows AI repair commands for bridge towers and restores bridge passability when repaired', () => {
@@ -12717,6 +12718,65 @@ describe('GameLogicSubsystem combat + upgrades', () => {
     }
 
     expect(logic.getEntityState(2)?.health).toBeCloseTo(500, 5);
+    expect(logic.getBridgeSegmentStates()).toContainEqual({ segmentId: 0, passable: true });
+  });
+
+  it('player dozer repairs destroyed bridge tower and restores bridge passability', () => {
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+
+    const dozerDef = makeObjectDef('USADozer', 'America', ['VEHICLE', 'DOZER'], [
+      makeBlock('Behavior', 'DozerAIUpdate ModuleTag_DozerAI', {
+        RepairHealthPercentPerSecond: '30%',
+        BoredTime: 999999,
+        BoredRange: 300,
+      }),
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+    ], { GeometryMajorRadius: 5, GeometryMinorRadius: 5 });
+
+    const bridgeTowerDef = makeObjectDef('BridgeTower', 'America', ['STRUCTURE', 'BRIDGE_TOWER'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 100 }),
+    ], { GeometryMajorRadius: 10, GeometryMinorRadius: 10 });
+
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('USADozer', 20, 20), // id 1
+        makeMapObject('BridgeTower', 20, 20), // id 2
+      ], 64, 64),
+      makeRegistry(makeBundle({
+        objects: [dozerDef, bridgeTowerDef],
+      })),
+      makeHeightmap(64, 64),
+    );
+    logic.update(0);
+
+    const privateApi = logic as unknown as {
+      bridgeSegments: Map<number, { passable: boolean; cellIndices: number[]; transitionIndices: number[] }>;
+      bridgeSegmentByControlEntity: Map<number, number>;
+      pendingRepairActions: Map<number, number>;
+    };
+    // Set up a destroyed bridge segment linked to the bridge tower.
+    privateApi.bridgeSegments.set(0, { passable: false, cellIndices: [], transitionIndices: [] });
+    privateApi.bridgeSegmentByControlEntity.set(2, 0);
+
+    // Player-issued repair command.
+    logic.submitCommand({
+      type: 'repairBuilding',
+      entityId: 1,
+      targetBuildingId: 2,
+      commandSource: 'PLAYER',
+    });
+    logic.update(1 / 30);
+
+    expect(privateApi.pendingRepairActions.get(1)).toBe(2);
+
+    // Tick enough frames for the bridge tower to be fully repaired.
+    // 30% per second * 500 max health / 30 fps = 5 hp/frame. (500-100)/5 = 80 frames needed.
+    for (let i = 0; i < 100; i++) {
+      logic.update(1 / 30);
+    }
+
+    expect(logic.getEntityState(2)?.health).toBeCloseTo(500, 5);
+    // Bridge passability should be restored.
     expect(logic.getBridgeSegmentStates()).toContainEqual({ segmentId: 0, passable: true });
   });
 

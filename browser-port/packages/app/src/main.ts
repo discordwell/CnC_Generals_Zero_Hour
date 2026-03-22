@@ -115,6 +115,7 @@ import { PostgameStatsScreen, type SideScoreDisplay } from './postgame-stats-scr
 import { createAudioBufferLoader } from './audio-buffer-loader.js';
 import { CursorManager, resolveGameCursor, detectEdgeScrollDir } from './cursor-manager.js';
 import { formatTemplateName } from './hover-tooltip.js';
+import { ChatUI } from './chat-ui.js';
 
 // ============================================================================
 // Loading screen
@@ -1647,6 +1648,24 @@ async function startGame(
       });
     },
   });
+
+  // In-game chat UI (Enter key to open, Enter to send, Escape to cancel)
+  const chatUI = new ChatUI(gameContainer, {
+    isMultiplayer: false, // Single-player for now; enable when network layer is ready.
+    fadeDurationMs: 5000,
+  });
+
+  // Chat keyboard handler — intercept Enter before other key handlers.
+  window.addEventListener('keydown', (e) => {
+    if (chatUI.isInputOpen) {
+      // While chat is open, block all game keyboard shortcuts.
+      // The input field's own keydown handler will process Enter/Escape.
+      return;
+    }
+    if (chatUI.handleKeyDown(e)) {
+      e.preventDefault();
+    }
+  }, true); // Use capture phase to intercept before other handlers.
 
   // In-game Options screen (ESC key)
   let browserStorageIngame: Storage | null = null;

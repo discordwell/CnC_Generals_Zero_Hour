@@ -7736,7 +7736,7 @@ export class GameLogicSubsystem implements Subsystem {
           }
         }
 
-        // Try repair if dozer right-clicks on a damaged friendly building.
+        // Try repair if dozer right-clicks on a damaged friendly building or bridge tower.
         if (
           pickedEntityId !== null
           && pickedEntityId !== selEntity.id
@@ -7746,7 +7746,7 @@ export class GameLogicSubsystem implements Subsystem {
           if (
             targetEntity
             && !targetEntity.destroyed
-            && targetEntity.kindOf.has('STRUCTURE')
+            && (targetEntity.kindOf.has('STRUCTURE') || targetEntity.kindOf.has('BRIDGE_TOWER'))
             && targetEntity.health < targetEntity.maxHealth
             && this.getTeamRelationship(selEntity, targetEntity) !== RELATIONSHIP_ENEMIES
           ) {
@@ -20018,9 +20018,11 @@ export class GameLogicSubsystem implements Subsystem {
     const targetKindOf = this.resolveEntityKindOfSet(building);
     const isBridgeTarget = targetKindOf.has('BRIDGE') || targetKindOf.has('BRIDGE_TOWER');
     if (!targetKindOf.has('STRUCTURE') && !isBridgeTarget) return false;
-    // Source parity: player-issued repair command gating (ActionManager::canRepairObject)
-    // disallows bridge and bridge-tower targets, but AIPlayer::repairStructure may still queue them.
-    if (commandSource === 'PLAYER' && isBridgeTarget) return false;
+    // Source note: original C++ ActionManager::canRepairObject disallows bridge targets for
+    // player commands (feature was cut 12/12/02). We re-enable bridge tower repair for
+    // player-issued commands to support dozer bridge repair gameplay.
+    // Bridge body entities (KINDOF_BRIDGE without BRIDGE_TOWER) remain blocked for player commands.
+    if (commandSource === 'PLAYER' && targetKindOf.has('BRIDGE') && !targetKindOf.has('BRIDGE_TOWER')) return false;
     if (targetKindOf.has('REBUILD_HOLE')) return false;
     if (building.objectStatusFlags.has('SOLD')) return false;
     if (building.objectStatusFlags.has('UNDER_CONSTRUCTION')) return false;
