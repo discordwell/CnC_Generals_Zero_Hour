@@ -1995,6 +1995,43 @@ describe('condition-state model fallback resolution', () => {
     expect(foundOpacity).toBeLessThanOrEqual(0.4);
   });
 
+  it('RUBBLE model condition renders entity at reduced opacity', async () => {
+    const scene = new THREE.Scene();
+    const modelLoader = async () => modelWithAnimationClips();
+    const manager = new ObjectVisualManager(scene, null, { modelLoader });
+
+    // First sync without RUBBLE to establish baseline opacity.
+    const baseState = makeMeshState({ id: 500 });
+    manager.sync([baseState]);
+    await flushModelLoadQueue();
+    manager.sync([baseState]); // model now loaded, lastStealthOpacity = 1.0
+
+    // Second sync with RUBBLE flag — opacity should change to 0.5.
+    const rubbleState = makeMeshState({
+      id: 500,
+      modelConditionFlags: ['RUBBLE'],
+    });
+    manager.sync([rubbleState]);
+
+    // Find any mesh in the scene
+    let foundOpacity = -1;
+    let meshCount = 0;
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material) {
+        meshCount++;
+        const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+        if (mat && 'opacity' in mat) {
+          foundOpacity = mat.opacity;
+        }
+      }
+    });
+
+    // Should have found at least one mesh.
+    expect(meshCount).toBeGreaterThan(0);
+    // RUBBLE entities should render at ~0.5 opacity.
+    expect(foundOpacity).toBeCloseTo(0.5, 1);
+  });
+
   it('flashes model emissive red when health decreases then restores after 200ms', async () => {
     const scene = new THREE.Scene();
     // Create a model with MeshStandardMaterial so emissive changes are visible.

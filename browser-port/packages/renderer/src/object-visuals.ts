@@ -1936,8 +1936,14 @@ export class ObjectVisualManager {
     // constructionPercent goes from 100 → -50 during sell. Show fade-out.
     const isSelling = state.modelConditionFlags?.includes('SOLD') ?? false;
 
+    // Source parity: RUBBLE model condition — destroyed buildings render as faded rubble remnants.
+    const isRubble = state.modelConditionFlags?.includes('RUBBLE') ?? false;
+
     let targetOpacity = 1.0;
-    if (isSelling) {
+    if (isRubble) {
+      // Destroyed building rubble: semi-transparent to distinguish from live structures.
+      targetOpacity = 0.5;
+    } else if (isSelling) {
       // Fade out as sell countdown progresses (100 → 0 → -50)
       targetOpacity = Math.max(0.1, Math.min(0.9, constructionPct / 100));
     } else if (isUnderConstruction) {

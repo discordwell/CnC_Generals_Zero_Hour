@@ -2483,6 +2483,11 @@ async function startGame(
           });
         }
 
+        // Spawn ground scorch mark at explosion site.
+        if (action.type === 'spawnScorch') {
+          decalManager.addScorchMark('RANDOM', action.radius || 3, pos);
+        }
+
         if (!fxHandled) {
           const fxName = resolveFallbackFXListName(event.type, action.type);
           if (fxName && fxListManager.hasFXList(fxName)) {

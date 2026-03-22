@@ -3280,6 +3280,63 @@ describe('StructureToppleUpdate', () => {
     for (let i = 0; i < 200; i++) logic.update(0);
     expect(entity.structureToppleState!.state).toBe('DONE');
   });
+
+  it('dying rubble render state persists for 10 seconds with RUBBLE flag for topple buildings', () => {
+    const building = makeObjectDef('GLAScudStorm', 'GLA', ['STRUCTURE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+      makeBlock('Behavior', 'StructureToppleUpdate ModuleTag_Topple', {
+        MinToppleDelay: 33,
+        MaxToppleDelay: 66,
+        StructuralIntegrity: 0.0,
+        StructuralDecay: 0.0,
+      }),
+    ]);
+    const attacker = makeObjectDef('Tank', 'America', ['VEHICLE'], [
+      makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
+      makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'InstantKillGun'] }),
+    ]);
+    const bundle = makeBundle({
+      objects: [building, attacker],
+      weapons: [
+        makeWeaponDef('InstantKillGun', {
+          AttackRange: 220,
+          PrimaryDamage: 5000,
+          PrimaryDamageRadius: 0,
+          WeaponSpeed: 999999,
+          DelayBetweenShots: 5000,
+        }),
+      ],
+    });
+    const scene = new THREE.Scene();
+    const logic = new GameLogicSubsystem(scene);
+    logic.loadMapObjects(
+      makeMap([
+        makeMapObject('GLAScudStorm', 50, 50),
+        makeMapObject('Tank', 20, 50),
+      ], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.setTeamRelationship('GLA', 'America', 0);
+    logic.setTeamRelationship('America', 'GLA', 0);
+
+    // Kill the building via attack command.
+    logic.submitCommand({ type: 'attackEntity', entityId: 2, targetEntityId: 1 });
+    for (let i = 0; i < 30; i++) logic.update(1 / 30);
+
+    // The building should be dead.
+    const priv = logic as unknown as {
+      pendingDyingRenderableStates: Map<number, { state: { modelConditionFlags: string[] }; expireFrame: number }>;
+      frameCounter: number;
+    };
+    const dyingState = priv.pendingDyingRenderableStates.get(1);
+    expect(dyingState).toBeDefined();
+    // Should have RUBBLE model condition flag.
+    expect(dyingState!.state.modelConditionFlags).toContain('RUBBLE');
+    // Expire frame should be ~10 seconds (300 frames) after death, not ~3 seconds (90 frames).
+    const framesUntilExpire = dyingState!.expireFrame - priv.frameCounter;
+    expect(framesUntilExpire).toBeGreaterThan(200); // Well above 3-second threshold.
+  });
 });
 
 describe('SlowDeath fling physics', () => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { planCombatVisualEffects } from './combat-visual-effects.js';
 
 describe('planCombatVisualEffects', () => {
-  it('maps missile impacts to explosion visuals and explosion audio', () => {
+  it('maps missile impacts to explosion visuals, explosion audio, and scorch mark', () => {
     const actions = planCombatVisualEffects({
       type: 'WEAPON_IMPACT',
       x: 0,
@@ -17,6 +17,7 @@ describe('planCombatVisualEffects', () => {
     expect(actions).toEqual([
       { type: 'spawnExplosion', radius: 7 },
       { type: 'playAudio', eventName: 'CombatExplosionLarge' },
+      { type: 'spawnScorch', radius: 7 * 0.8 },
     ]);
   });
 
@@ -139,7 +140,7 @@ describe('planCombatVisualEffects', () => {
     ]);
   });
 
-  it('adds rubble/smoke for large destruction events', () => {
+  it('adds rubble/smoke/scorch for large destruction events', () => {
     const actions = planCombatVisualEffects({
       type: 'ENTITY_DESTROYED',
       x: 0,
@@ -155,7 +156,39 @@ describe('planCombatVisualEffects', () => {
       { type: 'playAudio', eventName: 'CombatEntityDestroyed' },
       { type: 'spawnRubble', radius: 4 },
       { type: 'spawnSmokeColumn' },
+      { type: 'spawnScorch', radius: 4 },
     ]);
+  });
+
+  it('does not add scorch for small weapon impacts (radius < 3)', () => {
+    const actions = planCombatVisualEffects({
+      type: 'WEAPON_IMPACT',
+      x: 0,
+      y: 0,
+      z: 0,
+      radius: 2,
+      sourceEntityId: 1,
+      projectileType: 'MISSILE',
+    });
+
+    expect(actions).toEqual([
+      { type: 'spawnExplosion', radius: 2 },
+      { type: 'playAudio', eventName: 'CombatExplosionSmall' },
+    ]);
+  });
+
+  it('adds scorch mark for large weapon impacts (radius >= 3)', () => {
+    const actions = planCombatVisualEffects({
+      type: 'WEAPON_IMPACT',
+      x: 5,
+      y: 0,
+      z: 10,
+      radius: 5,
+      sourceEntityId: 1,
+      projectileType: 'ARTILLERY',
+    });
+
+    expect(actions).toContainEqual({ type: 'spawnScorch', radius: 5 * 0.8 });
   });
 });
 
