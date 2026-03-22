@@ -46,6 +46,18 @@
 - **Grand Total**: 110 C++ divergence areas audited, ~380 parity tests, 26 fixes applied, 103 areas at full parity (94%), 7 areas have visual/niche gaps only (stealth disguise model morphing).
 - 2090 game-logic tests passing across 80 test files. ZERO known gameplay-affecting parity gaps remain.
 
+## 2026-03-21/22 — Visual Polish + Renderer + Audio Sprint
+- **Asset pipeline re-run**: 8992 textured GLB models (was 5 untextured), 7607 textures converted. 5.3GB deployed.
+- **Team color visibility**: Emissive 0.15→0.4 + 12% base color lerp.
+- **Stealth opacity**: transparent=true on cloned materials, depthWrite management, friendlyOpacity wired.
+- **Stealth disguise**: DisguisesAsTeam, DISGUISED flag, model swap with fade transition.
+- **Particle textures**: Procedural radial gradient, ADDITIVE/ALPHA/ALPHA_TEST blending.
+- **Map props**: Unresolved objects (trees, rocks) use templateName as render asset fallback.
+- **Adaptive model loading**: Scales with navigator.hardwareConcurrency (cap 24).
+- **Superweapon progress bars**: Color-coded gradient fills behind countdown text.
+- **Battle music**: WEAPON_FIRED events trigger battle music transition.
+- **Weapon audio confirmed wired**: fireSoundEvent → planCombatVisualEffects → audioManager.addAudioEvent 3D.
+
 ## 2026-03-19T18:15Z — Wet Test Parity Sprint: 6 Fixes, Bundle Data Recovery
 - **Debug overlay**: Removed per-frame dump of all 784 entity IDs. Now shows only unresolved count. (commit f2026f6c)
 - **Map dropdown**: Fixed manifest path extraction (`_extracted/MapsZH/Maps/...` → clean basename), `isSkirmishMapName()` filter. 46 skirmish maps match retail. (commit f2026f6c)
