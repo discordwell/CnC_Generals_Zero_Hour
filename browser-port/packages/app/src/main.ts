@@ -2394,6 +2394,36 @@ async function startGame(
   let buildingGhostTemplateName: string | null = null;
   let buildingGhostLoadingTemplate: string | null = null;
 
+  // Ground footprint outline shown during building placement.
+  const footprintOutlineGeometry = new THREE.BufferGeometry();
+  // 5 vertices to close the rectangle (first == last for LineLoop visual parity with Line).
+  footprintOutlineGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([
+      -1, 0, -1,
+       1, 0, -1,
+       1, 0,  1,
+      -1, 0,  1,
+      -1, 0, -1,
+    ], 3),
+  );
+  const footprintValidColor = new THREE.Color(0x00ff00);
+  const footprintInvalidColor = new THREE.Color(0xff0000);
+  const footprintOutlineMaterial = new THREE.LineBasicMaterial({
+    color: footprintValidColor,
+    depthWrite: false,
+    depthTest: true,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const footprintOutline = new THREE.Line(footprintOutlineGeometry, footprintOutlineMaterial);
+  footprintOutline.name = 'building-footprint-outline';
+  footprintOutline.renderOrder = 601;
+  footprintOutline.visible = false;
+  scene.add(footprintOutline);
+  let footprintHalfW = 10; // default half-width (world units)
+  let footprintHalfH = 10; // default half-height (world units)
+
   // Fallback box shown while the real model is loading.
   const ghostFallbackGeometry = new THREE.BoxGeometry(4, 2, 4);
   const ghostFallbackMesh = new THREE.Mesh(ghostFallbackGeometry, ghostValidMaterial);
@@ -2459,6 +2489,7 @@ async function startGame(
       if (buildingGhostGroup.visible) {
         buildingGhostGroup.visible = false;
       }
+      footprintOutline.visible = false;
       // Clean up when exiting placement mode.
       if (buildingGhostTemplateName !== null) {
         if (buildingGhostModel) {
@@ -2476,10 +2507,11 @@ async function startGame(
     const templateName = resolveGhostTemplateName(pending.sourceButtonId);
     if (!templateName) {
       buildingGhostGroup.visible = false;
+      footprintOutline.visible = false;
       return;
     }
 
-    // When the template changes, load the new model.
+    // When the template changes, load the new model and update footprint size.
     if (templateName !== buildingGhostTemplateName && templateName !== buildingGhostLoadingTemplate) {
       // Remove old model and show fallback while loading.
       if (buildingGhostModel) {
@@ -2489,12 +2521,36 @@ async function startGame(
       buildingGhostTemplateName = null;
       buildingGhostGroup.add(ghostFallbackMesh);
       loadGhostModelForTemplate(templateName);
+
+      // Derive footprint size from obstacle geometry radii.
+      const objDef = iniDataRegistry.getObject(templateName);
+      if (objDef) {
+        const rawMajor = objDef.fields['GeometryMajorRadius'] ?? objDef.fields['MajorRadius'];
+        const rawMinor = objDef.fields['GeometryMinorRadius'] ?? objDef.fields['MinorRadius'];
+        const major = typeof rawMajor === 'number' ? Math.abs(rawMajor) : (typeof rawMajor === 'string' ? Math.abs(parseFloat(rawMajor)) : 0);
+        const minor = typeof rawMinor === 'number' ? Math.abs(rawMinor) : (typeof rawMinor === 'string' ? Math.abs(parseFloat(rawMinor)) : 0);
+        footprintHalfW = major > 0 ? major : 10;
+        footprintHalfH = minor > 0 ? minor : footprintHalfW;
+      } else {
+        footprintHalfW = 10;
+        footprintHalfH = 10;
+      }
+      // Update the footprint outline vertices to match the new size.
+      const posAttr = footprintOutlineGeometry.getAttribute('position') as THREE.BufferAttribute;
+      posAttr.setXYZ(0, -footprintHalfW, 0, -footprintHalfH);
+      posAttr.setXYZ(1,  footprintHalfW, 0, -footprintHalfH);
+      posAttr.setXYZ(2,  footprintHalfW, 0,  footprintHalfH);
+      posAttr.setXYZ(3, -footprintHalfW, 0,  footprintHalfH);
+      posAttr.setXYZ(4, -footprintHalfW, 0, -footprintHalfH);
+      posAttr.needsUpdate = true;
+      footprintOutlineGeometry.computeBoundingSphere();
     }
 
     // Resolve cursor world position.
     const worldTarget = gameLogic.resolveMoveTargetFromInput(inputState, camera);
     if (!worldTarget) {
       buildingGhostGroup.visible = false;
+      footprintOutline.visible = false;
       return;
     }
 
@@ -2510,6 +2566,10 @@ async function startGame(
     buildingGhostGroup.position.set(worldTarget.x, y + 1, worldTarget.z);
     buildingGhostGroup.rotation.y = buildingGhostAngle;
 
+    // Position the footprint outline on the ground, slightly above terrain to avoid z-fighting.
+    footprintOutline.position.set(worldTarget.x, y + 0.1, worldTarget.z);
+    footprintOutline.rotation.y = buildingGhostAngle;
+
     // Source parity: ghost turns red when placement is invalid.
     // Only re-evaluate when cursor moves to a different grid cell.
     const cellX = Math.floor(worldTarget.x / 10);
@@ -2524,9 +2584,12 @@ async function startGame(
       if (buildingGhostModel) {
         applyGhostMaterial(buildingGhostModel, ghostMaterial);
       }
+      // Sync footprint outline color with validity.
+      footprintOutlineMaterial.color.copy(isValid ? footprintValidColor : footprintInvalidColor);
     }
 
     buildingGhostGroup.visible = true;
+    footprintOutline.visible = true;
   };
 
   // ========================================================================
