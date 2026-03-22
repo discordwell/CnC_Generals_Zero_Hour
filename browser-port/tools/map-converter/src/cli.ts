@@ -156,8 +156,15 @@ async function main(): Promise<void> {
         waypoint2: link.waypoint2,
       })),
     },
-    textureClasses: parsed.textureClasses,
+    textureClasses: parsed.textureClassDefs.map((tc) => ({
+      name: tc.name,
+      firstTile: tc.firstTile,
+      numTiles: tc.numTiles,
+    })),
     blendTileCount: parsed.blendTileCount,
+    tileIndices: parsed.tileIndices ? uint8ArrayToBase64(
+      new Uint8Array(parsed.tileIndices.buffer, parsed.tileIndices.byteOffset, parsed.tileIndices.byteLength),
+    ) : undefined,
     cliffStateData: parsed.cliffStateData ? uint8ArrayToBase64(parsed.cliffStateData) : undefined,
     cliffStateStride: parsed.cliffStateData ? parsed.cliffStateStride : undefined,
     sidesList: parsed.sidesList,

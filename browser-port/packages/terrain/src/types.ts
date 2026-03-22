@@ -201,14 +201,31 @@ export interface WaypointDataJSON {
   links: WaypointLinkJSON[];
 }
 
+/** A texture class definition from BlendTileData. */
+export interface BlendTileTextureClass {
+  /** Texture class name (e.g. "SandType3", "CliffLargeType10"). */
+  name: string;
+  /** First source tile index belonging to this class. */
+  firstTile: number;
+  /** Number of source tiles in this class. */
+  numTiles: number;
+}
+
 /** Complete converted map JSON structure (matches map-converter output). */
 export interface MapDataJSON {
   heightmap: HeightmapDataJSON;
   objects: MapObjectJSON[];
   triggers: PolygonTriggerJSON[];
   waypoints?: WaypointDataJSON;
-  textureClasses: string[];
+  /** Texture classes used by the terrain blend system. String-only for legacy; object form preferred. */
+  textureClasses: (string | BlendTileTextureClass)[];
   blendTileCount: number;
+  /**
+   * Optional base64-encoded Int16Array of per-cell tile indices.
+   * Each cell maps to a source tile; the tile index determines which texture class applies.
+   * Encoding: raw little-endian Int16 bytes -> base64.
+   */
+  tileIndices?: string;
   /**
    * Optional packed cliff-state bitset from BlendTileData (v7+), base64-encoded.
    * Bits are addressed by cell index using `cliffStateStride` bytes per row.

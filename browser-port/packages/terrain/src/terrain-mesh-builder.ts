@@ -4,11 +4,20 @@
  * Splits the heightmap into CHUNK_SIZE × CHUNK_SIZE cell chunks. Each chunk
  * becomes a separate BufferGeometry with position, normal, uv, and color
  * attributes. Separate meshes enable frustum culling.
+ *
+ * When blend tile data is available (from real map files), vertex colors are
+ * derived from the per-cell texture class assignment. This matches the
+ * original engine's BlendTileData system where m_tileNdxes maps each cell to
+ * a source tile index, and texture classes define tile index ranges.
+ *
+ * Source parity: WorldHeightMap::getTextureClassFromNdx — tile index >> 2,
+ * then linear scan of m_textureClasses checking firstTile..firstTile+numTiles.
  */
 
 import * as THREE from 'three';
 import { HeightmapGrid } from './heightmap.js';
 import { MAP_XY_FACTOR, CHUNK_SIZE } from './types.js';
+import type { BlendTileTextureClass } from './types.js';
 
 /** A terrain chunk with its geometry and grid-space bounds. */
 export interface TerrainChunk {
@@ -23,6 +32,72 @@ export interface TerrainChunk {
   /** Number of cells tall this chunk covers. */
   cellsTall: number;
 }
+
+/** Optional blend tile data for texture-class-based vertex coloring. */
+export interface BlendTileColorData {
+  /** Per-cell tile indices (Int16Array, row-major, size = heightmap.width * heightmap.height). */
+  tileIndices: Int16Array;
+  /** Texture class definitions with firstTile/numTiles ranges. */
+  textureClasses: BlendTileTextureClass[];
+  /** Heightmap width (for indexing into tileIndices). */
+  mapWidth: number;
+}
+
+// ============================================================================
+// Texture class name -> color mapping
+// ============================================================================
+
+/**
+ * Map texture class name prefixes/patterns to representative RGB colors.
+ * Based on the texture names used in C&C Generals maps (e.g. SandType3,
+ * CliffLargeType10, GrassMediumType35, ConcreteType3, etc.).
+ */
+const TEXTURE_CLASS_COLORS: Array<{ pattern: RegExp; color: [number, number, number] }> = [
+  // Concrete / urban
+  { pattern: /^Concrete|^Asphalt|^Urban|^Road/i, color: [0.42, 0.40, 0.38] },
+  // Cliff / rock
+  { pattern: /^Cliff|^Rock/i, color: [0.50, 0.46, 0.40] },
+  // Dirt
+  { pattern: /^Dirt/i, color: [0.55, 0.42, 0.28] },
+  // Snow / ice
+  { pattern: /^Snow|^Ice/i, color: [0.85, 0.87, 0.90] },
+  // Water / shore
+  { pattern: /^Water|^Shore/i, color: [0.30, 0.45, 0.55] },
+  // Grassy sand variants (check before Sand to catch "SandLargeType4Grassy")
+  { pattern: /Grassy/i, color: [0.52, 0.58, 0.32] },
+  // Wet sand
+  { pattern: /wet$/i, color: [0.58, 0.48, 0.30] },
+  // Sand
+  { pattern: /^Sand/i, color: [0.72, 0.62, 0.42] },
+  // Grass (various shades)
+  { pattern: /^Grass/i, color: [0.40, 0.55, 0.25] },
+  // Mud
+  { pattern: /^Mud/i, color: [0.45, 0.35, 0.22] },
+  // Lava
+  { pattern: /^Lava/i, color: [0.70, 0.25, 0.10] },
+  // Transition / blend (generic)
+  { pattern: /^Transition|^Blend/i, color: [0.60, 0.52, 0.36] },
+];
+
+/** Default color when texture class name doesn't match any pattern. */
+const DEFAULT_TEXTURE_COLOR: [number, number, number] = [0.60, 0.52, 0.38];
+
+/**
+ * Resolve a texture class name to an RGB color.
+ * Exported for testing.
+ */
+export function getTextureClassColor(name: string): [number, number, number] {
+  for (const entry of TEXTURE_CLASS_COLORS) {
+    if (entry.pattern.test(name)) {
+      return [...entry.color];
+    }
+  }
+  return [...DEFAULT_TEXTURE_COLOR];
+}
+
+// ============================================================================
+// Height-based fallback coloring (used when no blend tile data available)
+// ============================================================================
 
 /**
  * Height-based color gradient for vertex coloring.
@@ -81,12 +156,50 @@ function blendSlopeColor(
   ];
 }
 
+// ============================================================================
+// Blend tile -> texture class resolution
+// ============================================================================
+
+/**
+ * Resolve a tile index to a texture class index.
+ * Source parity: WorldHeightMap::getTextureClassFromNdx.
+ * The tile index is right-shifted by 2 before comparison with class ranges.
+ */
+function resolveTextureClassIndex(
+  tileNdx: number,
+  textureClasses: BlendTileTextureClass[],
+): number {
+  const shifted = tileNdx >> 2;
+  for (let i = 0; i < textureClasses.length; i++) {
+    const tc = textureClasses[i]!;
+    if (tc.firstTile >= 0 && shifted >= tc.firstTile && shifted < tc.firstTile + tc.numTiles) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Pre-build a color lookup table from texture class definitions.
+ * Returns an array of [r, g, b] colors, one per texture class.
+ */
+function buildTextureClassColorTable(
+  textureClasses: BlendTileTextureClass[],
+): Array<[number, number, number]> {
+  return textureClasses.map((tc) => getTextureClassColor(tc.name));
+}
+
+// ============================================================================
+// TerrainMeshBuilder
+// ============================================================================
+
 export class TerrainMeshBuilder {
   /**
    * Build all terrain chunks from a HeightmapGrid.
-   * Returns an array of TerrainChunk objects.
+   * When blendTileData is provided, vertex colors are determined by the per-cell
+   * texture class from the map's BlendTileData instead of the procedural height gradient.
    */
-  static build(heightmap: HeightmapGrid): TerrainChunk[] {
+  static build(heightmap: HeightmapGrid, blendTileData?: BlendTileColorData): TerrainChunk[] {
     const chunks: TerrainChunk[] = [];
 
     // The heightmap has (width) vertices per row and (height) vertices per col.
@@ -94,7 +207,7 @@ export class TerrainMeshBuilder {
     const cellsX = heightmap.width - 1;
     const cellsZ = heightmap.height - 1;
 
-    // Find height range for color normalization
+    // Find height range for color normalization (fallback)
     let minH = Infinity;
     let maxH = -Infinity;
     for (let i = 0; i < heightmap.worldHeights.length; i++) {
@@ -103,6 +216,11 @@ export class TerrainMeshBuilder {
       if (h > maxH) maxH = h;
     }
     const heightRange = maxH - minH || 1;
+
+    // Pre-build texture class color table if blend data is available
+    const colorTable = blendTileData
+      ? buildTextureClassColorTable(blendTileData.textureClasses)
+      : null;
 
     for (let startRow = 0; startRow < cellsZ; startRow += CHUNK_SIZE) {
       for (let startCol = 0; startCol < cellsX; startCol += CHUNK_SIZE) {
@@ -117,6 +235,8 @@ export class TerrainMeshBuilder {
           cellsTall,
           minH,
           heightRange,
+          blendTileData ?? null,
+          colorTable,
         );
 
         chunks.push({
@@ -143,6 +263,8 @@ export class TerrainMeshBuilder {
     cellsTall: number,
     minHeight: number,
     heightRange: number,
+    blendTileData: BlendTileColorData | null = null,
+    colorTable: Array<[number, number, number]> | null = null,
   ): THREE.BufferGeometry {
     const vertsWide = cellsWide + 1;
     const vertsTall = cellsTall + 1;
@@ -181,10 +303,39 @@ export class TerrainMeshBuilder {
         uvs[vi * 2] = globalCol / (heightmap.width - 1);
         uvs[vi * 2 + 1] = globalRow / (heightmap.height - 1);
 
-        // Vertex color — height-based gradient blended with slope rock color
-        const normalizedHeight = (worldY - minHeight) / heightRange;
-        const heightColor = getHeightColor(normalizedHeight);
-        const [r, g, b] = blendSlopeColor(heightColor, ny);
+        // Vertex color — use blend tile texture class if available, else height gradient
+        let r: number, g: number, b: number;
+
+        if (blendTileData && colorTable) {
+          // Look up the cell's tile index. Each vertex sits at the corner of up to 4 cells.
+          // Use the cell to the upper-left of the vertex (clamped to valid range).
+          const cellCol = Math.min(globalCol, blendTileData.mapWidth - 2);
+          const cellRow = Math.min(globalRow, Math.floor(blendTileData.tileIndices.length / blendTileData.mapWidth) - 1);
+          const cellNdx = cellRow * blendTileData.mapWidth + cellCol;
+          const tileNdx = blendTileData.tileIndices[cellNdx] ?? 0;
+          const classIdx = resolveTextureClassIndex(tileNdx, blendTileData.textureClasses);
+
+          if (classIdx >= 0 && classIdx < colorTable.length) {
+            const baseColor = colorTable[classIdx]!;
+            // Apply subtle height variation to add depth (±10% brightness)
+            const normalizedHeight = (worldY - minHeight) / heightRange;
+            const heightBias = 0.9 + normalizedHeight * 0.2;
+            r = Math.min(1.0, baseColor[0] * heightBias);
+            g = Math.min(1.0, baseColor[1] * heightBias);
+            b = Math.min(1.0, baseColor[2] * heightBias);
+          } else {
+            // Fallback: height gradient for cells with unresolved texture class
+            const normalizedHeight = (worldY - minHeight) / heightRange;
+            const heightColor = getHeightColor(normalizedHeight);
+            [r, g, b] = blendSlopeColor(heightColor, ny);
+          }
+        } else {
+          // No blend tile data — use procedural height-based gradient
+          const normalizedHeight = (worldY - minHeight) / heightRange;
+          const heightColor = getHeightColor(normalizedHeight);
+          [r, g, b] = blendSlopeColor(heightColor, ny);
+        }
+
         colors[vi * 3] = r;
         colors[vi * 3 + 1] = g;
         colors[vi * 3 + 2] = b;

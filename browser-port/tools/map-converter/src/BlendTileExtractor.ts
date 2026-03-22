@@ -46,6 +46,8 @@ export interface BlendTileInfo {
   numBlendedTiles: number;
   /** Texture classes used by the terrain. */
   textureClasses: TextureClass[];
+  /** Per-cell tile index array (Int16, size = tileCount). Maps each cell to a source tile. */
+  tileIndices: Int16Array;
   /** Optional packed cliff-state bitset (v7+). */
   cliffStateData: Uint8Array | null;
   /** Bytes per row in `cliffStateData`. */
@@ -65,10 +67,10 @@ export class BlendTileExtractor {
   ): BlendTileInfo {
     const size = reader.readInt32();
 
-    // Skip tile index arrays (each entry is int16 = 2 bytes)
-    // tileIndices
-    reader.skip(size * 2);
-    // blendTileIndices
+    // Read tile index array (each entry is int16 = 2 bytes)
+    // tileIndices maps each cell to a source tile index
+    const tileIndices = reader.readInt16Array(size);
+    // blendTileIndices — skip (used for alpha blending, not needed for base texture class)
     reader.skip(size * 2);
 
     // v6+ extra blend tile indices
@@ -136,6 +138,7 @@ export class BlendTileExtractor {
       numBitmapTiles,
       numBlendedTiles,
       textureClasses,
+      tileIndices,
       cliffStateData,
       cliffStateStride,
     };

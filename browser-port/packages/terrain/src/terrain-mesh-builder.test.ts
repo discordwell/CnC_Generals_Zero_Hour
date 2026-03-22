@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { HeightmapGrid } from './heightmap.js';
-import { TerrainMeshBuilder } from './terrain-mesh-builder.js';
+import { TerrainMeshBuilder, getTextureClassColor } from './terrain-mesh-builder.js';
+import type { BlendTileColorData } from './terrain-mesh-builder.js';
 import { MAP_XY_FACTOR, CHUNK_SIZE } from './types.js';
 
 // Helper: create a flat 10×10 heightmap (100 vertices, 9×9 cells)
@@ -161,6 +162,122 @@ describe('TerrainMeshBuilder', () => {
       expect(positions).toContainEqual([CHUNK_SIZE, 0]);
       expect(positions).toContainEqual([0, CHUNK_SIZE]);
       expect(positions).toContainEqual([CHUNK_SIZE, CHUNK_SIZE]);
+    });
+  });
+
+  describe('getTextureClassColor', () => {
+    it('returns sand color for SandType3', () => {
+      const [r, g, b] = getTextureClassColor('SandType3');
+      // Sand should be warm tan
+      expect(r).toBeGreaterThan(0.6);
+      expect(g).toBeGreaterThan(0.5);
+      expect(b).toBeGreaterThan(0.3);
+    });
+
+    it('returns green for GrassMediumType35', () => {
+      const [r, g, b] = getTextureClassColor('GrassMediumType35');
+      // Grass should have more green than red
+      expect(g).toBeGreaterThan(r);
+    });
+
+    it('returns gray for CliffLargeType10', () => {
+      const [r, g, b] = getTextureClassColor('CliffLargeType10');
+      // Cliff/rock — neutral gray-brown
+      expect(r).toBeGreaterThan(0.4);
+      expect(g).toBeGreaterThan(0.4);
+      expect(b).toBeGreaterThan(0.3);
+    });
+
+    it('returns dark gray for ConcreteType3', () => {
+      const [r, g, b] = getTextureClassColor('ConcreteType3');
+      // Concrete — dark neutral
+      expect(r).toBeLessThan(0.5);
+      expect(g).toBeLessThan(0.5);
+    });
+
+    it('returns grassy color for SandLargeType4Grassy', () => {
+      const [r, g, b] = getTextureClassColor('SandLargeType4Grassy');
+      // Grassy variants should have noticeable green
+      expect(g).toBeGreaterThan(0.5);
+    });
+
+    it('returns default for unknown texture name', () => {
+      const [r, g, b] = getTextureClassColor('UnknownWeirdTexture');
+      expect(r).toBeGreaterThan(0);
+      expect(g).toBeGreaterThan(0);
+      expect(b).toBeGreaterThan(0);
+    });
+  });
+
+  describe('blend tile coloring', () => {
+    it('uses texture class colors when blend tile data is provided', () => {
+      const hm = makeFlat10x10(128);
+      // Create blend tile data: 10×10 grid, all cells mapped to tile index 0
+      // Tile index 0 >> 2 = 0, which falls in the first texture class (firstTile=0, numTiles=1)
+      const tileIndices = new Int16Array(100).fill(0); // all map to tile 0
+      const blendTileData: BlendTileColorData = {
+        tileIndices,
+        textureClasses: [
+          { name: 'GrassMediumType1', firstTile: 0, numTiles: 1 },
+        ],
+        mapWidth: 10,
+      };
+
+      const chunks = TerrainMeshBuilder.build(hm, blendTileData);
+      const colorAttr = chunks[0]!.geometry.getAttribute('color');
+
+      // All vertices should get the grass color (green-ish)
+      // Check that green > red for a grass texture
+      const r0 = colorAttr.getX(0);
+      const g0 = colorAttr.getY(0);
+      expect(g0).toBeGreaterThan(r0);
+    });
+
+    it('assigns different colors for different texture classes', () => {
+      const hm = makeFlat10x10(128);
+      // Create two texture classes: left half is sand, right half is grass
+      // Tile indices: left cells get tile 0 (sand class), right cells get tile 4 (grass class)
+      const tileIndices = new Int16Array(100);
+      for (let row = 0; row < 10; row++) {
+        for (let col = 0; col < 10; col++) {
+          // tile index 0 >> 2 = 0 -> sand (firstTile=0), tile index 4 >> 2 = 1 -> grass (firstTile=1)
+          tileIndices[row * 10 + col] = col < 5 ? 0 : 4;
+        }
+      }
+      const blendTileData: BlendTileColorData = {
+        tileIndices,
+        textureClasses: [
+          { name: 'SandType3', firstTile: 0, numTiles: 1 },
+          { name: 'GrassMediumType1', firstTile: 1, numTiles: 1 },
+        ],
+        mapWidth: 10,
+      };
+
+      const chunks = TerrainMeshBuilder.build(hm, blendTileData);
+      const colorAttr = chunks[0]!.geometry.getAttribute('color');
+
+      // Compare vertex at col=0 (sand) vs col=9 (grass)
+      const sandR = colorAttr.getX(0);
+      const sandG = colorAttr.getY(0);
+      const grassR = colorAttr.getX(9);
+      const grassG = colorAttr.getY(9);
+
+      // Sand should have higher R relative to G than grass
+      expect(sandR / sandG).toBeGreaterThan(grassR / grassG);
+    });
+
+    it('falls back to height gradient without blend tile data', () => {
+      const hm = makeFlat10x10(128);
+      const chunksWithout = TerrainMeshBuilder.build(hm);
+      const chunksWithEmpty = TerrainMeshBuilder.build(hm, undefined);
+
+      const colorWithout = chunksWithout[0]!.geometry.getAttribute('color');
+      const colorEmpty = chunksWithEmpty[0]!.geometry.getAttribute('color');
+
+      // Without blend data, both should produce identical colors
+      expect(colorWithout.getX(0)).toBeCloseTo(colorEmpty.getX(0));
+      expect(colorWithout.getY(0)).toBeCloseTo(colorEmpty.getY(0));
+      expect(colorWithout.getZ(0)).toBeCloseTo(colorEmpty.getZ(0));
     });
   });
 });

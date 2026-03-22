@@ -14,6 +14,7 @@ import type { MapObject } from './MapObjectExtractor.js';
 import { WaypointExtractor } from './WaypointExtractor.js';
 import type { PolygonTrigger, WaypointLink, WaypointNode } from './WaypointExtractor.js';
 import { BlendTileExtractor } from './BlendTileExtractor.js';
+import type { TextureClass } from './BlendTileExtractor.js';
 import { SidesListExtractor } from './SidesListExtractor.js';
 import type { MapSidesListJSON } from './SidesListExtractor.js';
 
@@ -34,6 +35,10 @@ export interface ParsedMap {
   blendTileCount: number;
   /** Texture class names used by the terrain. */
   textureClasses: string[];
+  /** Full texture class definitions (with firstTile/numTiles for tile-to-class resolution). */
+  textureClassDefs: TextureClass[];
+  /** Per-cell tile index array mapping each cell to a source tile index. */
+  tileIndices: Int16Array | null;
   /** Optional packed cliff-state bits from BlendTileData (v7+). */
   cliffStateData: Uint8Array | null;
   /** Bytes per row for `cliffStateData`. */
@@ -298,6 +303,8 @@ export class MapParser {
     const waypointLinks: WaypointLink[] = [];
     let blendTileCount = 0;
     const textureClasses: string[] = [];
+    const textureClassDefs: TextureClass[] = [];
+    let tileIndices: Int16Array | null = null;
     let cliffStateData: Uint8Array | null = null;
     let cliffStateStride = 0;
     let sidesList: MapSidesListJSON | undefined;
@@ -330,7 +337,9 @@ export class MapParser {
           blendTileCount = blendInfo.tileCount;
           for (const tc of blendInfo.textureClasses) {
             textureClasses.push(tc.name);
+            textureClassDefs.push(tc);
           }
+          tileIndices = blendInfo.tileIndices;
           cliffStateData = blendInfo.cliffStateData;
           cliffStateStride = blendInfo.cliffStateStride;
           break;
@@ -388,6 +397,8 @@ export class MapParser {
       },
       blendTileCount,
       textureClasses,
+      textureClassDefs,
+      tileIndices,
       cliffStateData,
       cliffStateStride,
       sidesList,
@@ -422,4 +433,4 @@ export class MapParser {
   }
 }
 
-export type { HeightmapData, MapObject, PolygonTrigger, WaypointNode, WaypointLink, ChunkTableEntry };
+export type { HeightmapData, MapObject, PolygonTrigger, WaypointNode, WaypointLink, ChunkTableEntry, TextureClass };
