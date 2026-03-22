@@ -1211,6 +1211,27 @@ async function startGame(
     document.getElementById('ui-overlay')!.appendChild(rankHud);
   }
 
+  // Speed control HUD indicator (top-left) — reuse on restart.
+  let speedHud = document.getElementById('speed-hud') as HTMLDivElement | null;
+  if (!speedHud) {
+    speedHud = document.createElement('div');
+    speedHud.id = 'speed-hud';
+    Object.assign(speedHud.style, {
+      position: 'absolute',
+      top: '10px',
+      left: '10px',
+      color: '#ffcc00',
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      fontSize: '16px',
+      fontWeight: '700',
+      textShadow: '0 0 6px rgba(0,0,0,0.9)',
+      zIndex: '200',
+      pointerEvents: 'none',
+      display: 'none',
+    });
+    document.getElementById('ui-overlay')!.appendChild(speedHud);
+  }
+
   // Superweapon countdown HUD (top-center) — reuse on restart.
   let superweaponHud = document.getElementById('superweapon-hud') as HTMLDivElement | null;
   if (!superweaponHud) {
@@ -2271,6 +2292,68 @@ async function startGame(
           rtsCamera.lookAt(sumX / count, sumZ / count);
         }
       }
+    }
+  });
+
+  // ========================================================================
+  // Game speed control (keyboard shortcuts)
+  // ========================================================================
+
+  const SPEED_STEPS = [0.5, 1, 2, 4];
+
+  const updateSpeedHud = (): void => {
+    if (gameLoop.paused) {
+      speedHud!.textContent = '\u23F8 PAUSED';
+      speedHud!.style.display = 'block';
+      speedHud!.style.fontSize = '22px';
+      speedHud!.style.color = '#ff4444';
+    } else if (gameLoop.speed !== 1) {
+      speedHud!.textContent = `\u25B6 ${gameLoop.speed}x`;
+      speedHud!.style.display = 'block';
+      speedHud!.style.fontSize = '16px';
+      speedHud!.style.color = gameLoop.speed > 1 ? '#ffcc00' : '#66ccff';
+    } else {
+      speedHud!.style.display = 'none';
+    }
+  };
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'p' || e.key === 'P') {
+      // Toggle pause
+      e.preventDefault();
+      gameLoop.paused = !gameLoop.paused;
+      updateSpeedHud();
+      return;
+    }
+    if (e.key === '+' || e.key === '=') {
+      // Increase speed
+      e.preventDefault();
+      if (gameLoop.paused) return;
+      const idx = SPEED_STEPS.indexOf(gameLoop.speed);
+      if (idx >= 0 && idx < SPEED_STEPS.length - 1) {
+        gameLoop.speed = SPEED_STEPS[idx + 1]!;
+      }
+      updateSpeedHud();
+      return;
+    }
+    if (e.key === '-') {
+      // Decrease speed
+      e.preventDefault();
+      if (gameLoop.paused) return;
+      const idx = SPEED_STEPS.indexOf(gameLoop.speed);
+      if (idx > 0) {
+        gameLoop.speed = SPEED_STEPS[idx - 1]!;
+      }
+      updateSpeedHud();
+      return;
+    }
+    if (e.key === 'Backspace') {
+      // Reset to 1x
+      e.preventDefault();
+      gameLoop.speed = 1;
+      gameLoop.paused = false;
+      updateSpeedHud();
+      return;
     }
   });
 

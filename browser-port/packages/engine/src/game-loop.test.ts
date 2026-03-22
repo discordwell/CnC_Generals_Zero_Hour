@@ -127,4 +127,88 @@ describe('GameLoop', () => {
     expect(loop.getFrameNumber()).toBe(1);
     expect(renderCount).toBeGreaterThan(0);
   });
+
+  it('runs simulation faster at 2x speed', () => {
+    const scheduler = new ManualScheduler();
+    // 10 FPS = 100ms per simulation step
+    const loop = new GameLoop(10, scheduler);
+
+    const simulationFrames: number[] = [];
+
+    loop.start({
+      onSimulationStep: (frameNumber) => {
+        simulationFrames.push(frameNumber);
+      },
+      onRender: () => {},
+    });
+
+    // At 1x speed, 100ms elapsed = 1 simulation step
+    scheduler.step(100);
+    expect(simulationFrames).toEqual([0]);
+
+    // Set 2x speed — 100ms wall time becomes 200ms effective = 2 steps
+    loop.speed = 2;
+    scheduler.step(100);
+    expect(simulationFrames).toEqual([0, 1, 2]);
+
+    loop.stop();
+  });
+
+  it('runs simulation slower at 0.5x speed', () => {
+    const scheduler = new ManualScheduler();
+    // 10 FPS = 100ms per simulation step
+    const loop = new GameLoop(10, scheduler);
+
+    const simulationFrames: number[] = [];
+
+    loop.start({
+      onSimulationStep: (frameNumber) => {
+        simulationFrames.push(frameNumber);
+      },
+      onRender: () => {},
+    });
+
+    loop.speed = 0.5;
+
+    // At 0.5x speed, 100ms wall time becomes 50ms effective = 0 steps (need 100ms)
+    scheduler.step(100);
+    expect(simulationFrames).toEqual([]);
+
+    // Another 100ms wall time = 50ms more effective (total 100ms) = 1 step
+    scheduler.step(100);
+    expect(simulationFrames).toEqual([0]);
+
+    loop.stop();
+  });
+
+  it('runs simulation at 4x speed', () => {
+    const scheduler = new ManualScheduler();
+    // 10 FPS = 100ms per simulation step
+    const loop = new GameLoop(10, scheduler);
+
+    const simulationFrames: number[] = [];
+
+    loop.start({
+      onSimulationStep: (frameNumber) => {
+        simulationFrames.push(frameNumber);
+      },
+      onRender: () => {},
+    });
+
+    loop.speed = 4;
+
+    // At 4x speed, 100ms wall time becomes 400ms effective = 4 steps
+    scheduler.step(100);
+    expect(simulationFrames).toEqual([0, 1, 2, 3]);
+
+    loop.stop();
+  });
+
+  it('defaults speed to 1 and paused to false', () => {
+    const scheduler = new ManualScheduler();
+    const loop = new GameLoop(30, scheduler);
+
+    expect(loop.speed).toBe(1);
+    expect(loop.paused).toBe(false);
+  });
 });
