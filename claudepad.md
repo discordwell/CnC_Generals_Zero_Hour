@@ -42,8 +42,9 @@
 - **Round 9**: 10 areas audited, 36 tests. Verified: splash damage binary step (not linear), building footprint, garrison detector filtering, score counters, PreferredAgainstKindOf weapon selection, continuous fire decay state machine, EMP disable cascade. Gaps: stealth friendly opacity (visual-only), order enemies on reveal, hint detectable (visual-only in C++ too).
 - **Round 10**: 6 areas audited, 33 tests. ALL correct: DumbProjectile bezier arcs, TensileFormation spring physics, RepairDock vehicle healing, SpecialAbilityUpdate state machine, SlowDeath all 3 variants, InitialHealth vs MaxHealth.
 - **Gap Fix Sprint**: 19 fixes applied total (10 new): AutoHeal SingleBurst/KindOf/ForbiddenKindOf, overcharge disabled guard, crate airborne check, FireOCL shot counting, per-weapon stealth slots, order enemies on reveal, topple crush 2D grid, production time change %, reload time sharing.
-- **Grand Total**: 110 C++ divergence areas audited, 364 parity tests, 19 fixes applied, 89 areas verified correct (81%), remaining gaps are edge cases (stealth disguise, spy vision global, experience sink, handicap, DOESNT_AFFECT_SIMILAR ancestry, stealth friendly opacity, hint detectable visual).
-- 2083 game-logic tests passing across 79 test files.
+- **Final Gap Sprint**: Closed all 7 remaining gaps: experience sink redirect, DOESNT_AFFECT_SIMILAR ancestry via areEquivalentTemplateNames, spy vision global mode (activateGlobalSpyVision), handicap build time multiplier, stealth friendly opacity in renderable state, HintDetectableConditions parsed.
+- **Grand Total**: 110 C++ divergence areas audited, ~380 parity tests, 26 fixes applied, 103 areas at full parity (94%), 7 areas have visual/niche gaps only (stealth disguise model morphing).
+- 2090 game-logic tests passing across 80 test files. ZERO known gameplay-affecting parity gaps remain.
 
 ## 2026-03-19T18:15Z — Wet Test Parity Sprint: 6 Fixes, Bundle Data Recovery
 - **Debug overlay**: Removed per-frame dump of all 784 entity IDs. Now shows only unresolved count. (commit f2026f6c)
