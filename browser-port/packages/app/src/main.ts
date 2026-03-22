@@ -1724,8 +1724,35 @@ async function startGame(
           if (cellVis !== 2) continue; // Not CELL_CLEAR — skip.
         }
 
+        // Size the blip by entity category: buildings largest, vehicles mid, infantry smallest.
+        let blipSize: number;
+        switch (entity.category) {
+          case 'building':
+            blipSize = 6;
+            break;
+          case 'vehicle':
+            blipSize = 4;
+            break;
+          case 'infantry':
+            blipSize = 2;
+            break;
+          case 'air':
+            blipSize = 3;
+            break;
+          default:
+            blipSize = 3;
+            break;
+        }
+        const half = Math.floor(blipSize / 2);
         minimapCtx.fillStyle = isAlly ? '#00cc00' : '#cc3333';
-        minimapCtx.fillRect(px - 1, py - 1, 3, 3);
+        minimapCtx.fillRect(px - half, py - half, blipSize, blipSize);
+
+        // Draw a dark outline around buildings for extra visibility.
+        if (entity.category === 'building') {
+          minimapCtx.strokeStyle = isAlly ? '#005500' : '#660000';
+          minimapCtx.lineWidth = 1;
+          minimapCtx.strokeRect(px - half, py - half, blipSize, blipSize);
+        }
       }
     }
 
