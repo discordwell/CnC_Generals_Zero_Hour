@@ -824,10 +824,27 @@ export function findGuardTarget(self: GL,
 export function queueWeaponDamageEvent(self: GL, attacker: MapEntity, target: MapEntity, weapon: AttackWeaponProfile): void {
   // Source parity: Object::getLastShotFiredFrame() — track last normal weapon fire for ExclusiveWeaponDelay.
   attacker.lastShotFiredFrame = self.frameCounter;
-  const sourceX = attacker.x;
-  const sourceZ = attacker.z;
+  let sourceX = attacker.x;
+  let sourceZ = attacker.z;
   const targetX = target.x;
   const targetZ = target.z;
+
+  // Source parity: GarrisonContain.cpp — trackTargets() fires from FIREPOINT bones at the
+  // building edge. Without the full bone system, approximate by offsetting the fire origin
+  // toward the target by a fraction of the building's geometry radius.
+  if (attacker.garrisonContainerId !== null) {
+    const building = self.spawnedEntities.get(attacker.garrisonContainerId);
+    if (building && !building.destroyed) {
+      const dx = targetX - building.x;
+      const dz = targetZ - building.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0) {
+        const offset = building.geometryMajorRadius * 0.8;
+        sourceX = building.x + (dx / dist) * offset;
+        sourceZ = building.z + (dz / dist) * offset;
+      }
+    }
+  }
 
   let aimX = targetX;
   let aimZ = targetZ;
@@ -1113,10 +1130,16 @@ export function queueWeaponDamageEvent(self: GL, attacker: MapEntity, target: Ma
   };
 
   // Emit muzzle flash visual event (includes target endpoint for beam/tracer rendering).
+  // When the fire origin is offset (e.g., garrisoned unit), pass the source override
+  // so the muzzle flash renders at the building edge rather than the attacker's center.
+  const sourceOverride = (sourceX !== attacker.x || sourceZ !== attacker.z)
+    ? { x: sourceX, y: attacker.y + 1.5, z: sourceZ }
+    : undefined;
   self.emitWeaponFiredVisualEvent(
     attacker,
     weapon,
     { x: impactX, y: impactY, z: impactZ },
+    sourceOverride,
   );
   if (delivery === 'PROJECTILE') {
     self.registerActiveWeaponProjectileState(

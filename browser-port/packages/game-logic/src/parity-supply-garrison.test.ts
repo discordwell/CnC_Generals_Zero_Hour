@@ -227,13 +227,15 @@ describe('garrison fire position — center vs FIREPOINT bones', () => {
    *
    * TS behavior: Garrisoned units are placed at the building's center position
    * (enterGarrisonBuilding sets source.x = building.x, source.z = building.z).
-   * Range checks use this center position, not edge fire points. This means a
-   * target that is barely within weapon range from the building edge but outside
-   * range from center will be unreachable in TS but reachable in C++.
+   * Range checks use this center position, not edge fire points. However, the
+   * fire origin (projectile/bullet source position) is offset toward the target
+   * by 80% of the building's geometry radius (see queueWeaponDamageEvent in
+   * combat-targeting.ts). This makes shots visually originate from the building
+   * edge facing the enemy, approximating the C++ FIREPOINT bone behavior.
    *
-   * Parity gap: TS fires from building center; C++ fires from FIREPOINT bones
-   * at the building edge. This is a known simplification — implementing per-bone
-   * fire positions requires the W3D model bone system.
+   * Remaining parity gap: Range checks still use center position. A target
+   * beyond center-based weapon range but within edge-based range will be
+   * unreachable in TS but reachable in C++.
    */
 
   it('garrisoned infantry fire from building center position (not edge fire points)', () => {
@@ -293,9 +295,9 @@ describe('garrison fire position — center vs FIREPOINT bones', () => {
     const buildingState = logic.getEntityState(1);
     expect(buildingState!.modelConditionFlags ?? []).toContain('LOADED');
 
-    // The garrisoned ranger's position should now be at the building center.
-    // Source parity gap: In C++, the ranger would be at a FIREPOINT bone position
-    // at the building edge. In TS, the ranger is at building center.
+    // The garrisoned ranger's entity position is at the building center.
+    // Note: the fire origin is offset toward the target at shot time (see
+    // queueWeaponDamageEvent), but the entity position remains at center.
     const rangerState = logic.getEntityState(2);
     expect(rangerState).toBeDefined();
     // Ranger position should match building position (center-based firing).
