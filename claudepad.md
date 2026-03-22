@@ -41,8 +41,9 @@
 - **Round 8**: 10 areas audited, 30 tests. ALL correct: XP last-hitter, auto-target closest, upgrade cost timing, construction health ramp, rally pathfinding, terrain snap, auto-reload idle, victory grace, missile lock proximity, spawn shroud.
 - **Round 9**: 10 areas audited, 36 tests. Verified: splash damage binary step (not linear), building footprint, garrison detector filtering, score counters, PreferredAgainstKindOf weapon selection, continuous fire decay state machine, EMP disable cascade. Gaps: stealth friendly opacity (visual-only), order enemies on reveal, hint detectable (visual-only in C++ too).
 - **Round 10**: 6 areas audited, 33 tests. ALL correct: DumbProjectile bezier arcs, TensileFormation spring physics, RepairDock vehicle healing, SpecialAbilityUpdate state machine, SlowDeath all 3 variants, InitialHealth vs MaxHealth.
-- **Grand Total**: 110 C++ divergence areas audited, 364 parity tests, 9 fixes applied, 89 areas verified correct (81%), 21 gaps documented.
-- 2074 game-logic tests passing across 79 test files.
+- **Gap Fix Sprint**: 19 fixes applied total (10 new): AutoHeal SingleBurst/KindOf/ForbiddenKindOf, overcharge disabled guard, crate airborne check, FireOCL shot counting, per-weapon stealth slots, order enemies on reveal, topple crush 2D grid, production time change %, reload time sharing.
+- **Grand Total**: 110 C++ divergence areas audited, 364 parity tests, 19 fixes applied, 89 areas verified correct (81%), remaining gaps are edge cases (stealth disguise, spy vision global, experience sink, handicap, DOESNT_AFFECT_SIMILAR ancestry, stealth friendly opacity, hint detectable visual).
+- 2083 game-logic tests passing across 79 test files.
 
 ## 2026-03-19T18:15Z — Wet Test Parity Sprint: 6 Fixes, Bundle Data Recovery
 - **Debug overlay**: Removed per-frame dump of all 784 entity IDs. Now shows only unresolved count. (commit f2026f6c)
