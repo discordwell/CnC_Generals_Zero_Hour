@@ -1559,6 +1559,8 @@ async function startGame(
 
     if (state.attackTargetEntityId !== null) {
       lines.push('Status: Attacking');
+    } else if (state.guardState !== 'NONE') {
+      lines.push('Status: Guarding');
     } else if (state.animationState === 'MOVE') {
       lines.push('Status: Moving');
     } else {
@@ -1714,6 +1716,8 @@ async function startGame(
     if (e.button === 0) {
       // Left-click: pan camera to position.
       rtsCamera.lookAt(worldX, worldZ);
+      // Spawn a beacon ping at the clicked minimap position.
+      minimapPings.push({ x: mx * MINIMAP_SIZE, y: my * MINIMAP_SIZE, startTime: performance.now() });
     } else if (e.button === 2) {
       // Right-click: move selected units to position.
       const selIds = gameLogic.getLocalPlayerSelectionIds();
@@ -1858,6 +1862,25 @@ async function startGame(
     }
     minimapCtx.closePath();
     minimapCtx.stroke();
+
+    // Draw minimap beacon pings — expanding circles that fade out over 1 second.
+    const now = performance.now();
+    for (let i = minimapPings.length - 1; i >= 0; i--) {
+      const ping = minimapPings[i]!;
+      const elapsed = now - ping.startTime;
+      if (elapsed >= MINIMAP_PING_DURATION_MS) {
+        minimapPings.splice(i, 1);
+        continue;
+      }
+      const t = elapsed / MINIMAP_PING_DURATION_MS;
+      const radius = MINIMAP_PING_RADIUS_MIN + t * (MINIMAP_PING_RADIUS_MAX - MINIMAP_PING_RADIUS_MIN);
+      const opacity = MINIMAP_PING_INITIAL_OPACITY * (1 - t);
+      minimapCtx.strokeStyle = `rgba(255, 255, 255, ${opacity.toFixed(3)})`;
+      minimapCtx.lineWidth = 1.5;
+      minimapCtx.beginPath();
+      minimapCtx.arc(ping.x, ping.y, radius, 0, Math.PI * 2);
+      minimapCtx.stroke();
+    }
   };
 
   let frameCount = 0;

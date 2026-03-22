@@ -77,6 +77,8 @@ export interface RenderableEntityState {
   selectionCircleRadius?: number;
   /** True when this entity belongs to the local player's side. */
   isOwnedByLocalPlayer?: boolean;
+  /** True when the entity is in guard mode (guardState !== 'NONE'). */
+  isGuarding?: boolean;
   /** Source parity: ProjectileStreamUpdate — positions of active projectiles in stream. */
   streamPoints?: { x: number; y: number; z: number }[];
   /** Source parity: RadiusDecalUpdate — ground radius decal states for targeting visualization. */

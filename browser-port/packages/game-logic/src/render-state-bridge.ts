@@ -659,6 +659,7 @@ export function makeRenderableEntityState(self: GL, entity: MapEntity, localSide
       statusEffects: self.resolveEntityStatusEffects(entity),
       selectionCircleRadius: entity.geometryMajorRadius > 0 ? entity.geometryMajorRadius : undefined,
       isOwnedByLocalPlayer: entity.side ? self.normalizeSide(entity.side) === (localSide ?? self.resolveLocalPlayerSide()) : undefined,
+      isGuarding: entity.guardState !== 'NONE',
       streamPoints: entity.projectileStreamState
         ? self.getStreamPoints(entity.id)
         : undefined,

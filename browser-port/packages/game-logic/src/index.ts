@@ -8854,6 +8854,7 @@ export class GameLogicSubsystem implements Subsystem {
     moving: boolean;
     movePath: ReadonlyArray<{ x: number; z: number }>;
     pathIndex: number;
+    guardState: string;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -8904,6 +8905,7 @@ export class GameLogicSubsystem implements Subsystem {
       moving: entity.moving,
       movePath: entity.movePath,
       pathIndex: entity.pathIndex,
+      guardState: entity.guardState,
     };
   }
 

@@ -1312,4 +1312,55 @@ describe('BoneFXUpdate', () => {
     // After damage transition, the body state should be DAMAGED (1)
     expect(entity.boneFXState!.currentBodyState).toBe(1);
   });
+
+  it('isGuarding is true when entity has active guard state', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GuardUnit', 'America', ['SELECTABLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('GuardUnit', 50, 50)]), makeRegistry(bundle), makeHeightmap());
+    logic.update(0);
+
+    // Initially not guarding.
+    const states = logic.getRenderableEntityStates();
+    const entityState = states[0]!;
+    expect(entityState.isGuarding).toBe(false);
+
+    // Manually set guard state and verify.
+    const internalEntity = [...(logic as any).spawnedEntities.values()][0]!;
+    internalEntity.guardState = 'GUARDING_POSITION';
+    const updatedStates = logic.getRenderableEntityStates();
+    const updatedState = updatedStates[0]!;
+    expect(updatedState.isGuarding).toBe(true);
+  });
+
+  it('getEntityState exposes guardState field', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('GuardUnit2', 'America', ['SELECTABLE'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+        ]),
+      ],
+    });
+    const logic = new GameLogicSubsystem(new THREE.Scene());
+    logic.loadMapObjects(makeMap([makeMapObject('GuardUnit2', 50, 50)]), makeRegistry(bundle), makeHeightmap());
+    logic.update(0);
+
+    const entityId = [...(logic as any).spawnedEntities.keys()][0]!;
+
+    // Initially guard state is NONE.
+    const state = logic.getEntityState(entityId);
+    expect(state).toBeTruthy();
+    expect(state!.guardState).toBe('NONE');
+
+    // Manually set guard state.
+    const internalEntity = (logic as any).spawnedEntities.get(entityId);
+    internalEntity.guardState = 'GUARDING_POSITION';
+    const updatedState = logic.getEntityState(entityId);
+    expect(updatedState!.guardState).toBe('GUARDING_POSITION');
+  });
 });

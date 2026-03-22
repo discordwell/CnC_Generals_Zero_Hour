@@ -2169,4 +2169,68 @@ describe('condition-state model fallback resolution', () => {
     expect(emissiveHex).not.toBe(0xff0000);
     expect(intensity).not.toBe(0.5);
   });
+
+  // ---------------------------------------------------------------------------
+  // Guard mode selection ring tint
+  // ---------------------------------------------------------------------------
+
+  it('selection ring uses blue tint for owned units in guard mode', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 90, isSelected: true, isOwnedByLocalPlayer: true, isGuarding: true })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(90)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    expect(ring).toBeTruthy();
+    expect(ring.visible).toBe(true);
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    expect(mat.color.getHex()).toBe(0x3399ff);
+  });
+
+  it('selection ring reverts to green when guard mode ends', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    // Start in guard mode.
+    manager.sync(
+      [makeMeshState({ id: 91, isSelected: true, isOwnedByLocalPlayer: true, isGuarding: true })],
+      1 / 30,
+    );
+    const root = manager.getVisualRoot(91)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    expect(mat.color.getHex()).toBe(0x3399ff);
+
+    // Exit guard mode.
+    manager.sync(
+      [makeMeshState({ id: 91, isSelected: true, isOwnedByLocalPlayer: true, isGuarding: false })],
+      1 / 30,
+    );
+    expect(mat.color.getHex()).toBe(0x00ff00);
+  });
+
+  it('enemy selection ring stays red regardless of guard mode', () => {
+    const scene = new THREE.Scene();
+    const manager = new ObjectVisualManager(scene, null, {
+      modelLoader: async () => modelWithAnimationClips(),
+    });
+
+    manager.sync(
+      [makeMeshState({ id: 92, isSelected: true, isOwnedByLocalPlayer: false, isGuarding: true })],
+      1 / 30,
+    );
+
+    const root = manager.getVisualRoot(92)!;
+    const ring = root.getObjectByName('selection-ring') as THREE.Mesh;
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    expect(mat.color.getHex()).toBe(0xff3333);
+  });
 });

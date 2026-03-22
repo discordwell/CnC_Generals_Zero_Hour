@@ -83,6 +83,8 @@ export interface RenderableEntityState {
   selectionCircleRadius?: number;
   /** True when this entity belongs to the local player's side. */
   isOwnedByLocalPlayer?: boolean;
+  /** True when the entity is in guard mode (guardState !== 'NONE'). */
+  isGuarding?: boolean;
 }
 
 export interface LoadedModelAsset {
@@ -1501,6 +1503,8 @@ export class ObjectVisualManager {
 
   /** Selection circle color: own units. Source parity: green circle in retail. */
   private static readonly SEL_COLOR_OWN = 0x00ff00;
+  /** Selection circle color: own units in guard mode — blue-tinted green. */
+  private static readonly SEL_COLOR_OWN_GUARDING = 0x3399ff;
   /** Selection circle color: enemy/neutral units. Source parity: red circle. */
   private static readonly SEL_COLOR_ENEMY = 0xff3333;
   /** Default radius when INI MajorRadius is not available. */
@@ -1521,10 +1525,11 @@ export class ObjectVisualManager {
       return;
     }
 
-    // Determine desired color from ownership.
+    // Determine desired color from ownership (blue-tinted when guarding).
     const isOwn = state.isOwnedByLocalPlayer ?? false;
+    const isGuarding = state.isGuarding ?? false;
     const desiredColor = isOwn
-      ? ObjectVisualManager.SEL_COLOR_OWN
+      ? (isGuarding ? ObjectVisualManager.SEL_COLOR_OWN_GUARDING : ObjectVisualManager.SEL_COLOR_OWN)
       : ObjectVisualManager.SEL_COLOR_ENEMY;
 
     // Determine desired scale from INI MajorRadius.
