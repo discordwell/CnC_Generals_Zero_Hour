@@ -24,10 +24,10 @@
  *   on each enemy player's objects. setWakeupIfInRange checks vision range and calls
  *   ai->wakeUpAndAttemptToTarget(), causing idle enemies to auto-acquire the revealed unit.
  *
- *   TS: OrderIdleEnemiesToAttackMeUponReveal is parsed from INI as a field but never read
- *   during detection. updateDetection() marks the target DETECTED but does not iterate
- *   enemy units to trigger auto-attack. The gap was previously documented in
- *   parity-disguise-shroud.test.ts; this test provides a focused, isolated verification.
+ *   TS: OrderIdleEnemiesToAttackMeUponReveal is parsed from INI into stealthProfile and
+ *   read during updateDetection(). When a unit is first DETECTED and the flag is true,
+ *   orderIdleEnemiesToAttack() iterates enemy entities and issues attack commands to
+ *   idle armed units within their vision range of the revealed unit.
  */
 
 import * as THREE from 'three';
@@ -267,12 +267,12 @@ describe('Parity: OrderIdleEnemiesToAttackMeUponReveal', () => {
    *   4. setWakeupIfInRange (lines 841-866) checks if the enemy object is within
    *      vision range of the revealed unit, and if so calls ai->wakeUpAndAttemptToTarget().
    *
-   * TS: updateDetection() marks units as DETECTED but does not read
-   * OrderIdleEnemiesToAttackMeUponReveal. No markAsDetected equivalent calls
-   * any idle-enemy wakeup logic. The field exists in INI data but is ignored.
+   * TS: updateDetection() marks units as DETECTED and, when
+   * orderIdleEnemiesToAttackMeUponReveal is true, calls orderIdleEnemiesToAttack()
+   * to iterate enemies and issue attack commands to idle armed units in vision range.
    */
 
-  it('OrderIdleEnemiesToAttackMeUponReveal does not trigger enemy auto-attack on detection', () => {
+  it('OrderIdleEnemiesToAttackMeUponReveal triggers idle enemy auto-attack on detection', () => {
     const bundle = makeBundle({
       objects: [
         // Stealthed unit with OrderIdleEnemiesToAttackMeUponReveal enabled.
@@ -292,7 +292,7 @@ describe('Parity: OrderIdleEnemiesToAttackMeUponReveal', () => {
             DetectionRate: 33,
           }),
         ], { VisionRange: 200 }),
-        // Idle armed enemy — should auto-attack in C++ upon reveal but does not in TS.
+        // Idle armed enemy — should auto-attack upon reveal.
         makeObjectDef('IdleEnemy', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyRifle'] }),
@@ -335,46 +335,22 @@ describe('Parity: OrderIdleEnemiesToAttackMeUponReveal', () => {
     const priv = logic as unknown as {
       spawnedEntities: Map<number, {
         attackTargetEntityId: number | null;
-        aiState: string;
       }>;
     };
     const idleEnemy = priv.spawnedEntities.get(3);
     expect(idleEnemy).not.toBeUndefined();
 
-    // PARITY GAP:
-    // C++ markAsDetected() with OrderIdleEnemiesToAttackMeUponReveal=Yes would
-    // call setWakeupIfInRange on all enemy objects, causing idle enemies within
-    // vision range to auto-target the revealed unit immediately via
-    // ai->wakeUpAndAttemptToTarget().
-    //
-    // TS updateDetection() sets the DETECTED flag but has no equivalent to
-    // markAsDetected's idle-enemy wakeup loop. The idle enemy's attack state
-    // is not modified by the detection system.
-    //
-    // Note: The enemy may eventually acquire the target through the standard
-    // auto-acquire combat AI scan (a separate system from
-    // OrderIdleEnemiesToAttackMeUponReveal). We check the state immediately
-    // after detection to isolate the reveal-triggered ordering behavior.
-    //
-    // If attackTargetEntityId is null, the reveal-triggered auto-attack did NOT fire.
-    // If it is set, it was set by the standard auto-acquire system, not by
-    // OrderIdleEnemiesToAttackMeUponReveal (which is not implemented).
-    const hasTarget = idleEnemy!.attackTargetEntityId !== null;
-
-    // We cannot assert the target is null because auto-acquire may have found it.
-    // Instead, document that the OrderIdleEnemiesToAttackMeUponReveal-specific
-    // wakeup mechanism does not exist.
-    expect(typeof idleEnemy!.attackTargetEntityId).not.toBe('symbol'); // sanity
+    // Source parity: OrderIdleEnemiesToAttackMeUponReveal causes idle enemies
+    // within vision range to auto-target the revealed unit immediately.
+    // The idle enemy (entity 3) is at (53,50), within vision range (200) of the
+    // stealth unit at (50,50). It should now be targeting entity 1.
+    expect(idleEnemy!.attackTargetEntityId).toBe(1);
   });
 
-  it('setWakeupIfInRange equivalent does not exist in TS detection path', () => {
-    // C++ StealthUpdate.cpp:841-866 — setWakeupIfInRange callback:
-    //   1. Gets the enemy object's AI update interface.
-    //   2. Checks if the victim is within the enemy's vision range.
-    //   3. Calls ai->wakeUpAndAttemptToTarget().
-    //
-    // TS: No wakeUpAndAttemptToTarget function exists. The AI state machine
-    // does not have a "wake up" transition triggered by stealth reveal events.
+  it('OrderIdleEnemiesToAttackMeUponReveal: only enemies within vision range are woken', () => {
+    // Source parity: StealthUpdate.cpp:841-866 — setWakeupIfInRange callback
+    // checks the enemy's vision range to determine if the revealed unit is visible.
+    // Only enemies whose vision range covers the revealed unit are ordered to attack.
     const bundle = makeBundle({
       objects: [
         makeObjectDef('StealthUnit', 'GLA', ['INFANTRY'], [
@@ -385,12 +361,12 @@ describe('Parity: OrderIdleEnemiesToAttackMeUponReveal', () => {
             OrderIdleEnemiesToAttackMeUponReveal: 'Yes',
           }),
         ]),
-        // Two idle enemies at different distances — one inside vision range,
-        // one outside. In C++, only the in-range one would be woken.
+        // Near enemy — within vision range (100) of the stealth unit.
         makeObjectDef('NearEnemy', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Rifle'] }),
         ], { VisionRange: 100 }),
+        // Far enemy — outside vision range (50) from the stealth unit at distance ~60.
         makeObjectDef('FarEnemy', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'Rifle'] }),
@@ -418,9 +394,9 @@ describe('Parity: OrderIdleEnemiesToAttackMeUponReveal', () => {
     logic.loadMapObjects(
       makeMap([
         makeMapObject('StealthUnit', 50, 50),
-        // NearEnemy close enough that vision range would cover the stealth unit.
+        // NearEnemy close enough that vision range (100) covers the stealth unit.
         makeMapObject('NearEnemy', 52, 50),
-        // FarEnemy far enough that vision range (50) would NOT reach (50,50) from (110,50).
+        // FarEnemy far enough that vision range (50) does NOT reach (50,50) from (110,50).
         makeMapObject('FarEnemy', 110, 50),
         makeMapObject('Detector', 55, 50),
       ], 128, 128),
@@ -429,39 +405,57 @@ describe('Parity: OrderIdleEnemiesToAttackMeUponReveal', () => {
     );
     setupEnemyRelationships(logic, 'GLA', 'America');
 
-    // Let stealth activate.
-    for (let i = 0; i < 15; i++) logic.update(1 / 30);
+    // Run one frame to trigger initial detection + wakeup.
+    logic.update(1 / 30);
     expect(logic.getEntityState(1)?.statusFlags ?? []).toContain('STEALTHED');
+    expect(logic.getEntityState(1)?.statusFlags ?? []).toContain('DETECTED');
 
-    // Snapshot pre-detection state of both enemies.
     const priv = logic as unknown as {
       spawnedEntities: Map<number, {
         attackTargetEntityId: number | null;
       }>;
     };
-    const nearEnemyBefore = priv.spawnedEntities.get(2)?.attackTargetEntityId;
-    const farEnemyBefore = priv.spawnedEntities.get(3)?.attackTargetEntityId;
 
-    // Run detection.
-    for (let i = 0; i < 15; i++) logic.update(1 / 30);
-
-    // Stealth unit is now detected.
-    expect(logic.getEntityState(1)?.statusFlags ?? []).toContain('DETECTED');
-
-    // PARITY GAP:
-    // C++: markAsDetected would call setWakeupIfInRange on all enemy objects.
-    //   - NearEnemy (vision=100, dist~20): would wake up and auto-target.
-    //   - FarEnemy (vision=50, dist~600): would NOT wake up (out of vision range).
-    //
-    // TS: Neither enemy receives a wakeup call from the detection system.
-    //   - NearEnemy may auto-acquire the target through standard AI scan.
-    //   - FarEnemy should remain idle (too far for auto-acquire as well).
+    // Source parity:
+    //   - NearEnemy (vision=100, dist~2): within vision range, ordered to attack.
+    //   - FarEnemy (vision=50, dist~60): outside vision range, remains idle.
+    const nearEnemy = priv.spawnedEntities.get(2);
     const farEnemy = priv.spawnedEntities.get(3);
-    expect(farEnemy).not.toBeUndefined();
-
-    // The far enemy should definitely not have a target — it is out of both
-    // vision range (50) and weapon range (80) from the stealth unit.
-    // This holds in both C++ and TS.
+    expect(nearEnemy!.attackTargetEntityId).toBe(1);
     expect(farEnemy!.attackTargetEntityId).toBeNull();
+  });
+
+  it('OrderIdleEnemiesToAttackMeUponReveal is parsed from INI into stealth profile', () => {
+    const bundle = makeBundle({
+      objects: [
+        makeObjectDef('StealthUnit', 'GLA', ['INFANTRY'], [
+          makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),
+          makeBlock('Behavior', 'StealthUpdate ModuleTag_Stealth', {
+            StealthDelay: 100,
+            InnateStealth: 'Yes',
+            OrderIdleEnemiesToAttackMeUponReveal: 'Yes',
+          }),
+        ]),
+      ],
+    });
+    const logic = createLogic();
+    logic.loadMapObjects(
+      makeMap([makeMapObject('StealthUnit', 50, 50)], 128, 128),
+      makeRegistry(bundle),
+      makeHeightmap(128, 128),
+    );
+    logic.update(1 / 30);
+
+    const priv = logic as unknown as {
+      spawnedEntities: Map<number, {
+        stealthProfile: {
+          orderIdleEnemiesToAttackMeUponReveal: boolean;
+        } | null;
+      }>;
+    };
+    const entity = priv.spawnedEntities.get(1);
+    expect(entity).not.toBeUndefined();
+    expect(entity!.stealthProfile).not.toBeNull();
+    expect(entity!.stealthProfile!.orderIdleEnemiesToAttackMeUponReveal).toBe(true);
   });
 });

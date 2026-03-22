@@ -501,7 +501,6 @@ export function updateDetection(self: GL): void {
         if (!wasAlreadyDetected
             && target.stealthProfile
             && target.stealthProfile.orderIdleEnemiesToAttackMeUponReveal) {
-          console.log('[DEBUG-wakeup] first detection at frame', self.frameCounter, 'target=', target.id);
           orderIdleEnemiesToAttack(self, target);
         }
       }

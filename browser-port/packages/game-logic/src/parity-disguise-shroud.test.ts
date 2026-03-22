@@ -5,9 +5,9 @@
  *   C++ StealthUpdate.cpp:97-150 — disguise state machine with DisguisesAsTeam,
  *   disguiseAsObject(), transition animations, and OrderIdleEnemiesToAttackMeUponReveal.
  *   TS: stealth-detection.ts has stealth logic but no disguise system. DisguisesAsTeam,
- *   DisguiseAsTemplate, disguise transition animations, and OrderIdleEnemiesToAttackMeUponReveal
- *   are not implemented. The DISGUISED status flag is referenced in visibility checks but
- *   never set by any code path.
+ *   DisguiseAsTemplate, and disguise transition animations are not implemented.
+ *   OrderIdleEnemiesToAttackMeUponReveal IS implemented — parsed and triggered on detection.
+ *   The DISGUISED status flag is referenced in visibility checks but never set by any code path.
  *
  * Test 2: DynamicShroudClearingRangeUpdate — Vision Range Grows/Sustains/Shrinks
  *   C++ DynamicShroudClearingRangeUpdate.cpp:89-150 — 6-state machine:
@@ -103,14 +103,15 @@ describe('Parity: stealth disguise state machine (StealthUpdate.cpp:97-150)', ()
     expect(flags).not.toContain('DISGUISED');
   });
 
-  it('detector reveals stealthed unit but does not trigger OrderIdleEnemiesToAttackMeUponReveal', () => {
+  it('detector reveals stealthed unit and triggers OrderIdleEnemiesToAttackMeUponReveal', () => {
     // C++ StealthUpdate.cpp:916-935 — when markAsDetected() is called and
     // m_orderIdleEnemiesToAttackMeUponReveal is true, it iterates all enemy players
     // and calls setWakeupIfInRange on their idle units, causing them to auto-attack
     // the now-revealed unit.
     //
-    // TS: OrderIdleEnemiesToAttackMeUponReveal is not parsed from INI and not
-    // implemented. Detection marks the unit DETECTED but does not order any enemies.
+    // TS: OrderIdleEnemiesToAttackMeUponReveal is parsed and implemented.
+    // When detection first marks a unit as DETECTED, orderIdleEnemiesToAttack()
+    // iterates enemies and issues attack commands to idle armed units in vision range.
     const bundle = makeBundle({
       objects: [
         // Stealthed unit with OrderIdleEnemiesToAttackMeUponReveal.
@@ -131,7 +132,7 @@ describe('Parity: stealth disguise state machine (StealthUpdate.cpp:97-150)', ()
           }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'DetectorGun'] }),
         ], { VisionRange: 200 }),
-        // Idle enemy unit that SHOULD auto-attack upon reveal in C++ but won't in TS.
+        // Idle enemy unit that should auto-attack upon reveal.
         makeObjectDef('IdleEnemy', 'America', ['INFANTRY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 200, InitialHealth: 200 }),
           makeBlock('WeaponSet', 'WeaponSet', { Weapon: ['PRIMARY', 'EnemyGun'] }),
@@ -175,15 +176,7 @@ describe('Parity: stealth disguise state machine (StealthUpdate.cpp:97-150)', ()
     const stealthFlags = logic.getEntityState(1)?.statusFlags ?? [];
     expect(stealthFlags).toContain('DETECTED');
 
-    // PARITY DOCUMENTATION:
-    // C++: After detection, OrderIdleEnemiesToAttackMeUponReveal=Yes causes
-    //      markAsDetected to iterate enemy players and wake idle units in range,
-    //      causing them to auto-target the revealed unit.
-    // TS:  OrderIdleEnemiesToAttackMeUponReveal is not parsed or implemented.
-    //      The idle enemy unit (entity 3) has no attack target assigned by the
-    //      detection system. Its attackTargetEntityId remains null.
-
-    // Access internal entity state to verify no auto-attack was triggered.
+    // Access internal entity state to verify auto-attack was triggered.
     const privateApi = logic as unknown as {
       spawnedEntities: Map<number, {
         attackTargetEntityId: number | null;
@@ -192,17 +185,10 @@ describe('Parity: stealth disguise state machine (StealthUpdate.cpp:97-150)', ()
     const idleEnemy = privateApi.spawnedEntities.get(3);
     expect(idleEnemy).not.toBeUndefined();
 
-    // The idle enemy should NOT have an attack target assigned by the detection
-    // system. In C++, OrderIdleEnemiesToAttackMeUponReveal would cause this to
-    // be set. In TS, this field remains null because the feature is unimplemented.
-    //
-    // Note: The idle enemy might eventually acquire the target through the
-    // standard auto-acquire scan (separate from OrderIdleEnemiesToAttackMeUponReveal),
-    // but that is a different code path and timing. We check immediately after
-    // detection to isolate the OrderIdleEnemiesToAttackMeUponReveal behavior.
-    // If the auto-acquire scan has already found a target, that's the standard
-    // combat AI — not the reveal-triggered ordering from C++.
-    expect(typeof idleEnemy!.attackTargetEntityId).toBeDefined();
+    // Source parity: OrderIdleEnemiesToAttackMeUponReveal=Yes causes idle enemies
+    // within vision range to auto-target the revealed unit. The idle enemy at
+    // (52,50) is within vision range (200) of the stealth unit at (50,50).
+    expect(idleEnemy!.attackTargetEntityId).toBe(1);
   });
 
   it('DISGUISED status flag is never set by any TS code path', () => {
