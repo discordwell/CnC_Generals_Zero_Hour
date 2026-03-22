@@ -8855,6 +8855,14 @@ export class GameLogicSubsystem implements Subsystem {
     movePath: ReadonlyArray<{ x: number; z: number }>;
     pathIndex: number;
     guardState: string;
+    /** Garrison occupancy: current number of garrisoned units. null when not a garrison container. */
+    garrisonCount: number | null;
+    /** Garrison occupancy: max garrison capacity. null when not a garrison container. */
+    garrisonCapacity: number | null;
+    /** Supply truck cargo: current boxes carried. null when not a supply truck. */
+    supplyBoxes: number | null;
+    /** Supply truck cargo: max boxes the truck can carry. null when not a supply truck. */
+    supplyMaxBoxes: number | null;
   } | null {
     const entity = this.spawnedEntities.get(entityId);
     if (!entity) {
@@ -8906,6 +8914,18 @@ export class GameLogicSubsystem implements Subsystem {
       movePath: entity.movePath,
       pathIndex: entity.pathIndex,
       guardState: entity.guardState,
+      garrisonCount: entity.containProfile?.moduleType === 'GARRISON' && entity.containProfile.garrisonCapacity > 0
+        ? this.collectContainedEntityIds(entity.id).length
+        : null,
+      garrisonCapacity: entity.containProfile?.moduleType === 'GARRISON' && entity.containProfile.garrisonCapacity > 0
+        ? entity.containProfile.garrisonCapacity
+        : null,
+      supplyBoxes: entity.supplyTruckProfile
+        ? (this.supplyTruckStates.get(entity.id)?.currentBoxes ?? 0)
+        : null,
+      supplyMaxBoxes: entity.supplyTruckProfile
+        ? entity.supplyTruckProfile.maxBoxes
+        : null,
     };
   }
 

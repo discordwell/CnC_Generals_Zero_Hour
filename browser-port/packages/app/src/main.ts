@@ -1509,6 +1509,9 @@ async function startGame(
   gameContainer.appendChild(cinematicTextOverlay);
   gameContainer.appendChild(emoticonOverlay);
 
+  // Hoisted here so updateEntityInfoPanel can display control group badges.
+  const controlGroups = new Map<number, number[]>();
+
   const updateEntityInfoPanel = (): void => {
     const selectedIds = gameLogic.getLocalPlayerSelectionIds();
     if (selectedIds.length === 0) {
@@ -1557,6 +1560,16 @@ async function startGame(
       lines.push(`Category: ${selectionInfo.category}`);
     }
 
+    // Garrison occupancy indicator.
+    if (state.garrisonCount !== null && state.garrisonCapacity !== null) {
+      lines.push(`Garrisoned: ${state.garrisonCount}/${state.garrisonCapacity}`);
+    }
+
+    // Supply truck cargo indicator.
+    if (state.supplyBoxes !== null && state.supplyMaxBoxes !== null) {
+      lines.push(`Cargo: ${state.supplyBoxes}/${state.supplyMaxBoxes} boxes`);
+    }
+
     if (state.attackTargetEntityId !== null) {
       lines.push('Status: Attacking');
     } else if (state.guardState !== 'NONE') {
@@ -1565,6 +1578,11 @@ async function startGame(
       lines.push('Status: Moving');
     } else {
       lines.push('Status: Idle');
+    }
+
+    // Show control group badge if the primary entity belongs to a numbered group.
+    for (const [groupNum, ids] of controlGroups) {
+      if (ids.includes(primaryId)) { lines.push(`Group ${groupNum}`); break; }
     }
 
     entityInfoDetails.textContent = lines.join(' | ');
@@ -2014,6 +2032,7 @@ async function startGame(
         ['Escape', 'Menu / Cancel'],
         ['F4', 'General\'s Powers'],
         ['F9', 'Diplomacy'],
+        ['F11', 'Fullscreen'],
         ['F1 or ?', 'This help'],
       ],
     },
@@ -2115,6 +2134,15 @@ async function startGame(
     if (e.key === 'F4') {
       e.preventDefault();
       generalsPowersPanel.toggle();
+      return;
+    }
+    if (e.key === 'F11') {
+      e.preventDefault();
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
       return;
     }
 
@@ -2639,7 +2667,7 @@ async function startGame(
   // Control groups (Ctrl+1-9 to save, 1-9 to recall, double-tap to center)
   // ========================================================================
 
-  const controlGroups = new Map<number, number[]>();
+  // controlGroups is hoisted above updateEntityInfoPanel for badge display.
   const lastGroupTapTime = new Map<number, number>();
   const DOUBLE_TAP_MS = 400;
   let previousSelectionSnapshot: readonly number[] = [];
@@ -4209,6 +4237,15 @@ async function startGame(
               ...score,
             };
           });
+          // Play victory/defeat music stinger. Source parity: MusicManager plays
+          // faction-specific end-of-match stinger in the retail game.
+          const localFaction = sideToFactionLabel(localSide ?? 'America');
+          if (endState.status === 'VICTORY') {
+            musicManager.playVictory(localFaction);
+          } else {
+            musicManager.playDefeat(localFaction);
+          }
+
           postgameScreen.show(endState.status as 'VICTORY' | 'DEFEAT', sideScores);
           if (uiRuntime.getPendingControlBarCommand()) {
             uiRuntime.cancelPendingControlBarCommand();
