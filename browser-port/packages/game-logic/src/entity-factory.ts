@@ -110,7 +110,11 @@ export function createMapEntity(self: GL,
   const attackWeaponSlotIndex = self.resolveAttackWeaponSlotIndex(weaponTemplateSets, 0, iniDataRegistry);
   const specialPowerModules = extractSpecialPowerModules(self, objectDef);
   const bodyStats = self.resolveBodyStats(objectDef);
-  const energyBonus = readNumericField(objectDef?.fields ?? {}, ['EnergyBonus']) ?? 0;
+  // Source parity: ThingTemplate has two separate energy fields.
+  // EnergyProduction — base power production/consumption (positive = produces, negative = consumes).
+  // EnergyBonus — additional production granted by upgrades (e.g. Control Rods on Power Plant).
+  const energyBonus = readNumericField(objectDef?.fields ?? {}, ['EnergyProduction']) ?? 0;
+  const energyUpgradeBonus = readNumericField(objectDef?.fields ?? {}, ['EnergyBonus']) ?? 0;
   const largestWeaponRange = self.resolveLargestWeaponRange(objectDef, iniDataRegistry);
   const totalWeaponAntiMask = self.resolveTotalWeaponAntiMaskForSetSelection(
     weaponTemplateSets, 0, iniDataRegistry,
@@ -249,6 +253,7 @@ export function createMapEntity(self: GL,
     initialHealth: bodyStats.initialHealth,
     health: bodyStats.bodyType === 'INACTIVE' ? 0 : bodyStats.initialHealth,
     energyBonus,
+    energyUpgradeBonus,
     attackWeapon,
     weaponTemplateSets,
     weaponSetFlagsMask: 0,

@@ -150,6 +150,7 @@
       }
     ],
     "fields": {
+      "EnergyProduction": 100,
       "EnergyBonus": 100,
       "KindOf": [
         "STRUCTURE",

@@ -1366,12 +1366,12 @@ describe('DISABLED_UNDERPOWERED power brown-out', () => {
     // Power plant: produces 5 energy, is POWERED itself.
     const powerPlantDef = makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'POWERED'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-    ], { EnergyBonus: 5 });
+    ], { EnergyProduction: 5 });
 
     // Barracks: consumes 3 energy, is POWERED (will be disabled when underpowered).
     const barracksDef = makeObjectDef('Barracks', 'America', ['STRUCTURE', 'POWERED'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-    ], { EnergyBonus: -3 });
+    ], { EnergyProduction: -3 });
 
     // Non-POWERED building: never gets DISABLED_UNDERPOWERED.
     const wallDef = makeObjectDef('Wall', 'America', ['STRUCTURE'], [
@@ -1486,7 +1486,7 @@ describe('radar disable during power brown-out', () => {
     // Power plant: produces 5 energy.
     const powerPlantDef = makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'POWERED'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-    ], { EnergyBonus: 5 });
+    ], { EnergyProduction: 5 });
 
     // Command center with radar upgrade: consumes 3 energy, has radar.
     const commandCenterDef = makeObjectDef('CommandCenter', 'America', ['STRUCTURE', 'POWERED'], [
@@ -1495,7 +1495,7 @@ describe('radar disable during power brown-out', () => {
         TriggeredBy: 'Upgrade_Radar',
         DisableProof: false,
       }),
-    ], { EnergyBonus: -3 });
+    ], { EnergyProduction: -3 });
 
     // Command center with disable-proof radar.
     const hardCommandCenterDef = makeObjectDef('HardCommandCenter', 'America', ['STRUCTURE', 'POWERED'], [
@@ -1504,12 +1504,12 @@ describe('radar disable during power brown-out', () => {
         TriggeredBy: 'Upgrade_Radar',
         DisableProof: true,
       }),
-    ], { EnergyBonus: -3 });
+    ], { EnergyProduction: -3 });
 
     // Barracks: consumes 3 energy.
     const barracksDef = makeObjectDef('Barracks', 'America', ['STRUCTURE', 'POWERED'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-    ], { EnergyBonus: -3 });
+    ], { EnergyProduction: -3 });
 
     const bundle = makeBundle({
       objects: [powerPlantDef, commandCenterDef, hardCommandCenterDef, barracksDef],
@@ -10876,7 +10876,7 @@ describe('Sabotage building effects', () => {
         }),
         makeObjectDef('PowerPlant', 'China', ['STRUCTURE', 'FS_POWER'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-        ], { EnergyBonus: 5 }),
+        ], { EnergyProduction: 5 }),
       ],
     });
 
@@ -10921,10 +10921,10 @@ describe('Sabotage building effects', () => {
         }),
         makeObjectDef('PowerPlant', 'America', ['STRUCTURE', 'FS_POWER'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-        ], { EnergyBonus: 5 }),
+        ], { EnergyProduction: 5 }),
         makeObjectDef('WarFactory', 'America', ['STRUCTURE', 'FS_WARFACTORY'], [
           makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 800, InitialHealth: 800 }),
-        ], { EnergyBonus: -3 }),
+        ], { EnergyProduction: -3 }),
       ],
     });
 
@@ -11039,7 +11039,7 @@ describe('PowerPlantUpdate', () => {
           makeBlock('Behavior', 'PowerPlantUpdate ModuleTag_PPUpdate', {
             RodsExtendTime: 2000,
           }),
-        ], { EnergyBonus: 5 }),
+        ], { EnergyProduction: 5 }),
       ],
     });
 
@@ -11071,7 +11071,7 @@ describe('PowerPlantUpdate', () => {
           makeBlock('Behavior', 'PowerPlantUpgrade ModuleTag_PPUpgrade', {
             TriggeredBy: 'Upgrade_ChinaOvercharge',
           }),
-        ], { EnergyBonus: 5 }),
+        ], { EnergyProduction: 5 }),
       ],
     });
 
@@ -11112,7 +11112,7 @@ describe('PowerPlantUpdate', () => {
           makeBlock('Behavior', 'PowerPlantUpdate ModuleTag_PPUpdate', {
             RodsExtendTime: 1000,
           }),
-        ], { EnergyBonus: 5 }),
+        ], { EnergyProduction: 5 }),
       ],
     });
 

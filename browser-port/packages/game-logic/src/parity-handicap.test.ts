@@ -39,7 +39,7 @@ function makeHandicapBundle(unitBuildTimeSec: number) {
       }),
     ], {
       CommandSet: 'USABarracksCommandSet',
-      EnergyBonus: 0,
+      EnergyProduction: 0,
     }),
     makeObjectDef('USARanger', 'America', ['INFANTRY'], [
       makeBlock('Body', 'ActiveBody ModuleTag_Body', { MaxHealth: 100, InitialHealth: 100 }),

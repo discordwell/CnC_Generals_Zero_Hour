@@ -38,7 +38,7 @@ describe('construction progress', () => {
         ], {
           BuildCost: 500,
           BuildTime: buildTimeSeconds,
-          EnergyBonus: 10,
+          EnergyProduction: 10,
           GeometryMajorRadius: 10,
           GeometryMinorRadius: 10,
         }),

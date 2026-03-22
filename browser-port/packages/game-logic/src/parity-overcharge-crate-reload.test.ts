@@ -65,8 +65,8 @@ describe('overcharge disabled-state guard on capture', () => {
     const entity = logic.spawnedEntities.get(1);
     expect(entity).toBeDefined();
 
-    // Give the entity an energy bonus so the transfer has observable side effects.
-    entity.energyBonus = 50;
+    // Give the entity an energy upgrade bonus so the transfer has observable side effects.
+    entity.energyUpgradeBonus = 50;
 
     // Simulate active overcharge state on this entity.
     logic.overchargeStateByEntityId.set(entity.id, {
@@ -119,7 +119,7 @@ describe('overcharge disabled-state guard on capture', () => {
     const entity = logic.spawnedEntities.get(1);
     expect(entity).toBeDefined();
 
-    entity.energyBonus = 50;
+    entity.energyUpgradeBonus = 50;
 
     logic.overchargeStateByEntityId.set(entity.id, {
       overchargeActive: true,

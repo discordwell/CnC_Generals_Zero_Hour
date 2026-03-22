@@ -52,7 +52,7 @@ function makeProductionBundle(opts: {
         }),
       ], {
         CommandSet: 'USABarracksCommandSet',
-        EnergyBonus: opts.factoryEnergyBonus ?? 0,
+        EnergyProduction: opts.factoryEnergyBonus ?? 0,
       }),
     );
   }
@@ -69,7 +69,7 @@ function makeProductionBundle(opts: {
     objects.push(
       makeObjectDef('USAPowerPlant', 'America', ['STRUCTURE', 'FS_POWER'], [
         makeBlock('Body', 'StructureBody ModuleTag_Body', { MaxHealth: 1000, InitialHealth: 1000 }),
-      ], { EnergyBonus: opts.powerPlantEnergyBonus }),
+      ], { EnergyProduction: opts.powerPlantEnergyBonus }),
     );
   }
 
@@ -79,7 +79,7 @@ function makeProductionBundle(opts: {
       objects.push(
         makeObjectDef(consumer.name, 'America', ['STRUCTURE'], [
           makeBlock('Body', 'StructureBody ModuleTag_Body', { MaxHealth: 500, InitialHealth: 500 }),
-        ], { EnergyBonus: consumer.energyBonus }),
+        ], { EnergyProduction: consumer.energyBonus }),
       );
     }
   }

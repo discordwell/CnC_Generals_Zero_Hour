@@ -464,10 +464,10 @@ describe('wet test: full skirmish playthrough', () => {
     // Complete construction
     for (let i = 0; i < 300; i++) logic.update(1 / 30);
 
-    // Power state — verify it's accessible (energy values depend on INI EnergyBonus parsing)
+    // Power state — verify it's accessible (energy values depend on INI EnergyProduction parsing)
     const powerState = logic.getSidePowerState('america');
     expect(powerState).toBeDefined();
-    // EnergyProduction may be 0 if EnergyBonus isn't parsed from test objects
+    // EnergyProduction may be 0 if EnergyProduction isn't parsed from test objects
     // This is acceptable — the API works, actual values come from retail INI data
     expect(powerState!.energyProduction).toBeGreaterThanOrEqual(0);
   });

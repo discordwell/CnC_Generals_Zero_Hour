@@ -204,20 +204,20 @@ describe('StatusBitsUpgrade StatusToSet applies STEALTHED on upgrade', () => {
 
 describe('power brownout disables radar', () => {
   function createPowerRadarSetup() {
-    // Power plant: provides 10 energy via EnergyBonus, has a RadarUpgrade module
+    // Power plant: provides 10 energy via EnergyProduction, has a RadarUpgrade module
     // that grants radar when built (auto-triggered by GrantUpgradeCreate or
-    // intrinsic upgrade). For simplicity, we use an object with EnergyBonus > 0
+    // intrinsic upgrade). For simplicity, we use an object with EnergyProduction > 0
     // and set up a radar structure separately.
     return createParityAgent({
       bundles: {
         objects: [
-          // Power plant: STRUCTURE with positive EnergyBonus (power producer).
+          // Power plant: STRUCTURE with positive EnergyProduction (power producer).
           makeObjectDef('PowerPlant', 'America', ['STRUCTURE'], [
             makeBlock('Body', 'StructureBody ModuleTag_Body', {
               MaxHealth: 500,
               InitialHealth: 500,
             }),
-          ], { EnergyBonus: 10 }),
+          ], { EnergyProduction: 10 }),
 
           // Radar building: STRUCTURE with RadarUpgrade module triggered
           // by an intrinsic upgrade, plus a RadarUpdate module.
@@ -239,7 +239,7 @@ describe('power brownout disables radar', () => {
             makeBlock('Behavior', 'GrantUpgradeCreate ModuleTag_GrantRadar', {
               UpgradeToGrant: 'Upgrade_Radar',
             }),
-          ], { EnergyBonus: -5 }),
+          ], { EnergyProduction: -5 }),
 
           // Powered consumer: consumes energy, has no other purpose.
           makeObjectDef('PowerConsumer', 'America', ['STRUCTURE', 'POWERED'], [
@@ -247,7 +247,7 @@ describe('power brownout disables radar', () => {
               MaxHealth: 500,
               InitialHealth: 500,
             }),
-          ], { EnergyBonus: -6 }),
+          ], { EnergyProduction: -6 }),
 
           // Attacker to destroy the power plant.
           makeObjectDef('Attacker', 'China', ['VEHICLE'], [
@@ -399,7 +399,7 @@ describe('power brownout radar transition (balanced energy)', () => {
               MaxHealth: 100,
               InitialHealth: 100,
             }),
-          ], { EnergyBonus: 20 }),
+          ], { EnergyProduction: 20 }),
 
           // Radar building: provides radar, consumes 5 energy.
           makeObjectDef('RadarBuilding', 'America', ['STRUCTURE', 'POWERED'], [
@@ -413,7 +413,7 @@ describe('power brownout radar transition (balanced energy)', () => {
             makeBlock('Behavior', 'RadarUpdate ModuleTag_RadarUpdate', {
               RadarExtendTime: 0,
             }),
-          ], { EnergyBonus: -5 }),
+          ], { EnergyProduction: -5 }),
 
           // Destroyer: high-damage attacker.
           makeObjectDef('Destroyer', 'China', ['VEHICLE'], [

@@ -40,6 +40,7 @@ function createTestEntity(overrides: Record<string, unknown> = {}): Record<strin
     selected: false,
     canMove: true,
     energyBonus: 0,
+    energyUpgradeBonus: 0,
     crusherLevel: 2,
     crushableLevel: 1,
     canBeSquished: false,

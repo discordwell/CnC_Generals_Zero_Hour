@@ -357,7 +357,7 @@ describe('Parity: entity capture ownership transfer', () => {
               MaxHealth: 500,
               InitialHealth: 500,
             }),
-          ], { EnergyBonus: 10 }),
+          ], { EnergyProduction: 10 }),
           // A non-power building owned by China (to verify count tracking).
           makeObjectDef('Barracks', 'China', ['STRUCTURE'], [
             makeBlock('Body', 'StructureBody ModuleTag_Body', {
@@ -368,7 +368,7 @@ describe('Parity: entity capture ownership transfer', () => {
         ],
       },
       mapObjects: [
-        place('PowerPlant', 50, 50),   // id 1 — China's power plant (EnergyBonus: 10)
+        place('PowerPlant', 50, 50),   // id 1 — China's power plant (EnergyProduction: 10)
         place('Barracks', 70, 50),     // id 2 — China's barracks
       ],
       mapSize: 128,
@@ -470,7 +470,7 @@ describe('Parity: entity capture ownership transfer', () => {
   });
 
   it('capturing a power-consuming building transfers consumption to new owner', () => {
-    // Test with a building that has negative EnergyBonus (power consumer).
+    // Test with a building that has negative EnergyProduction (power consumer).
     const agent = createParityAgent({
       bundles: {
         objects: [
@@ -480,14 +480,14 @@ describe('Parity: entity capture ownership transfer', () => {
               MaxHealth: 500,
               InitialHealth: 500,
             }),
-          ], { EnergyBonus: 20 }),
+          ], { EnergyProduction: 20 }),
           // A power-consuming building owned by China.
           makeObjectDef('Radar', 'China', ['STRUCTURE'], [
             makeBlock('Body', 'StructureBody ModuleTag_Body', {
               MaxHealth: 300,
               InitialHealth: 300,
             }),
-          ], { EnergyBonus: -5 }),
+          ], { EnergyProduction: -5 }),
         ],
       },
       mapObjects: [

@@ -240,6 +240,7 @@ export function xferMapEntity(xfer: Xfer, e: Record<string, unknown>): void {
   e.selected = xfer.xferBool(e.selected as boolean);
   e.canMove = xfer.xferBool(e.canMove as boolean);
   e.energyBonus = xfer.xferReal(e.energyBonus as number);
+  e.energyUpgradeBonus = xfer.xferReal(e.energyUpgradeBonus as number);
   e.crusherLevel = xfer.xferInt(e.crusherLevel as number);
   e.crushableLevel = xfer.xferInt(e.crushableLevel as number);
   e.canBeSquished = xfer.xferBool(e.canBeSquished as boolean);
