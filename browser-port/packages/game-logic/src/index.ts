@@ -6863,6 +6863,10 @@ export class GameLogicSubsystem implements Subsystem {
   private readonly sideKindOfProductionCostModifiers = new Map<string, KindOfProductionCostModifier[]>();
   /** Source parity: Player::m_productionTimeChanges — per-template build time modifier (e.g. -0.25 = 25% faster). */
   private readonly sideProductionTimeChangePercent = new Map<string, Map<string, number>>();
+  /** Source parity: Handicap::BUILDTIME — per-side build time multiplier set from lobby/skirmish setup.
+   *  Default is 1.0 (no handicap). Values < 1.0 make units build faster; > 1.0 slower.
+   *  C++ ref: ThingTemplate.cpp:1382 — buildTime *= player->getHandicap()->getHandicap(Handicap::BUILDTIME, this) */
+  private readonly sideHandicapBuildTime = new Map<string, number>();
   private readonly sideSciences = new Map<string, Set<string>>();
   /** Source parity: ScriptEngine::m_acquiredSciences (consumed by evaluateScienceAcquired). */
   private readonly sideScriptAcquiredSciences = new Map<string, Set<string>>();
@@ -9037,6 +9041,22 @@ export class GameLogicSubsystem implements Subsystem {
     }
     const normalizedAmount = Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)) : 0;
     this.sideCredits.set(normalizedSide, normalizedAmount);
+  }
+
+  /**
+   * Source parity: Handicap::BUILDTIME — set the build time multiplier for a side.
+   * C++ ref: ThingTemplate.cpp:1382 — buildTime *= player->getHandicap()->getHandicap(Handicap::BUILDTIME, this)
+   * @param side — faction/side name (e.g. 'America', 'GLA')
+   * @param buildTimeMultiplier — multiplier applied to build time. 1.0 = normal,
+   *   0.5 = units build in half the time (twice as fast), 2.0 = double build time (half as fast).
+   */
+  setHandicap(side: string, buildTimeMultiplier: number): void {
+    const normalizedSide = this.normalizeSide(side);
+    if (!normalizedSide) {
+      return;
+    }
+    const clamped = Number.isFinite(buildTimeMultiplier) ? Math.max(0, buildTimeMultiplier) : 1.0;
+    this.sideHandicapBuildTime.set(normalizedSide, clamped);
   }
 
   addSideCredits(side: string, amount: number): number {
@@ -23806,10 +23826,15 @@ export class GameLogicSubsystem implements Subsystem {
     }
     let buildTimeFrames = buildTimeSeconds * LOGIC_FRAME_RATE;
 
-    // Source parity: ThingTemplate::calcTimeToBuild — apply player production time modifier.
-    // C++ (ThingTemplate.cpp:1553): factionModifier = 1 + player->getProductionTimeChangePercent(getName())
     const normalizedSide = this.normalizeSide(side);
     if (normalizedSide) {
+      // Source parity: ThingTemplate::calcTimeToBuild — apply handicap before faction modifier.
+      // C++ (ThingTemplate.cpp:1382): buildTime *= player->getHandicap()->getHandicap(Handicap::BUILDTIME, this)
+      const handicapMultiplier = this.sideHandicapBuildTime.get(normalizedSide) ?? 1.0;
+      buildTimeFrames *= handicapMultiplier;
+
+      // Source parity: ThingTemplate::calcTimeToBuild — apply player production time modifier.
+      // C++ (ThingTemplate.cpp:1553): factionModifier = 1 + player->getProductionTimeChangePercent(getName())
       const factionModifier = 1 + this.getProductionTimeChangePercent(normalizedSide, objectDef.name);
       buildTimeFrames *= factionModifier;
     }
