@@ -227,21 +227,32 @@ export function findPath<TEntity extends NavigationEntityLike>(
     fCost[i] = Number.POSITIVE_INFINITY;
   }
 
+  // For attack-distance pathfinding, use the original target cell for the heuristic
+  // so the A* expands toward the actual target rather than the shifted effectiveGoal.
+  const attackTargetCellX = goalCellX ?? effectiveGoal.x;
+  const attackTargetCellZ = goalCellZ ?? effectiveGoal.z;
+
   const estimateToGoal = (cellX: number, cellZ: number): number => {
     if (attackDistance === NO_ATTACK_DISTANCE) {
       return pathHeuristic(cellX, cellZ, effectiveGoal.x, effectiveGoal.z);
     }
 
-    const heuristic = COST_ORTHOGONAL * Math.hypot(cellX - effectiveGoal.x, cellZ - effectiveGoal.z);
+    const heuristic = COST_ORTHOGONAL * Math.hypot(cellX - attackTargetCellX, cellZ - attackTargetCellZ);
     return Math.max(0, heuristic - attackDistance / 2);
   };
 
+  // Source parity: attack distance is measured from the mover to the actual
+  // target position, not to the effectiveGoal (nearest passable cell). This
+  // ensures units stop at proper weapon range from the target, not from a
+  // shifted cell that may be far from the target when the target is a large
+  // building with a blocked center cell.
   const isWithinAttackDistance = (cellX: number, cellZ: number): boolean => {
     if (attackDistance === NO_ATTACK_DISTANCE) {
       return false;
     }
-    const deltaX = (cellX - effectiveGoal.x) * PATHFIND_CELL_SIZE;
-    const deltaZ = (cellZ - effectiveGoal.z) * PATHFIND_CELL_SIZE;
+    const worldPos = context.gridToWorld(cellX, cellZ);
+    const deltaX = worldPos.x - targetX;
+    const deltaZ = worldPos.z - targetZ;
     const effectiveRange = Math.max(0, attackDistance - ATTACK_RANGE_CELL_EDGE_FUDGE);
     return deltaX * deltaX + deltaZ * deltaZ <= effectiveRange * effectiveRange;
   };
@@ -448,7 +459,9 @@ export function findPath<TEntity extends NavigationEntityLike>(
     return selfToCellX * selfToCellX + selfToCellZ * selfToCellZ < threshold * threshold;
   };
 
-  const isAttackLineBlocked = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
+  // Retained for future attack-move LOS integration; currently unused because
+  // Source parity: C++ attack pathfinding doesn't check LOS at pathfind time.
+  const _isAttackLineBlocked = (fromX: number, fromZ: number, toX: number, toZ: number): boolean => {
     if (!needsAttackLineOfSight) {
       return false;
     }
@@ -460,6 +473,7 @@ export function findPath<TEntity extends NavigationEntityLike>(
     }
     return false;
   };
+  void _isAttackLineBlocked;
 
   if (attackDistance !== NO_ATTACK_DISTANCE) {
     const toTargetDeltaX = targetX - startX;
@@ -487,9 +501,8 @@ export function findPath<TEntity extends NavigationEntityLike>(
         if (isNearSelfForAttackMove(testCellX, testCellZ)) {
           continue;
         }
-        if (isAttackLineBlocked(startX, startZ, testX, testZ)) {
-          continue;
-        }
+        // Source parity: C++ attack pathfinding doesn't check LOS — just finds
+        // a cell within weapon range. LOS verified at fire time.
         return [{ x: startX, z: startZ }, { x: testX, z: testZ }];
       }
     }
@@ -560,10 +573,12 @@ export function findPath<TEntity extends NavigationEntityLike>(
       && isWithinAttackDistance(currentCellX, currentCellZ)
       && !isNearSelfForAttackMove(currentCellX, currentCellZ)
     ) {
-      const currentWorld = context.gridToWorld(currentCellX, currentCellZ);
-      if (!isAttackLineBlocked(startX, startZ, currentWorld.x, currentWorld.z)) {
-        return buildPathFromGoal(currentIndex);
-      }
+      // Source parity: C++ AIPathfind.cpp — pathfinding to within weapon range
+      // does NOT check line of sight. LOS is verified at weapon fire time by
+      // the combat update system. Checking LOS during pathfinding causes false
+      // negatives when the target is a building (its own footprint blocks LOS)
+      // or when terrain/obstacle checks are too conservative.
+      return buildPathFromGoal(currentIndex);
     }
 
     if (currentIndex === goalIndex && attackDistance === NO_ATTACK_DISTANCE) {

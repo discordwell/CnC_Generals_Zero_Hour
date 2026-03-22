@@ -181,6 +181,13 @@ describe.skipIf(!hasRetailData)('deep retail wet test: gameplay flows', () => {
     expect(enemyCC).toBeDefined();
     const enemyCCHealthBefore = logic.getEntityState(enemyCC!.id)?.health ?? 0;
 
+    // Record initial Ranger positions relative to enemy CC
+    const initialDistances = rangers.map(r => {
+      const state = logic.getEntityState(r.id)!;
+      return Math.hypot(state.x - enemyCC!.x, state.z - enemyCC!.z);
+    });
+    console.log(`BUILD-AND-FIGHT: Initial distances to CC: ${initialDistances.map(d => d.toFixed(0)).join(', ')}`);
+
     // Attack enemy CC with all Rangers
     for (const ranger of rangers) {
       logic.submitCommand({
@@ -191,20 +198,38 @@ describe.skipIf(!hasRetailData)('deep retail wet test: gameplay flows', () => {
       });
     }
 
+    // Critical: Rangers must start moving toward the target after attack command
+    logic.update(1 / 30);
+    let anyMoving = false;
+    for (const ranger of rangers) {
+      const rState = logic.getEntityState(ranger.id);
+      if (rState && rState.alive && rState.moving) {
+        anyMoving = true;
+      }
+    }
+    expect(anyMoving).toBe(true); // At least one Ranger must be moving
+
     // Run combat for ~60 seconds game time (Rangers need to walk across the map and attack)
     runFrames(logic, 1800, anomalies, 'ranger-attack');
     checkNaN(logic, anomalies, 'post-combat');
 
     // Diagnose: did Rangers actually reach the enemy CC?
     const enemyCCPos = logic.getEntityState(enemyCC!.id);
-    for (const ranger of rangers) {
+    let anyCloser = false;
+    for (let ri = 0; ri < rangers.length; ri++) {
+      const ranger = rangers[ri]!;
       const rState = logic.getEntityState(ranger.id);
       if (rState && rState.alive && enemyCCPos) {
         const dist = Math.hypot(rState.x - enemyCCPos.x, rState.z - enemyCCPos.z);
         const isAttacking = rState.attackTargetEntityId === enemyCC!.id;
         console.log(`BUILD-AND-FIGHT: Ranger ${ranger.id} dist-to-CC=${dist.toFixed(0)}, attacking=${isAttacking}, moving=${rState.moving}`);
+        if (dist < initialDistances[ri]! - 100) {
+          anyCloser = true;
+        }
       }
     }
+    // Critical: at least one Ranger must have moved significantly closer
+    expect(anyCloser).toBe(true);
 
     // Check if Rangers dealt damage to enemy CC
     const enemyCCAfter = logic.getEntityState(enemyCC!.id);
@@ -461,13 +486,15 @@ describe.skipIf(!hasRetailData)('deep retail wet test: gameplay flows', () => {
       anomalies.push(`SELL-REBUILD: No refund received (credits: ${creditsAfterBuild} -> ${creditsAfterSell})`);
     }
 
-    // Refund should be roughly 50% of build cost (default sell percentage)
+    // Refund should be roughly 50% of build cost (retail SellPercentage = 50%)
     if (buildCost > 0 && refund > 0) {
-      const refundPct = (refund / buildCost * 100).toFixed(1);
-      console.log(`SELL-REBUILD: Refund percentage: ${refundPct}%`);
+      const refundPct = refund / buildCost;
+      console.log(`SELL-REBUILD: Refund percentage: ${(refundPct * 100).toFixed(1)}%`);
       if (refund > buildCost) {
         anomalies.push(`SELL-REBUILD: Refund (${refund}) exceeds build cost (${buildCost}) - money exploit!`);
       }
+      // Critical: refund must be ~50%, not 100%
+      expect(refundPct).toBeCloseTo(0.5, 1);
     }
 
     // Verify PP is gone
@@ -538,37 +565,29 @@ describe.skipIf(!hasRetailData)('deep retail wet test: gameplay flows', () => {
       return;
     }
 
-    // Place Rangers on guard at a position between the two bases
-    const guardX = (cc.x + (logic.getRenderableEntityStates().find(e =>
-      e.templateName === 'ChinaCommandCenter')?.x ?? cc.x + 400)) / 2;
-    const guardZ = cc.z;
+    // Place Rangers on guard near the China CC so they have targets within scan range.
+    // Guard inner range = VisionRange(100) * guardInnerModifierHuman(1.8) = 180 world units.
+    const chinaCC = logic.getRenderableEntityStates().find(e =>
+      e.templateName === 'ChinaCommandCenter' && e.side?.toUpperCase() === 'CHINA',
+    );
+    // Guard position: 100 world units from the China CC (well within inner range of 180).
+    const guardX = chinaCC ? chinaCC.x - 100 : cc.x + 400;
+    const guardZ = chinaCC?.z ?? cc.z;
 
-    // First move Rangers to the guard position
-    for (const ranger of rangers) {
-      logic.submitCommand({
-        type: 'moveTo',
-        entityId: ranger.id,
-        targetX: guardX,
-        targetZ: guardZ,
-        commandSource: 'PLAYER',
-      });
-    }
-    runFrames(logic, 600, anomalies, 'guard-move-to-position');
-
-    // Now set them to guard
+    // Set Rangers to guard (they will walk to the guard position and scan for enemies).
     for (const ranger of rangers) {
       logic.submitCommand({
         type: 'guardPosition',
         entityId: ranger.id,
         targetX: guardX,
         targetZ: guardZ,
-        guardMode: 0, // GUARDMODE_NORMAL
+        guardMode: 0, // GUARDMODE_NORMAL (with pursuit)
         commandSource: 'PLAYER',
       });
     }
     runFrames(logic, 30, anomalies, 'guard-set');
 
-    // Record Ranger positions and guard states
+    // Record Ranger guard states right after command.
     const rangerGuardStates: string[] = [];
     for (const ranger of rangers) {
       const state = logic.getEntityState(ranger.id);
@@ -578,11 +597,20 @@ describe.skipIf(!hasRetailData)('deep retail wet test: gameplay flows', () => {
     }
     console.log(`GUARD: Ranger guard states after command: [${rangerGuardStates.join(', ')}]`);
 
-    // Enable China AI so it sends units that might wander near our guard position
-    logic.enableSkirmishAI('China');
+    // Run enough frames for Rangers to walk to guard position and scan for enemies.
+    // Ranger speed = 20 units/sec, distance to China base ~1500 units.
+    // Time to arrive: 1500/20 = 75 sec = ~2250 frames. Add margin for pathfinding.
+    // Guard scan runs every 15 frames (IDLE) or 30 frames (RETURNING).
+    runFrames(logic, 2700, anomalies, 'guard-walk-and-engage');
 
-    // Run for a while to see if anything happens
-    runFrames(logic, 1800, anomalies, 'guard-wait-for-enemies');
+    // Diagnostic: Ranger positions, guard states, and distance to China CC
+    for (const ranger of rangers) {
+      const state = logic.getEntityState(ranger.id);
+      if (state && state.alive) {
+        const dist = chinaCC ? Math.hypot(state.x - chinaCC.x, state.z - chinaCC.z) : -1;
+        console.log(`GUARD: Ranger ${ranger.id} pos=(${state.x.toFixed(0)},${state.z.toFixed(0)}) guardState=${state.guardState} dist-to-CC=${dist.toFixed(0)} attacking=${state.attackTargetEntityId}`);
+      }
+    }
 
     // Check if Rangers engaged anything
     let anyEngaged = false;
@@ -715,11 +743,17 @@ describe.skipIf(!hasRetailData)('deep retail wet test: gameplay flows', () => {
     const pp = buildStructure(logic, dozer.id, 'AmericaPowerPlant', cc.x + 120, cc.z, anomalies);
     if (!pp) { console.log('BROWNOUT: PP build failed'); return; }
 
-    // Build Barracks (consumes power)
+    // Build Barracks (does not consume power in retail) + War Factory (consumes 1 power)
     const barracks = buildStructure(logic, dozer.id, 'AmericaBarracks', cc.x + 120, cc.z + 120, anomalies);
     if (!barracks) { console.log('BROWNOUT: Barracks build failed'); return; }
 
-    // Check power state — should be fine with 1 PP and 1 Barracks
+    // Build a Patriot Battery which consumes 3 power (EnergyProduction: -3 in retail INI).
+    const patriot = buildStructure(logic, dozer.id, 'AmericaPatriotBattery', cc.x - 120, cc.z + 120, anomalies, 1200);
+    if (!patriot) {
+      anomalies.push('BROWNOUT: Patriot Battery build failed (needed for power consumption test)');
+    }
+
+    // Check power state — should be fine with 1 PP (production=5) and consumption from Patriot (-3)
     const powerBefore = logic.getSidePowerState('america');
     console.log(`BROWNOUT: Before sell - production=${powerBefore.energyProduction}, consumption=${powerBefore.energyConsumption}, brownedOut=${powerBefore.brownedOut}`);
 

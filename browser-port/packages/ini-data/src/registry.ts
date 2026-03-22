@@ -223,6 +223,13 @@ export interface GameDataConfig {
    * C++ default: all 1.0. Retail ZH values: [1.0, 1.2, 1.3, 1.5].
    */
   healthBonuses: [number, number, number, number];
+  /**
+   * Source parity: GlobalData::m_sellPercentage
+   * Fraction of build cost refunded when selling a building.
+   * C++ default: 1.0 (100% refund). Retail GameData.ini: 50% (0.5).
+   * Parsed from INI via parsePercentToReal.
+   */
+  sellPercentage?: number;
 }
 
 export interface AudioSettingsConfig {
@@ -541,6 +548,7 @@ export class IniDataRegistry {
           healthBonuses: bundle.gameData.healthBonuses
             ? ([...bundle.gameData.healthBonuses] as [number, number, number, number])
             : [1.0, 1.0, 1.0, 1.0],
+          sellPercentage: bundle.gameData.sellPercentage,
         }
       : undefined;
     for (const unsupported of bundle.unsupportedBlockTypes) {
@@ -611,6 +619,7 @@ export class IniDataRegistry {
       ? {
           weaponBonusEntries: [...this.gameData.weaponBonusEntries],
           healthBonuses: [...this.gameData.healthBonuses] as [number, number, number, number],
+          sellPercentage: this.gameData.sellPercentage,
         }
       : undefined;
   }
@@ -818,6 +827,7 @@ export class IniDataRegistry {
         ? {
             weaponBonusEntries: [...this.gameData.weaponBonusEntries],
             healthBonuses: [...this.gameData.healthBonuses] as [number, number, number, number],
+            sellPercentage: this.gameData.sellPercentage,
           }
         : undefined,
       stats,
@@ -1189,7 +1199,15 @@ export class IniDataRegistry {
       }
     }
 
-    this.gameData = { weaponBonusEntries: entries, healthBonuses };
+    // ── Sell percentage (source parity: GlobalData.cpp:873, m_sellPercentage) ──
+    // C++ default: 1.0 (100% refund). Retail GameData.ini: SellPercentage = 50% → 0.5.
+    let sellPercentage = this.gameData?.sellPercentage;
+    const sellPctValue = extractUnclampedPercentToReal(block.fields['SellPercentage']);
+    if (sellPctValue !== undefined) {
+      sellPercentage = sellPctValue;
+    }
+
+    this.gameData = { weaponBonusEntries: entries, healthBonuses, sellPercentage };
   }
 
   private resolveObjectChain(name: string, visited: Set<string>): ObjectDef | undefined {

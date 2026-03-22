@@ -2776,6 +2776,8 @@ export interface MapEntity {
   selected: boolean;
   canMove: boolean;
   energyBonus: number;
+  /** Source parity: ThingTemplate::m_energyBonus — extra production from upgrades (e.g. Control Rods). */
+  energyUpgradeBonus: number;
   crusherLevel: number;
   crushableLevel: number;
   canBeSquished: boolean;
@@ -7355,6 +7357,12 @@ export class GameLogicSubsystem implements Subsystem {
     if (gameDataConfig) {
       this.globalWeaponBonusTable = buildWeaponBonusTable(gameDataConfig.weaponBonusEntries);
       this.globalHealthBonuses = gameDataConfig.healthBonuses;
+      // Source parity: TheGlobalData->m_sellPercentage — apply from INI if not
+      // explicitly overridden by the caller's config.
+      if (gameDataConfig.sellPercentage !== undefined
+          && this.config.sellPercentage === SOURCE_DEFAULT_SELL_PERCENTAGE) {
+        this.config.sellPercentage = gameDataConfig.sellPercentage;
+      }
     }
     const aiConfig = iniDataRegistry.getAiConfig();
     this.runtimeAiConfig = {
@@ -17644,12 +17652,12 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const oldSidePowerState = this.getSidePowerStateMap(normalizedOldSide);
-    if (removePowerPlantUpgradeFromSideImpl(oldSidePowerState, entity.energyBonus)) {
+    if (removePowerPlantUpgradeFromSideImpl(oldSidePowerState, entity.energyUpgradeBonus)) {
       this.sidePowerBonus.delete(normalizedOldSide);
     }
 
     const newSidePowerState = this.getSidePowerStateMap(normalizedNewSide);
-    applyPowerPlantUpgradeToSideImpl(newSidePowerState, entity.energyBonus);
+    applyPowerPlantUpgradeToSideImpl(newSidePowerState, entity.energyUpgradeBonus);
   }
 
   private transferRadarUpgradesBetweenSides(entity: MapEntity, oldSide: string, newSide: string): void {
@@ -17761,9 +17769,9 @@ export class GameLogicSubsystem implements Subsystem {
       return;
     }
 
-    // Source parity: PowerPlantUpgrade.cpp adds energy from the templated object.
+    // Source parity: PowerPlantUpgrade.cpp adds energyBonus (upgrade bonus) from the templated object.
     const sideState = this.getSidePowerStateMap(normalizedSide);
-    applyPowerPlantUpgradeToSideImpl(sideState, entity.energyBonus);
+    applyPowerPlantUpgradeToSideImpl(sideState, entity.energyUpgradeBonus);
   }
 
   private removePowerPlantUpgradeFromEntity(entity: MapEntity, _module: UpgradeModuleProfile): void {
@@ -17788,7 +17796,7 @@ export class GameLogicSubsystem implements Subsystem {
 
     // Source parity: PowerPlantUpgrade.cpp mirrors removePowerBonus() on upgrade removal/capture.
     const sideState = this.getSidePowerStateMap(normalizedSide);
-    if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyBonus)) {
+    if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyUpgradeBonus)) {
       this.sidePowerBonus.delete(normalizedSide);
     }
   }
@@ -17804,7 +17812,7 @@ export class GameLogicSubsystem implements Subsystem {
     }
 
     const sideState = this.getSidePowerStateMap(normalizedSide);
-    applyPowerPlantUpgradeToSideImpl(sideState, entity.energyBonus);
+    applyPowerPlantUpgradeToSideImpl(sideState, entity.energyUpgradeBonus);
     this.overchargeStateByEntityId.set(entity.id, {
       healthPercentToDrainPerSecond: Math.max(0, profile.healthPercentToDrainPerSecond),
       notAllowedWhenHealthBelowPercent: clamp(profile.notAllowedWhenHealthBelowPercent, 0, 1),
@@ -17821,7 +17829,7 @@ export class GameLogicSubsystem implements Subsystem {
     const normalizedSide = this.normalizeSide(entity.side);
     if (normalizedSide) {
       const sideState = this.getSidePowerStateMap(normalizedSide);
-      if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyBonus)) {
+      if (removePowerPlantUpgradeFromSideImpl(sideState, entity.energyUpgradeBonus)) {
         this.sidePowerBonus.delete(normalizedSide);
       }
     }
